@@ -1774,6 +1774,17 @@ tr:hover .row-btns { opacity:1; }
     </div>
     <div id="as-status-colors" style="display:flex;flex-direction:column;gap:6px"></div>
 
+    <div class="modal-section-hd" style="margin-top:22px">Task Statuses</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
+      Status options for open project tasks.
+    </div>
+    <div id="as-task-statuses" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px"></div>
+    <div style="display:flex;gap:6px">
+      <input type="text" class="fi" id="as-task-status-input" placeholder="New status…" style="flex:1;font-size:12px;padding:6px 10px"
+        onkeydown="if(event.key==='Enter'){addTaskStatus();event.preventDefault()}">
+      <button class="btn btn-primary btn-sm" onclick="addTaskStatus()">Add</button>
+    </div>
+
     <div class="modal-footer" style="margin-top:18px">
       <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
       <div style="flex:1"></div>
@@ -1931,6 +1942,8 @@ const SHIPPING_STATUSES = [
   { v:'paid_in_full',  l:'Paid in Full',  color:'#1a6e3a' },
 ];
 
+const DEFAULT_TASK_STATUSES = ['In Progress','Purgatory','Completed'];
+
 function isShippingComp(c) { return c.componentType === 'shipping'; }
 function getShippingStatusColor(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).color || '#c47a20'; }
 function getShippingStatusLabel(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).l || 'Needs Payment'; }
@@ -2014,6 +2027,7 @@ let S = {
   _dataVersion: 4,
   qtyUnits: [],
   statusColors: {},
+  taskStatuses: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -2037,6 +2051,7 @@ function load() {
     if (!S.categories || !S.categories.length) S.categories = [...CATEGORIES];
     if (!S.qtyUnits || !S.qtyUnits.length) S.qtyUnits = [...DEFAULT_QTY_UNITS];
     if (!S.statusColors || !Object.keys(S.statusColors).length) S.statusColors = {...DEFAULT_STATUS_COLORS};
+    if (!S.taskStatuses || !S.taskStatuses.length) S.taskStatuses = [...DEFAULT_TASK_STATUSES];
     // Migrate old 'brands' field → 'lines'
     S.contacts.forEach(c => {
       if (c.brands !== undefined && c.lines === undefined) {
@@ -2433,6 +2448,7 @@ let _pmStatusFilters = []; // empty = show all
 let _pmExpandedSpaces = {}; // {spaceId: true/false}
 
 function openPMItemDetail(pid, spId, itemId) {
+  _pmDetailTask = null;
   _pmDetailItem = {pid, spId, itemId};
   renderProjectDetail();
 }
@@ -2893,32 +2909,36 @@ function renderPMItemCard(item, sp, pid) {
 
 // ── Project Tasks (not tied to proposal) ──
 
+let _pmDetailTask = null; // taskId when viewing task detail
+
 function addProjectTask(pid) {
-  const input = $c('pm-new-task-input');
-  const val = input?.value.trim();
-  if (!val) return;
   const prop = S.proposals[pid];
   if (!prop) return;
   if (!prop.projectTasks) prop.projectTasks = [];
-  prop.projectTasks.push({
+  const task = {
     id: uid(),
-    name: val,
-    done: false,
+    name: '',
+    status: '',
     dueDate: '',
-    notes: '',
+    description: '',
+    links: [],
+    files: [],
+    activityLog: [],
     created: new Date().toISOString()
-  });
+  };
+  prop.projectTasks.push(task);
   save();
-  input.value = '';
+  _pmDetailTask = task.id;
   renderProjectDetail();
 }
 
-function toggleProjectTask(pid, taskId) {
-  const prop = S.proposals[pid];
-  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
-  if (!task) return;
-  task.done = !task.done;
-  save();
+function openTaskDetail(pid, taskId) {
+  _pmDetailTask = taskId;
+  renderProjectDetail();
+}
+
+function closeTaskDetail() {
+  _pmDetailTask = null;
   renderProjectDetail();
 }
 
@@ -2928,10 +2948,11 @@ function deleteProjectTask(pid, taskId) {
   if (!prop || !prop.projectTasks) return;
   prop.projectTasks = prop.projectTasks.filter(t => t.id !== taskId);
   save();
+  _pmDetailTask = null;
   renderProjectDetail();
 }
 
-function saveProjectTaskField(pid, taskId, key, val) {
+function saveTaskField(pid, taskId, key, val) {
   const prop = S.proposals[pid];
   const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
   if (!task) return;
@@ -2939,52 +2960,245 @@ function saveProjectTaskField(pid, taskId, key, val) {
   save();
 }
 
+function addTaskLink(pid, taskId) {
+  const input = $c('task-link-input');
+  const val = input?.value.trim();
+  if (!val) return;
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task) return;
+  if (!task.links) task.links = [];
+  task.links.push(val);
+  save();
+  input.value = '';
+  renderProjectDetail();
+}
+
+function removeTaskLink(pid, taskId, idx) {
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task || !task.links) return;
+  task.links.splice(idx, 1);
+  save();
+  renderProjectDetail();
+}
+
+function handleTaskFileUpload(pid, taskId, inputEl) {
+  const files = inputEl.files;
+  if (!files || !files.length) return;
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task) return;
+  if (!task.files) task.files = [];
+
+  [...files].forEach(file => {
+    const allowedTypes = ['application/pdf','image/png','image/jpeg','image/jpg'];
+    const allowedExts = ['.pdf','.png','.jpg','.jpeg','.dwg'];
+    const ext = '.'+file.name.split('.').pop().toLowerCase();
+    if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) { toast('Supported: PDF, PNG, JPG, DWG'); return; }
+    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); return; }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      task.files.push({ id: uid(), name: file.name, displayName: file.name, type: file.type || ext, size: file.size, data: e.target.result, uploaded: new Date().toISOString() });
+      save();
+      renderProjectDetail();
+    };
+    reader.readAsDataURL(file);
+  });
+  inputEl.value = '';
+}
+
+function removeTaskFile(pid, taskId, fileId) {
+  if (!confirm('Remove this file?')) return;
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task || !task.files) return;
+  task.files = task.files.filter(f => f.id !== fileId);
+  save();
+  renderProjectDetail();
+}
+
+function addTaskNote(pid, taskId) {
+  const input = $c('task-note-input');
+  const val = input?.value.trim();
+  if (!val) return;
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task) return;
+  if (!task.activityLog) task.activityLog = [];
+  task.activityLog.unshift({ id: uid(), author: 'Baylor', text: val, timestamp: new Date().toISOString() });
+  save();
+  input.value = '';
+  renderProjectDetail();
+}
+
+function deleteTaskNote(pid, taskId, noteId) {
+  if (!confirm('Delete this note?')) return;
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task || !task.activityLog) return;
+  task.activityLog = task.activityLog.filter(n => n.id !== noteId);
+  save();
+  renderProjectDetail();
+}
+
+function renderTaskDetailPanel(pid, taskId) {
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task) { _pmDetailTask = null; return ''; }
+
+  const statuses = getTaskStatuses();
+  const statusOpts = statuses.map(s => `<option value="${escH(s)}" ${task.status===s?'selected':''}>${escH(s)}</option>`).join('');
+
+  const linksHtml = (task.links||[]).map((l,i) => `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <a href="${escH(l)}" target="_blank" style="font-family:var(--font-b);font-size:12px;color:var(--russet);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px" onclick="event.stopPropagation()">${escH(l)}</a>
+      <button onclick="removeTaskLink('${pid}','${taskId}',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button>
+    </div>`).join('');
+
+  const filesHtml = (task.files||[]).map(f => {
+    const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
+    const sizeStr = f.size < 1024 ? f.size+'B' : f.size < 1048576 ? (f.size/1024).toFixed(0)+'KB' : (f.size/1048576).toFixed(1)+'MB';
+    const canView = !f.name.endsWith('.dwg');
+    return `
+    <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+      <span>${icon}</span>
+      <span style="color:var(--russet);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.displayName||f.name)}</span>
+      <span style="color:var(--text-light)">${sizeStr}</span>
+      <button onclick="event.stopPropagation();removeTaskFile('${pid}','${taskId}','${f.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px">✕</button>
+    </div>`;
+  }).join('');
+
+  const notesHtml = (task.activityLog||[]).map(note => {
+    const d = new Date(note.timestamp);
+    const dateStr = d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    return `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">${escH(note.author)}</span>
+        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${dateStr}</span>
+      </div>
+      <div style="font-size:12.5px;color:var(--text-dark);margin-top:4px;font-family:var(--font-b);line-height:1.5;white-space:pre-wrap">${escH(note.text)}</div>
+      <button onclick="deleteTaskNote('${pid}','${taskId}','${note.id}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline;margin-top:4px">delete</button>
+    </div>`;
+  }).join('');
+
+  return `
+  <div>
+    <button class="btn btn-ghost btn-sm" onclick="closeTaskDetail()" style="margin-bottom:14px;padding-left:0">← Back to Project Management</button>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <!-- Left -->
+      <div>
+        <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+          <div class="fg">
+            <label class="fl">Task Name</label>
+            <input type="text" class="fi" value="${escH(task.name||'')}" placeholder="What needs to be done?" onchange="saveTaskField('${pid}','${taskId}','name',this.value)" ${!task.name?'autofocus':''}>
+          </div>
+          <div class="frow">
+            <div class="fg">
+              <label class="fl">Status</label>
+              <select class="fi fsel" onchange="saveTaskField('${pid}','${taskId}','status',this.value)">
+                <option value="">— No status —</option>
+                ${statusOpts}
+              </select>
+            </div>
+            <div class="fg">
+              <label class="fl">Due Date</label>
+              <input type="date" class="fi" value="${escH(task.dueDate||'')}" onchange="saveTaskField('${pid}','${taskId}','dueDate',this.value)">
+            </div>
+          </div>
+        </div>
+
+        <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Description</div>
+          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px" placeholder="Details, context, instructions…" onchange="saveTaskField('${pid}','${taskId}','description',this.value)">${escH(task.description||'')}</textarea>
+        </div>
+
+        <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Links</div>
+          ${linksHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:6px">No links yet.</div>'}
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <input type="text" class="fi" id="task-link-input" placeholder="https://…" style="flex:1;font-size:12px;padding:6px 8px" onkeydown="if(event.key==='Enter'){addTaskLink('${pid}','${taskId}');event.preventDefault()}">
+            <button class="btn btn-secondary btn-sm" onclick="addTaskLink('${pid}','${taskId}')">Add</button>
+          </div>
+        </div>
+
+        <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border)">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Files</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${filesHtml || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No files.</span>'}</div>
+          <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0">
+            <span>+ Upload</span>
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg" multiple style="display:none" onchange="handleTaskFileUpload('${pid}','${taskId}',this)">
+          </label>
+        </div>
+      </div>
+
+      <!-- Right -->
+      <div>
+        <div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);padding-bottom:6px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Notes & Activity</div>
+          <div style="display:flex;gap:6px;margin-bottom:14px">
+            <textarea class="fi" id="task-note-input" style="resize:vertical;min-height:44px;font-size:12px;flex:1" placeholder="Add a note…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){addTaskNote('${pid}','${taskId}');event.preventDefault()}"></textarea>
+            <button class="btn btn-primary btn-sm" onclick="addTaskNote('${pid}','${taskId}')" style="align-self:flex-end">Post</button>
+          </div>
+          <div style="max-height:500px;overflow-y:auto">
+            ${notesHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:10px 0">No notes yet.</div>'}
+          </div>
+        </div>
+
+        <div style="margin-top:14px;text-align:right">
+          <button class="btn btn-danger btn-sm" onclick="deleteProjectTask('${pid}','${taskId}')">Delete Task</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderProjectTasksSection(pid) {
   const prop = S.proposals[pid];
   if (!prop) return '';
   const tasks = prop.projectTasks || [];
-  const incomplete = tasks.filter(t => !t.done);
-  const complete = tasks.filter(t => t.done);
+  const statuses = getTaskStatuses();
+  const active = tasks.filter(t => t.status !== 'Completed');
+  const completed = tasks.filter(t => t.status === 'Completed');
 
   let html = `
   <div style="margin-top:28px">
-    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Project Tasks</div>
-
-    <div style="display:flex;gap:6px;margin-bottom:14px">
-      <input type="text" class="fi" id="pm-new-task-input" placeholder="e.g. Make a paint schedule for the entire project" style="flex:1;font-size:12px;padding:8px 12px" onkeydown="if(event.key==='Enter'){addProjectTask('${pid}');event.preventDefault()}">
+    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
+      <span>Project Tasks</span>
       <button class="btn btn-primary btn-sm" onclick="addProjectTask('${pid}')">+ Add Open Project Task</button>
     </div>`;
 
   if (!tasks.length) {
     html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No project tasks yet.</div>';
   } else {
-    // Incomplete tasks
-    incomplete.forEach(t => {
+    active.forEach(t => {
+      const statusColor = t.status === 'In Progress' ? '#2d5a8a' : t.status === 'Purgatory' ? '#c47a20' : 'var(--text-light)';
       html += `
-      <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:6px;display:flex;align-items:flex-start;gap:10px">
-        <input type="checkbox" ${t.done?'checked':''} onchange="toggleProjectTask('${pid}','${t.id}')" style="accent-color:var(--russet);width:16px;height:16px;cursor:pointer;margin-top:2px;flex-shrink:0">
+      <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:6px;cursor:pointer;transition:var(--t);display:flex;align-items:center;gap:10px" onclick="openTaskDetail('${pid}','${t.id}')" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'">
+        ${t.status ? `<span class="status-dot" style="background:${statusColor}"></span>` : '<span style="width:8px"></span>'}
         <div style="flex:1;min-width:0">
-          <div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark)">${escH(t.name)}</div>
-          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
-            <input type="date" class="fi" style="font-size:10px;padding:3px 6px;width:130px" value="${escH(t.dueDate||'')}" onchange="saveProjectTaskField('${pid}','${t.id}','dueDate',this.value)" placeholder="Due date">
-            <input type="text" class="fi" style="font-size:10px;padding:3px 6px;flex:1" value="${escH(t.notes||'')}" onchange="saveProjectTaskField('${pid}','${t.id}','notes',this.value)" placeholder="Notes…">
+          <div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark)">${escH(t.name||'Untitled task')}</div>
+          <div style="display:flex;gap:8px;font-size:10px;color:var(--text-light);font-family:var(--font-b);margin-top:2px">
+            ${t.status ? `<span style="color:${statusColor}">${escH(t.status)}</span>` : ''}
+            ${t.dueDate ? `<span>Due: ${escH(t.dueDate)}</span>` : ''}
+            ${(t.activityLog||[]).length ? `<span>💬 ${t.activityLog.length}</span>` : ''}
+            ${(t.files||[]).length ? `<span>📎 ${t.files.length}</span>` : ''}
           </div>
         </div>
-        <button onclick="deleteProjectTask('${pid}','${t.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px;padding:2px 4px">✕</button>
       </div>`;
     });
 
-    // Completed tasks
-    if (complete.length) {
+    if (completed.length) {
       html += `
       <details style="margin-top:10px">
-        <summary style="font-size:11px;font-family:var(--font-b);color:var(--text-light);cursor:pointer;padding:4px 0;user-select:none">Completed (${complete.length})</summary>
+        <summary style="font-size:11px;font-family:var(--font-b);color:var(--text-light);cursor:pointer;padding:4px 0;user-select:none">Completed (${completed.length})</summary>
         <div style="padding-top:6px">
-          ${complete.map(t => `
-          <div style="background:rgba(91,45,34,0.02);border:1px solid var(--border);border-radius:var(--r);padding:8px 14px;margin-bottom:4px;display:flex;align-items:center;gap:10px;opacity:0.55">
-            <input type="checkbox" checked onchange="toggleProjectTask('${pid}','${t.id}')" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer;flex-shrink:0">
-            <span style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);text-decoration:line-through;flex:1">${escH(t.name)}</span>
-            <button onclick="deleteProjectTask('${pid}','${t.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:2px 4px">✕</button>
+          ${completed.map(t => `
+          <div style="background:rgba(91,45,34,0.02);border:1px solid var(--border);border-radius:var(--r);padding:8px 14px;margin-bottom:4px;display:flex;align-items:center;gap:10px;opacity:0.55;cursor:pointer" onclick="openTaskDetail('${pid}','${t.id}')">
+            <span class="status-dot" style="background:#1a6e3a"></span>
+            <span style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);text-decoration:line-through;flex:1">${escH(t.name||'Untitled task')}</span>
           </div>`).join('')}
         </div>
       </details>`;
@@ -2999,8 +3213,8 @@ function renderPDManagement(proj, pid) {
   const prop = S.proposals[pid];
   if (!prop) return '<div class="no-results">No data for this project yet.</div>';
 
-  if (_pmDetailItem && _pmDetailItem.pid === pid) {
-    return renderPMItemDetailPanel(_pmDetailItem.pid, _pmDetailItem.spId, _pmDetailItem.itemId);
+  if (_pmDetailTask) {
+    return renderTaskDetailPanel(pid, _pmDetailTask);
   }
 
   if (_pmDetailItem && _pmDetailItem.pid === pid) {
@@ -4922,6 +5136,7 @@ function clientSelectOptions(selectedId) {
 function openAppSettings() {
   renderQtyUnitsList();
   renderStatusColorSettings();
+  renderTaskStatusSettings();
   $c('modal-app-settings').classList.add('open');
 }
 
@@ -4986,6 +5201,39 @@ function resetStatusColor(statusVal) {
   save();
   renderStatusColorSettings();
   if (S.currentPropProject) renderPropBody();
+}
+
+function renderTaskStatusSettings() {
+  const el = $c('as-task-statuses');
+  if (!el) return;
+  const statuses = S.taskStatuses || [];
+  el.innerHTML = statuses.map(s => `
+    <div style="display:inline-flex;align-items:center;gap:4px;background:white;border-radius:14px;padding:4px 10px;border:1px solid var(--border);font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+      ${escH(s)}
+      <button onclick="removeTaskStatus('${escH(s)}')"
+        style="background:none;border:none;cursor:pointer;color:rgba(91,45,34,0.3);font-size:12px;line-height:1;padding:0 2px;transition:var(--t)"
+        onmouseover="this.style.color='#b33'" onmouseout="this.style.color='rgba(91,45,34,0.3)'">✕</button>
+    </div>`).join('');
+}
+
+function addTaskStatus() {
+  const input = $c('as-task-status-input');
+  const val = input?.value.trim();
+  if (!val) return;
+  if (!S.taskStatuses) S.taskStatuses = [];
+  if (!S.taskStatuses.includes(val)) { S.taskStatuses.push(val); save(); }
+  input.value = '';
+  renderTaskStatusSettings();
+}
+
+function removeTaskStatus(val) {
+  S.taskStatuses = (S.taskStatuses||[]).filter(s => s !== val);
+  save();
+  renderTaskStatusSettings();
+}
+
+function getTaskStatuses() {
+  return S.taskStatuses && S.taskStatuses.length ? S.taskStatuses : DEFAULT_TASK_STATUSES;
 }
 
 function qtyUnitOptions(selected) {
