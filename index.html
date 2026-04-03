@@ -3100,10 +3100,38 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
             <input type="text" class="fi" id="pm-link-input" placeholder="https://…" style="flex:1;font-size:12px;padding:6px 8px" onkeydown="if(event.key==='Enter'){addItemLink('${pid}','${spId}','${itemId}','');event.preventDefault()}">
             <button class="btn btn-secondary btn-sm" onclick="addItemLink('${pid}','${spId}','${itemId}','')">Add</button>
           </div>
+          ${item.type === 'constructed' && (item.components||[]).some(c => (c.links||[]).length) ? `
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-family:var(--font-b);font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">From Components</div>
+            ${(item.components||[]).filter(c => (c.links||[]).length).map(c =>
+              (c.links||[]).map(l => `
+              <div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px">
+                <a href="${escH(l)}" target="_blank" style="color:var(--russet);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px;font-family:var(--font-b)" onclick="event.stopPropagation()">${escH(l)}</a>
+                <span style="color:var(--text-light);font-size:10px">· ${escH(c.name)}</span>
+              </div>`).join('')
+            ).join('')}
+          </div>` : ''}
         </div>
 
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border)">
           ${renderFilesSection(pid, spId, itemId, '', item.files)}
+          ${item.type === 'constructed' && (item.components||[]).some(c => (c.files||[]).length) ? `
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-family:var(--font-b);font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">From Components</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              ${(item.components||[]).filter(c => (c.files||[]).length).map(c =>
+                (c.files||[]).map(f => {
+                  const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
+                  const canView = !f.name.endsWith('.dwg');
+                  return `<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+                    <span>${icon}</span>
+                    <span style="color:var(--russet);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.displayName||f.name)}</span>
+                    <span style="color:var(--text-light);font-size:9px">· ${escH(c.name)}</span>
+                  </div>`;
+                }).join('')
+              ).join('')}
+            </div>
+          </div>` : ''}
         </div>
       </div>
     </div>
