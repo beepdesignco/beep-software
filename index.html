@@ -2734,8 +2734,18 @@ function pmItemMatchesSearch(item) {
 
 function pmItemMatchesFilters(item) {
   if (!_pmStatusFilters.length) return true;
-  return _pmStatusFilters.includes(item.status) ||
-    (item.statusFlags||[]).some(f => _pmStatusFilters.includes(f));
+  if (_pmStatusFilters.includes(item.status)) return true;
+  if ((item.statusFlags||[]).some(f => _pmStatusFilters.includes(f))) return true;
+  // Check components for constructed orders
+  if (item.type === 'constructed' && item.components) {
+    return item.components.some(c => _pmStatusFilters.includes(c.status||'proposed'));
+  }
+  return false;
+}
+
+function compMatchesFilter(comp) {
+  if (!_pmStatusFilters.length) return true;
+  return _pmStatusFilters.includes(comp.status||'proposed');
 }
 
 function renderPMItemCard(item, sp, pid) {
@@ -2792,7 +2802,9 @@ function renderPMItemCard(item, sp, pid) {
         const cStatus = STATUSES.find(s => s.v === (c.status||'proposed'));
         const cStatusColor = getStatusColor(c.status||'proposed');
         const cStatusLabel = cStatus?.l || 'Proposed';
-        return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 18px;font-size:11px">
+        const cMatch = compMatchesFilter(c);
+        const dimStyle = !cMatch ? 'opacity:0.35;filter:grayscale(1);' : '';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 18px;font-size:11px;${dimStyle}transition:opacity 0.2s">
           <span class="status-dot" style="background:${cStatusColor};width:6px;height:6px"></span>
           <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}</span>
           ${cTypeLabel ? `<span class="comp-type-label" style="font-size:8px">${cTypeLabel}</span>` : ''}
