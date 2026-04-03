@@ -2970,76 +2970,105 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   // ── Components section for constructed orders ──
   let compSection = '';
   if (item.type === 'constructed' && item.components && item.components.length) {
+    const nonShipComps = item.components.filter(c => !isShippingComp(c));
+    const shipComps = item.components.filter(c => isShippingComp(c));
+
+    function renderCompDetailCard(c, pid, spId, itemId) {
+      const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+      const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
+      const cIsShip = isShippingComp(c);
+      const cStatusList = cIsShip ? SHIPPING_STATUSES : STATUSES;
+      const cDefault = cIsShip ? 'needs_payment' : 'proposed';
+      const cStatusOpts = cStatusList.map(s => `<option value="${s.v}" ${(c.status||cDefault)===s.v?'selected':''}>${s.l}</option>`).join('');
+      const cStatusColor = cIsShip ? getShippingStatusColor(c.status||cDefault) : getStatusColor(c.status||cDefault);
+      const cLinksHtml = (c.links||[]).map((l,i) => `
+        <div style="display:inline-flex;align-items:center;gap:4px;margin-right:6px">
+          <a href="${escH(l)}" target="_blank" style="font-size:11px;color:var(--russet);text-decoration:none" onclick="event.stopPropagation()">${escH(l).substring(0,40)}${l.length>40?'…':''}</a>
+          <button onclick="removeItemLink('${pid}','${spId}','${itemId}','${c.id}',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
+        </div>`).join('');
+      const hasExtra = (c.trackingNumbers||[]).length || (c.links||[]).length || (c.files||[]).length;
+
+      return `
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span class="status-dot" style="background:${cStatusColor};width:7px;height:7px"></span>
+            <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name||'—')}</span>
+            ${cTypeLabel ? `<span class="comp-type-label" style="margin-left:4px">${cTypeLabel}</span>` : ''}
+            ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
+          </div>
+          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${cNet>0?fmt(cNet):'—'}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+          <div>
+            <label class="fl">Status</label>
+            <select class="fi fsel" style="font-size:11px;padding:5px 7px" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','status',this.value)">${cStatusOpts}</select>
+          </div>
+          <div>
+            <label class="fl">Due Date</label>
+            <input type="date" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.dueDate||'')}" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','dueDate',this.value)">
+          </div>
+          <div>
+            <label class="fl">Invoice Phase</label>
+            <input type="text" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.invoicePhase||'')}" placeholder="Phase" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','invoicePhase',this.value)">
+          </div>
+        </div>
+
+        <div style="margin-bottom:4px">
+          <label class="fl">Description</label>
+          <textarea class="fi" style="resize:vertical;min-height:40px;font-size:11px" placeholder="Component details…" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','description',this.value)">${escH(c.description||'')}</textarea>
+        </div>
+
+        <details style="margin-top:6px">
+          <summary style="font-size:10px;font-family:var(--font-b);color:var(--text-mid);cursor:pointer;padding:4px 0;user-select:none">Tracking, Links, Files & Notes</summary>
+          <div style="padding-top:8px">
+            ${renderTrackingSection(pid, spId, itemId, c.id, c.trackingNumbers)}
+
+            <div style="margin-top:10px">
+              <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:4px">Links</div>
+              ${cLinksHtml || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No links.</span>'}
+              <div style="display:flex;gap:4px;margin-top:4px">
+                <input type="text" class="fi" id="pm-link-input${c.id}" placeholder="https://…" style="flex:1;font-size:11px;padding:5px 7px">
+                <button class="btn btn-secondary btn-sm" onclick="addItemLink('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Add</button>
+              </div>
+            </div>
+
+            <div style="margin-top:10px">
+              ${renderFilesSection(pid, spId, itemId, c.id, c.files)}
+            </div>
+
+            <div style="margin-top:8px">
+              <div style="display:flex;gap:4px">
+                <input type="text" class="fi" id="pm-note-input-${c.id}" placeholder="Add a note about ${escH(c.name||'this component')}…" style="flex:1;font-size:11px;padding:5px 7px" onkeydown="if(event.key==='Enter'){addActivityNote('${pid}','${spId}','${itemId}','${c.id}');event.preventDefault()}">
+                <button class="btn btn-secondary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Note</button>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>`;
+    }
+
+    let compHtml = nonShipComps.map(c => renderCompDetailCard(c, pid, spId, itemId)).join('');
+
+    if (shipComps.length) {
+      const shipTotal = shipComps.reduce((s,c) => s + parse$(c.netCost) * (parseFloat(c.qty)||1), 0);
+      compHtml += `
+      <details style="margin-top:4px">
+        <summary style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);cursor:pointer;padding:6px 0;user-select:none;display:flex;align-items:center;gap:6px">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em">Shipping & Handling</span>
+          <span style="font-size:10px;color:var(--text-light)">(${shipComps.length}) · ${fmt(shipTotal)}</span>
+        </summary>
+        <div style="padding-top:4px">
+          ${shipComps.map(c => renderCompDetailCard(c, pid, spId, itemId)).join('')}
+        </div>
+      </details>`;
+    }
+
     compSection = `
     <div style="margin-bottom:20px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);padding-bottom:6px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Components</div>
-      ${item.components.map(c => {
-        const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
-        const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
-        const cIsShipping = isShippingComp(c);
-        const cStatusList = cIsShipping ? SHIPPING_STATUSES : STATUSES;
-        const cDefaultStatus = cIsShipping ? 'needs_payment' : 'proposed';
-        const cStatusOpts = cStatusList.map(s => `<option value="${s.v}" ${(c.status||cDefaultStatus)===s.v?'selected':''}>${s.l}</option>`).join('');
-        const cLinksHtml = (c.links||[]).map((l,i) => `
-          <div style="display:inline-flex;align-items:center;gap:4px;margin-right:6px">
-            <a href="${escH(l)}" target="_blank" style="font-size:11px;color:var(--russet);text-decoration:none" onclick="event.stopPropagation()">${escH(l).substring(0,40)}${l.length>40?'…':''}</a>
-            <button onclick="removeItemLink('${pid}','${spId}','${itemId}','${c.id}',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
-          </div>`).join('');
-
-        return `
-        <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;margin-bottom:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
-            <div>
-              <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name||'—')}</span>
-              ${cTypeLabel ? `<span class="comp-type-label" style="margin-left:6px">${cTypeLabel}</span>` : ''}
-              ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:6px">· ${escH(c.contact)}</span>` : ''}
-            </div>
-            <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${cNet>0?fmt(cNet):'—'}</span>
-          </div>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
-            <div>
-              <label class="fl">Status</label>
-              <select class="fi fsel" style="font-size:11px;padding:5px 7px" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','status',this.value)">${cStatusOpts}</select>
-            </div>
-            <div>
-              <label class="fl">Due Date</label>
-              <input type="date" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.dueDate||'')}" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','dueDate',this.value)">
-            </div>
-            <div>
-              <label class="fl">Invoice Phase</label>
-              <input type="text" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.invoicePhase||'')}" placeholder="Phase" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','invoicePhase',this.value)">
-            </div>
-          </div>
-
-          <div style="margin-bottom:8px">
-            <label class="fl">Description</label>
-            <textarea class="fi" style="resize:vertical;min-height:40px;font-size:11px" placeholder="Component details…" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','description',this.value)">${escH(c.description||'')}</textarea>
-          </div>
-
-          ${renderTrackingSection(pid, spId, itemId, c.id, c.trackingNumbers)}
-
-          <div style="margin-top:10px">
-            <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:4px">Links</div>
-            ${cLinksHtml || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No links.</span>'}
-            <div style="display:flex;gap:4px;margin-top:4px">
-              <input type="text" class="fi" id="pm-link-input${c.id}" placeholder="https://…" style="flex:1;font-size:11px;padding:5px 7px">
-              <button class="btn btn-secondary btn-sm" onclick="addItemLink('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Add</button>
-            </div>
-          </div>
-
-          <div style="margin-top:10px">
-            ${renderFilesSection(pid, spId, itemId, c.id, c.files)}
-          </div>
-
-          <div style="margin-top:8px">
-            <div style="display:flex;gap:4px">
-              <input type="text" class="fi" id="pm-note-input-${c.id}" placeholder="Add a note about ${escH(c.name||'this component')}…" style="flex:1;font-size:11px;padding:5px 7px" onkeydown="if(event.key==='Enter'){addActivityNote('${pid}','${spId}','${itemId}','${c.id}');event.preventDefault()}">
-              <button class="btn btn-secondary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Note</button>
-            </div>
-          </div>
-        </div>`;
-      }).join('')}
+      ${compHtml}
     </div>`;
   }
 
