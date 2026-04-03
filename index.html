@@ -2784,6 +2784,24 @@ function renderPMItemCard(item, sp, pid) {
       ${noteCount ? `<span>💬 ${noteCount} note${noteCount!==1?'s':''}</span>` : ''}
       ${item.invoicePhase ? `<span>Invoice: ${escH(item.invoicePhase)}</span>` : ''}
     </div>
+    ${item.type === 'constructed' && (item.components||[]).length ? `
+    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+      ${(item.components||[]).map(c => {
+        const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+        const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
+        const cStatus = STATUSES.find(s => s.v === (c.status||'proposed'));
+        const cStatusColor = getStatusColor(c.status||'proposed');
+        const cStatusLabel = cStatus?.l || 'Proposed';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 18px;font-size:11px">
+          <span class="status-dot" style="background:${cStatusColor};width:6px;height:6px"></span>
+          <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}</span>
+          ${cTypeLabel ? `<span class="comp-type-label" style="font-size:8px">${cTypeLabel}</span>` : ''}
+          ${c.contact ? `<span style="color:var(--text-light);font-size:10px">${escH(c.contact)}</span>` : ''}
+          <span style="font-size:10px;font-family:var(--font-b);color:${cStatusColor};white-space:nowrap">${cStatusLabel}</span>
+          <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):''}</span>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
   </div>`;
 }
 
