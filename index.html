@@ -1157,6 +1157,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
     <div class="sidebar-footer">
+      <div style="margin-bottom:8px;cursor:pointer;color:rgba(243,232,214,0.45);transition:var(--t)" onclick="openAppSettings()" onmouseover="this.style.color='rgba(243,232,214,0.7)'" onmouseout="this.style.color='rgba(243,232,214,0.45)'">⚙ App Settings</div>
       Phase 2 &nbsp;·&nbsp; v0.2<br>
       Beep Design Co.
     </div>
@@ -1466,9 +1467,13 @@ tr:hover .row-btns { opacity:1; }
         <label class="fl">Net Price (your cost)</label>
         <input type="text" class="fi" id="ai-net" placeholder="$0.00">
       </div>
-      <div class="fg">
+      <div class="fg" style="max-width:80px">
         <label class="fl">Qty</label>
-        <input type="number" class="fi" id="ai-qty" value="1" min="1" step="1">
+        <input type="number" class="fi" id="ai-qty" value="1" min="0.25" step="0.25">
+      </div>
+      <div class="fg" style="max-width:100px">
+        <label class="fl">Unit</label>
+        <select class="fi fsel" id="ai-qty-unit" style="font-size:12px"><!-- populated by JS --></select>
       </div>
     </div>
 
@@ -1619,6 +1624,31 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
  
+<!-- ═════════════════ APP SETTINGS MODAL ═════════════════ -->
+<div class="overlay" id="modal-app-settings">
+  <div class="modal" style="width:440px">
+    <button class="modal-x" onclick="closeModal('modal-app-settings')">✕</button>
+    <div class="modal-title">App Settings</div>
+
+    <div class="modal-section-hd">Quantity Units</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
+      These units appear as options when setting quantities on proposal items and components.
+    </div>
+    <div id="as-units-list" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px"></div>
+    <div style="display:flex;gap:6px">
+      <input type="text" class="fi" id="as-unit-input" placeholder="New unit…" style="flex:1;font-size:12px;padding:6px 10px"
+        onkeydown="if(event.key==='Enter'){addQtyUnit();event.preventDefault()}">
+      <button class="btn btn-primary btn-sm" onclick="addQtyUnit()">Add</button>
+    </div>
+
+    <div class="modal-footer" style="margin-top:18px">
+      <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-app-settings')">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ TIME ENTRY MODAL ═════════════════ -->
 <div class="overlay" id="modal-time">
   <div class="modal" style="width:520px">
@@ -1744,6 +1774,10 @@ const CHARGE_CATEGORIES = [
   'Freight','Tariffs','Tax','Tip','Misc. Reimbursable','Other',
 ];
 
+const DEFAULT_QTY_UNITS = [
+  'ea','pair','set','yds','sq ft','lin ft','rolls','gallons','boxes','sheets','panels','lbs',
+];
+
 const ITEM_TYPES = [
   { id:'constructed', label:'Constructed Order', badge:'CO' },
   { id:'readymade',   label:'Ready Made',        badge:'RM' },
@@ -1780,6 +1814,7 @@ let S = {
   dragId: null,
   _returnView: null,
   _dataVersion: 2,
+  qtyUnits: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -1801,6 +1836,7 @@ function load() {
       if (stageMap[p.stage]) p.stage = stageMap[p.stage];
     });
     if (!S.categories || !S.categories.length) S.categories = [...CATEGORIES];
+    if (!S.qtyUnits || !S.qtyUnits.length) S.qtyUnits = [...DEFAULT_QTY_UNITS];
     // Migrate old 'brands' field → 'lines'
     S.contacts.forEach(c => {
       if (c.brands !== undefined && c.lines === undefined) {
@@ -1908,12 +1944,12 @@ function componentEffectiveMarkup(comp, parentItem, pid) {
 }
 
 function calcConstructedNet(item) {
-  return (item.components || []).reduce((s, c) => s + parse$(c.netCost) * (parseInt(c.qty) || 1), 0);
+  return (item.components || []).reduce((s, c) => s + parse$(c.netCost) * (parseFloat(c.qty) || 1), 0);
 }
 
 function calcConstructedClient(item, pid) {
   return (item.components || []).reduce((s, c) => {
-    const net = parse$(c.netCost) * (parseInt(c.qty) || 1);
+    const net = parse$(c.netCost) * (parseFloat(c.qty) || 1);
     const markup = componentEffectiveMarkup(c, item, pid) / 100;
     return s + net * (1 + markup);
   }, 0);
@@ -2323,7 +2359,8 @@ function renderItemRow(item, spId, pid) {
       const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || (c.componentType === 'other' ? 'Other' : '');
       const cMarkupNote = c.billCostOnly ? '<span class="markup-tag">cost only</span>' :
         (c.adjustMarkup != null && c.adjustMarkup !== '' ? `<span class="markup-tag">${c.adjustMarkup}%</span>` : '');
-      const qtyNote = cQty > 1 ? `<span style="font-size:10px;color:var(--text-mid);margin-left:4px">×${cQty}</span>` : '';
+      const cUnitLabel = c.qtyUnit ? ' '+c.qtyUnit : '';
+      const qtyNote = (cQty !== 1 || c.qtyUnit) ? `<span style="font-size:10px;color:var(--text-mid);margin-left:4px">×${cQty}${cUnitLabel}</span>` : '';
       return `
         <tr class="comp-row">
           <td></td>
@@ -2379,7 +2416,7 @@ function renderItemRow(item, spId, pid) {
       </td>
       <td class="hide-client"><div class="cell-ro">${net>0?fmt(net):'—'}</div></td>
       <td><div class="cell-ro calc">${client>0?fmt(client):'—'}</div></td>
-      <td><div class="cell-ro">${item.type==='constructed'?'—':(qty||'—')}</div></td>
+      <td><div class="cell-ro">${item.type==='constructed'?'—':(qty ? qty + (item.qtyUnit ? ' '+item.qtyUnit : '') : '—')}</div></td>
       <td><div class="cell-ro">${total>0?fmt(total):'—'}</div></td>
       <td onclick="event.stopPropagation()">
         <select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)">${sopts}</select>
@@ -2541,7 +2578,7 @@ function populateRoomSelect(pid) {
 
 function addModalComponent(comp) {
   _modalComponents.push(comp || {
-    id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1,
+    id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1, qtyUnit: '',
     billCostOnly: false, adjustMarkup: null, note: ''
   });
   renderModalComponents();
@@ -2577,7 +2614,10 @@ function renderModalComponents() {
           <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00">
         </div>
         <div class="fg" style="max-width:70px"><label class="fl">Qty</label>
-          <input type="number" class="fi comp-qty" value="${c.qty || 1}" min="1" step="1" style="text-align:center">
+          <input type="number" class="fi comp-qty" value="${c.qty || 1}" min="0.25" step="0.25" style="text-align:center">
+        </div>
+        <div class="fg" style="max-width:90px"><label class="fl">Unit</label>
+          <select class="fi fsel comp-unit" style="font-size:11px;padding:5px 6px"><option value="">—</option>${qtyUnitOptions(c.qtyUnit||'')}</select>
         </div>
       </div>
       <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
@@ -2617,7 +2657,8 @@ function readModalComponentsFromDOM() {
       _modalComponents[i].componentType = el.querySelector('.comp-type')?.value || '';
       _modalComponents[i].contact = el.querySelector('.comp-contact')?.value.trim() || '';
       _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
-      _modalComponents[i].qty = parseInt(el.querySelector('.comp-qty')?.value) || 1;
+      _modalComponents[i].qty = parseFloat(el.querySelector('.comp-qty')?.value) || 1;
+      _modalComponents[i].qtyUnit = el.querySelector('.comp-unit')?.value || '';
       _modalComponents[i].billCostOnly = el.querySelector('.comp-billcost')?.checked || false;
       const adj = el.querySelector('.comp-adj')?.value;
       _modalComponents[i].adjustMarkup = adj !== '' && adj != null ? parseFloat(adj) : null;
@@ -2687,6 +2728,7 @@ function openAddItemModal(pid, spId) {
   if (sp && sp.name) $c('ai-room').value = sp.name;
   ['ai-name','ai-contact','ai-net','ai-notes'].forEach(id => { if($c(id)) $c(id).value = ''; });
   $c('ai-qty').value = '1';
+  $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
   $c('ai-billcost').checked = false;
   $c('ai-adj-markup').value = '';
@@ -2717,6 +2759,7 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-contact').value = item.contact || '';
   $c('ai-net').value = item.netPrice || '';
   $c('ai-qty').value = item.qty || '1';
+  $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions(item.qtyUnit || '');
   $c('ai-category').value = item.category || '';
   $c('ai-notes').value = item.notes || '';
   $c('ai-billcost').checked = !!item.billCostOnly;
@@ -2752,15 +2795,16 @@ function saveItem() {
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
   };
 
+  const qtyUnit = $c('ai-qty-unit')?.value || '';
   let item;
   if (type === 'constructed') {
     item = { ...base, components: _modalComponents.filter(c => c.name || c.netCost) };
   } else if (type === 'readymade') {
     item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
-      qty: $c('ai-qty').value || '1', link: '', additionalCharges: _modalCharges.filter(ch => ch.name || ch.amount) };
+      qty: $c('ai-qty').value || '1', qtyUnit, link: '', additionalCharges: _modalCharges.filter(ch => ch.name || ch.amount) };
   } else {
     item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
-      qty: $c('ai-qty').value || '1', category: $c('ai-category').value };
+      qty: $c('ai-qty').value || '1', qtyUnit, category: $c('ai-category').value };
   }
 
   const prop = S.proposals[pid];
@@ -2963,6 +3007,50 @@ function removeListItem(listKey, val) {
   }
 }
  
+// ─── APP SETTINGS ─────────────────────────────────────────
+
+function openAppSettings() {
+  renderQtyUnitsList();
+  $c('modal-app-settings').classList.add('open');
+}
+
+function renderQtyUnitsList() {
+  const el = $c('as-units-list');
+  if (!el) return;
+  const units = S.qtyUnits || [];
+  el.innerHTML = units.map(u => `
+    <div style="display:inline-flex;align-items:center;gap:4px;background:white;border-radius:14px;padding:4px 10px;border:1px solid var(--border);font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+      ${escH(u)}
+      <button onclick="removeQtyUnit('${escH(u)}')"
+        style="background:none;border:none;cursor:pointer;color:rgba(91,45,34,0.3);font-size:12px;line-height:1;padding:0 2px;transition:var(--t)"
+        onmouseover="this.style.color='#b33'" onmouseout="this.style.color='rgba(91,45,34,0.3)'">✕</button>
+    </div>`).join('');
+}
+
+function addQtyUnit() {
+  const input = $c('as-unit-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!S.qtyUnits) S.qtyUnits = [];
+  if (!S.qtyUnits.includes(val)) {
+    S.qtyUnits.push(val);
+    save();
+  }
+  input.value = '';
+  renderQtyUnitsList();
+}
+
+function removeQtyUnit(val) {
+  S.qtyUnits = (S.qtyUnits || []).filter(u => u !== val);
+  save();
+  renderQtyUnitsList();
+}
+
+function qtyUnitOptions(selected) {
+  const units = S.qtyUnits && S.qtyUnits.length ? S.qtyUnits : DEFAULT_QTY_UNITS;
+  return units.map(u => `<option value="${escH(u)}" ${selected === u ? 'selected' : ''}>${escH(u)}</option>`).join('');
+}
+
 // ─── CONTACT MODAL ────────────────────────────────────────
  
 const _modalLines = [];  // temp lines while modal is open
@@ -3723,7 +3811,7 @@ function addSampleData() {
           { id:uid(), type:'constructed', name:'Custom Banquette Upholstery', room:'Bar Nero', status:'waiting_quote',
             notes:'Waiting on COM yardage req from workroom.', _open:false, billCostOnly:false, adjustMarkup:null,
             components:[
-              { id:uid(), name:'Upholstery Fabric', componentType:'material', contact:'Paul+', netCost:'120', qty:8, billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Upholstery Fabric', componentType:'material', contact:'Paul+', netCost:'120', qty:8, qtyUnit:'yds', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Foam & Batting', componentType:'material', contact:'', netCost:'340', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Upholstery Labor', componentType:'labor', contact:'Douglass Workroom', netCost:'850', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Freight', componentType:'shipping', contact:'', netCost:'120', billCostOnly:false, adjustMarkup:null, note:'' },
