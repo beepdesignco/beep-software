@@ -2891,10 +2891,116 @@ function renderPMItemCard(item, sp, pid) {
   </div>`;
 }
 
+// ── Project Tasks (not tied to proposal) ──
+
+function addProjectTask(pid) {
+  const input = $c('pm-new-task-input');
+  const val = input?.value.trim();
+  if (!val) return;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  if (!prop.projectTasks) prop.projectTasks = [];
+  prop.projectTasks.push({
+    id: uid(),
+    name: val,
+    done: false,
+    dueDate: '',
+    notes: '',
+    created: new Date().toISOString()
+  });
+  save();
+  input.value = '';
+  renderProjectDetail();
+}
+
+function toggleProjectTask(pid, taskId) {
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task) return;
+  task.done = !task.done;
+  save();
+  renderProjectDetail();
+}
+
+function deleteProjectTask(pid, taskId) {
+  if (!confirm('Delete this task?')) return;
+  const prop = S.proposals[pid];
+  if (!prop || !prop.projectTasks) return;
+  prop.projectTasks = prop.projectTasks.filter(t => t.id !== taskId);
+  save();
+  renderProjectDetail();
+}
+
+function saveProjectTaskField(pid, taskId, key, val) {
+  const prop = S.proposals[pid];
+  const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
+  if (!task) return;
+  task[key] = val;
+  save();
+}
+
+function renderProjectTasksSection(pid) {
+  const prop = S.proposals[pid];
+  if (!prop) return '';
+  const tasks = prop.projectTasks || [];
+  const incomplete = tasks.filter(t => !t.done);
+  const complete = tasks.filter(t => t.done);
+
+  let html = `
+  <div style="margin-top:28px">
+    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Project Tasks</div>
+
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <input type="text" class="fi" id="pm-new-task-input" placeholder="e.g. Make a paint schedule for the entire project" style="flex:1;font-size:12px;padding:8px 12px" onkeydown="if(event.key==='Enter'){addProjectTask('${pid}');event.preventDefault()}">
+      <button class="btn btn-primary btn-sm" onclick="addProjectTask('${pid}')">+ Add Open Project Task</button>
+    </div>`;
+
+  if (!tasks.length) {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No project tasks yet.</div>';
+  } else {
+    // Incomplete tasks
+    incomplete.forEach(t => {
+      html += `
+      <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:6px;display:flex;align-items:flex-start;gap:10px">
+        <input type="checkbox" ${t.done?'checked':''} onchange="toggleProjectTask('${pid}','${t.id}')" style="accent-color:var(--russet);width:16px;height:16px;cursor:pointer;margin-top:2px;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark)">${escH(t.name)}</div>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+            <input type="date" class="fi" style="font-size:10px;padding:3px 6px;width:130px" value="${escH(t.dueDate||'')}" onchange="saveProjectTaskField('${pid}','${t.id}','dueDate',this.value)" placeholder="Due date">
+            <input type="text" class="fi" style="font-size:10px;padding:3px 6px;flex:1" value="${escH(t.notes||'')}" onchange="saveProjectTaskField('${pid}','${t.id}','notes',this.value)" placeholder="Notes…">
+          </div>
+        </div>
+        <button onclick="deleteProjectTask('${pid}','${t.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px;padding:2px 4px">✕</button>
+      </div>`;
+    });
+
+    // Completed tasks
+    if (complete.length) {
+      html += `
+      <details style="margin-top:10px">
+        <summary style="font-size:11px;font-family:var(--font-b);color:var(--text-light);cursor:pointer;padding:4px 0;user-select:none">Completed (${complete.length})</summary>
+        <div style="padding-top:6px">
+          ${complete.map(t => `
+          <div style="background:rgba(91,45,34,0.02);border:1px solid var(--border);border-radius:var(--r);padding:8px 14px;margin-bottom:4px;display:flex;align-items:center;gap:10px;opacity:0.55">
+            <input type="checkbox" checked onchange="toggleProjectTask('${pid}','${t.id}')" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer;flex-shrink:0">
+            <span style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);text-decoration:line-through;flex:1">${escH(t.name)}</span>
+            <button onclick="deleteProjectTask('${pid}','${t.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:2px 4px">✕</button>
+          </div>`).join('')}
+        </div>
+      </details>`;
+    }
+  }
+
+  html += '</div>';
+  return html;
+}
+
 function renderPDManagement(proj, pid) {
   const prop = S.proposals[pid];
-  if (!prop || !prop.spaces.length) {
-    return '<div class="no-results">No items yet. Add items in the Proposal tab first.</div>';
+  if (!prop) return '<div class="no-results">No data for this project yet.</div>';
+
+  if (_pmDetailItem && _pmDetailItem.pid === pid) {
+    return renderPMItemDetailPanel(_pmDetailItem.pid, _pmDetailItem.spId, _pmDetailItem.itemId);
   }
 
   if (_pmDetailItem && _pmDetailItem.pid === pid) {
@@ -2948,9 +3054,12 @@ function renderPDManagement(proj, pid) {
     </div>`;
   });
 
-  if (!hasResults) {
+  if (!hasResults && (prop.spaces||[]).some(sp => (sp.items||[]).length)) {
     html += '<div class="no-results">No items match your search or filters.</div>';
   }
+
+  // Project Tasks section
+  html += renderProjectTasksSection(pid);
 
   return html;
 }
