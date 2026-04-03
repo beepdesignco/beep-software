@@ -1578,7 +1578,11 @@ tr:hover .row-btns { opacity:1; }
     </div>
 
     <!-- MARKUP OVERRIDES -->
-    <div style="display:flex;gap:16px;align-items:center;padding:8px 0;margin-bottom:10px">
+    <div style="display:flex;gap:16px;align-items:center;padding:8px 0;margin-bottom:10px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="ai-taxexempt" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        Tax exempt
+      </label>
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
         <input type="checkbox" id="ai-billcost" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
         Bill cost only
@@ -2985,41 +2989,75 @@ function getFreightFromComponents(item, pid) {
 
 function calcProposalTotals(prop, pid) {
   const proj = getProject(pid);
+  const taxRate = (proj?.taxRate || 0) / 100;
   let subtotal = 0;
   let freight = 0;
+  let taxableAmount = 0;
+
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
-      const client = getItemClient(item, pid);
       const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
-      const lineTotal = client * qty;
 
-      if (isFreightItem(item)) {
-        freight += lineTotal;
-      } else {
-        // Extract freight portions from within items
-        const itemFreight = getFreightFromCharges(item, pid) + getFreightFromComponents(item, pid);
+      if (item.type === 'constructed') {
+        // For constructed orders, calculate per-component taxability
+        let itemFreight = 0;
+        let itemNonFreight = 0;
+        let itemTaxable = 0;
+        (item.components||[]).forEach(c => {
+          const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+          const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
+          const cClient = cNet * (1 + cMarkup);
+          if (c.componentType === 'shipping') {
+            itemFreight += cClient;
+          } else {
+            itemNonFreight += cClient;
+          }
+          if (!item.taxExempt && !c.taxExempt) {
+            if (c.componentType === 'shipping') {
+              if (proj?.taxFreight) itemTaxable += cClient;
+            } else {
+              itemTaxable += cClient;
+            }
+          }
+        });
         freight += itemFreight * qty;
-        subtotal += lineTotal - (itemFreight * qty);
+        subtotal += itemNonFreight * qty;
+        taxableAmount += itemTaxable * qty;
+      } else {
+        const client = getItemClient(item, pid);
+        const lineTotal = client * qty;
+
+        if (isFreightItem(item)) {
+          freight += lineTotal;
+          if (!item.taxExempt && proj?.taxFreight) taxableAmount += lineTotal;
+        } else {
+          const itemFreight = getFreightFromCharges(item, pid) + getFreightFromComponents(item, pid);
+          freight += itemFreight * qty;
+          subtotal += lineTotal - (itemFreight * qty);
+          if (!item.taxExempt) {
+            taxableAmount += lineTotal - (itemFreight * qty);
+            if (proj?.taxFreight) taxableAmount += itemFreight * qty;
+          }
+        }
       }
     });
   });
-  const taxRate = (proj?.taxRate || 0) / 100;
-  const taxableBase = proj?.taxFreight ? (subtotal + freight) : subtotal;
-  const tax = taxableBase * taxRate;
+
+  const tax = taxableAmount * taxRate;
   return { subtotal, freight, tax, total: subtotal + freight + tax };
 }
 
 function renderTotals(prop, pid) {
   const proj = getProject(pid);
   const t = calcProposalTotals(prop, pid);
-  const taxLabel = proj?.taxRate ? `Tax (${proj.taxRate}%)` : 'Tax';
+  const taxLabel = proj?.taxRate ? `Tax (${proj.taxRate}%)` : 'Tax (0%)';
 
   return `
     <div class="prop-totals">
       <table class="totals-tbl">
         <tr><td>Subtotal</td><td id="t-sub">${fmt(t.subtotal)}</td></tr>
         ${t.freight > 0 ? `<tr><td>Freight</td><td id="t-fr">${fmt(t.freight)}</td></tr>` : ''}
-        <tr><td>${taxLabel}${proj?.taxFreight ? ' (incl. freight)' : ''}</td><td id="t-tax">${fmt(t.tax)}</td></tr>
+        <tr><td>${taxLabel}</td><td id="t-tax">${fmt(t.tax)}</td></tr>
         <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(t.total)}</td></tr>
       </table>
     </div>
@@ -3183,6 +3221,10 @@ function renderModalComponents() {
           Allowance
         </label>
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
+          <input type="checkbox" class="comp-taxexempt" ${c.taxExempt ? 'checked' : ''} style="accent-color:var(--russet);width:13px;height:13px">
+          Tax exempt
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
           <input type="checkbox" class="comp-billcost" ${c.billCostOnly ? 'checked' : ''} style="accent-color:var(--russet);width:13px;height:13px">
           Bill cost only
         </label>
@@ -3221,6 +3263,7 @@ function readModalComponentsFromDOM() {
       _modalComponents[i].qty = parseFloat(el.querySelector('.comp-qty')?.value) || 1;
       _modalComponents[i].qtyUnit = el.querySelector('.comp-unit')?.value || '';
       _modalComponents[i].allowance = el.querySelector('.comp-allowance')?.checked || false;
+      _modalComponents[i].taxExempt = el.querySelector('.comp-taxexempt')?.checked || false;
       _modalComponents[i].billCostOnly = el.querySelector('.comp-billcost')?.checked || false;
       const adj = el.querySelector('.comp-adj')?.value;
       _modalComponents[i].adjustMarkup = adj !== '' && adj != null ? parseFloat(adj) : null;
@@ -3293,6 +3336,7 @@ function openAddItemModal(pid, spId) {
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
   $c('ai-allowance').checked = false;
+  $c('ai-taxexempt').checked = false;
   $c('ai-billcost').checked = false;
   $c('ai-adj-markup').value = '';
   _modalComponents = [];
@@ -3326,6 +3370,7 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-category').value = item.category || '';
   $c('ai-notes').value = item.notes || '';
   $c('ai-allowance').checked = !!item.allowance;
+  $c('ai-taxexempt').checked = !!item.taxExempt;
   $c('ai-billcost').checked = !!item.billCostOnly;
   $c('ai-adj-markup').value = item.adjustMarkup != null ? item.adjustMarkup : '';
 
@@ -3356,6 +3401,7 @@ function saveItem() {
     notes: $c('ai-notes').value.trim(),
     _open: false,
     allowance: $c('ai-allowance').checked,
+    taxExempt: $c('ai-taxexempt').checked,
     billCostOnly: $c('ai-billcost').checked,
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
   };
