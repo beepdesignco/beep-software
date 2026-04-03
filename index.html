@@ -1159,10 +1159,6 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◈</span>
         <span class="nav-label">Projects</span>
       </div>
-      <div class="nav-item" onclick="showView('proposal')" data-view="proposal">
-        <span class="nav-icon">▦</span>
-        <span class="nav-label">Proposals</span>
-      </div>
       <div class="nav-item" onclick="showView('clients')" data-view="clients">
         <span class="nav-icon">◇</span>
         <span class="nav-label">Clients</span>
@@ -1214,7 +1210,30 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div class="projects-body" id="projects-board"><!-- rendered by JS --></div>
     </div>
- 
+
+    <!-- ─────────── PROJECT DETAIL VIEW ─────────── -->
+    <div class="view" id="view-project-detail">
+      <div class="page-header" style="border-bottom:none;padding-bottom:0">
+        <div>
+          <button class="btn btn-ghost btn-sm" onclick="showView('projects')" style="margin-bottom:6px;padding-left:0">← Back to Projects</button>
+          <div class="page-title" id="pd-title"></div>
+          <div class="page-sub" id="pd-subtitle"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-secondary btn-sm" onclick="openEditModal(S._detailProjectId)">Edit Project</button>
+        </div>
+      </div>
+      <!-- Project tabs -->
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);background:var(--cloud);display:flex;gap:0">
+        <button class="view-tab active" data-pdtab="overview" onclick="setProjDetailTab('overview')" style="margin-bottom:-1px">Overview</button>
+        <button class="view-tab" data-pdtab="proposal" onclick="setProjDetailTab('proposal')" style="margin-bottom:-1px">Proposal</button>
+        <button class="view-tab" data-pdtab="management" onclick="setProjDetailTab('management')" style="margin-bottom:-1px">Project Mgmt</button>
+        <button class="view-tab" data-pdtab="documents" onclick="setProjDetailTab('documents')" style="margin-bottom:-1px">Documents</button>
+        <button class="view-tab" data-pdtab="settings" onclick="setProjDetailTab('settings')" style="margin-bottom:-1px">Settings</button>
+      </div>
+      <div class="contacts-body" id="pd-body" style="padding:22px 30px 40px"><!-- rendered by JS --></div>
+    </div>
+
     <!-- ─────────── PROPOSAL VIEW ─────────── -->
     <div class="view" id="view-proposal">
       <div class="client-view-banner">⚠ &nbsp; Client View Active — Vendor pricing is hidden</div>
@@ -1851,25 +1870,32 @@ const STAGES = [
 ];
  
 const STATUSES = [
-  { v:'pending',            l:'Pending' },
-  { v:'waiting_quote',      l:'Waiting — Quote' },
-  { v:'waiting_selection',  l:'Waiting — Selection' },
-  { v:'waiting_qty',        l:'Waiting — Qty' },
-  { v:'client_approval',    l:'Needs Client Approval' },
+  { v:'proposed',           l:'Proposed' },
   { v:'approved',           l:'Approved' },
+  { v:'invoiced',           l:'Invoiced' },
+  { v:'ready_for_ordering', l:'Ready for Ordering' },
   { v:'ordered',            l:'Ordered' },
+  { v:'payment_processed',  l:'Payment Processed' },
+  { v:'shipped',            l:'Shipped' },
   { v:'received',           l:'Received' },
+  { v:'installed',          l:'Installed' },
+];
+
+const STATUS_FLAGS = [
+  { v:'needs_attention', l:'Needs Attention', color:'#b33' },
+  { v:'in_production',   l:'In Production',   color:'#c47a20' },
 ];
 
 const DEFAULT_STATUS_COLORS = {
-  pending:           '#8a8a8a',
-  waiting_quote:     '#c47a20',
-  waiting_selection: '#c47a20',
-  waiting_qty:       '#c47a20',
-  client_approval:   '#b33d3d',
-  approved:          '#2d7a4a',
-  ordered:           '#2d5a8a',
-  received:          '#1a6e3a',
+  proposed:           '#8a8a8a',
+  approved:           '#2d7a4a',
+  invoiced:           '#2d5a8a',
+  ready_for_ordering: '#6a5a2d',
+  ordered:            '#2d5a8a',
+  payment_processed:  '#2d7a4a',
+  shipped:            '#c47a20',
+  received:           '#1a6e3a',
+  installed:          '#1a5e1a',
 };
  
 const EMPTY_MSGS = {
@@ -1935,7 +1961,8 @@ let S = {
   clientView: false,
   dragId: null,
   _returnView: null,
-  _dataVersion: 3,
+  _detailProjectId: null,
+  _dataVersion: 4,
   qtyUnits: [],
   statusColors: {},
 };
@@ -2031,6 +2058,31 @@ function load() {
         }
       });
       S._dataVersion = 3;
+      save();
+    }
+    // ── v4 migration: add PM fields to items ──
+    if (!S._dataVersion || S._dataVersion < 4) {
+      Object.keys(S.proposals).forEach(pid => {
+        const prop = S.proposals[pid];
+        (prop.spaces || []).forEach(sp => {
+          (sp.items || []).forEach(item => {
+            if (!item.statusFlags) item.statusFlags = [];
+            if (!item.dueDate) item.dueDate = '';
+            if (!item.trackingNumbers) item.trackingNumbers = [];
+            if (!item.invoicePhase) item.invoicePhase = '';
+            if (!item.description) item.description = '';
+            if (!item.links) item.links = [];
+            if (!item.activityLog) item.activityLog = [];
+            // Migrate old statuses
+            const statusMap = {
+              'pending':'proposed', 'waiting_quote':'proposed', 'waiting_selection':'proposed',
+              'waiting_qty':'proposed', 'client_approval':'proposed'
+            };
+            if (statusMap[item.status]) item.status = statusMap[item.status];
+          });
+        });
+      });
+      S._dataVersion = 4;
       save();
     }
   } catch(e){}
@@ -2137,13 +2189,308 @@ function showView(v) {
   if (nav) nav.classList.add('active');
   S.currentView = v;
   if (v === 'projects') renderProjects();
+  if (v === 'project-detail') renderProjectDetail();
   if (v === 'proposal') { updateProjSelect(); if (S.currentPropProject) loadProposal(S.currentPropProject); }
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'time') renderTime();
   save();
 }
- 
+
+// ─── PROJECT DETAIL ───────────────────────────────────────
+
+let _projDetailTab = 'overview';
+
+function openProjectDetail(pid) {
+  S._detailProjectId = pid;
+  S.currentPropProject = pid;
+  if (!S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
+  save();
+  showView('project-detail');
+}
+
+function setProjDetailTab(tab) {
+  _projDetailTab = tab;
+  $a('[data-pdtab]').forEach(b => b.classList.toggle('active', b.dataset.pdtab === tab));
+  renderProjectDetail();
+}
+
+function renderProjectDetail() {
+  const pid = S._detailProjectId;
+  const proj = S.projects.find(p => p.id === pid);
+  if (!proj) return;
+
+  $c('pd-title').textContent = proj.name;
+  $c('pd-subtitle').textContent = (getClientName(proj.clientId) || '') + (proj.city ? ' \u00b7 ' + proj.city : '');
+
+  const body = $c('pd-body');
+  if (_projDetailTab === 'overview')    body.innerHTML = renderPDOverview(proj, pid);
+  if (_projDetailTab === 'proposal')    body.innerHTML = renderPDProposal(proj, pid);
+  if (_projDetailTab === 'management')  body.innerHTML = renderPDManagement(proj, pid);
+  if (_projDetailTab === 'documents')   body.innerHTML = renderPDDocuments(proj, pid);
+  if (_projDetailTab === 'settings')    body.innerHTML = renderPDSettings(proj, pid);
+}
+
+function renderPDOverview(proj, pid) {
+  const client = (S.clients||[]).find(c => c.id === proj.clientId);
+  const prop = S.proposals[pid];
+  const totals = prop ? calcProposalTotals(prop, pid) : {subtotal:0,freight:0,tax:0,total:0};
+
+  // Count items needing attention
+  let needsAttention = 0;
+  let totalItems = 0;
+  (prop?.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      totalItems++;
+      if ((item.statusFlags||[]).includes('needs_attention')) needsAttention++;
+    });
+  });
+
+  // Build project address book from contacts tagged on items
+  const taggedContacts = new Set();
+  (prop?.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      if (item.contact) {
+        const found = (S.contacts||[]).find(c => c.name && c.name.toLowerCase() === item.contact.toLowerCase());
+        if (found) taggedContacts.add(found.id);
+      }
+      (item.components||[]).forEach(comp => {
+        if (comp.contact) {
+          const found = (S.contacts||[]).find(c => c.name && c.name.toLowerCase() === comp.contact.toLowerCase());
+          if (found) taggedContacts.add(found.id);
+        }
+      });
+    });
+  });
+  const addressBook = [...taggedContacts].map(id => (S.contacts||[]).find(c=>c.id===id)).filter(Boolean);
+
+  let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">';
+
+  // Left column: client info + stats
+  html += '<div>';
+  // Client card
+  if (client) {
+    html += `
+    <div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:18px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Client</div>
+      <div style="font-family:var(--font-h);font-weight:700;font-size:18px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(client.name)}</div>
+      ${client.email ? '<div style="font-size:12px;color:var(--russet);margin-top:3px">'+escH(client.email)+'</div>' : ''}
+      ${client.phone ? '<div style="font-size:12px;color:var(--text-mid);margin-top:1px">'+escH(client.phone)+'</div>' : ''}
+      ${client.address ? '<div style="font-size:11px;color:var(--text-light);margin-top:3px;font-style:italic">'+escH(client.address)+'</div>' : ''}
+    </div>`;
+  } else {
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:18px;color:var(--text-light);font-style:italic;font-size:13px">No client linked. <button class="btn btn-ghost btn-sm" onclick="openEditModal('${pid}')">Edit project</button></div>`;
+  }
+
+  // Quick stats
+  html += `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
+    <div style="background:white;border-radius:var(--r);padding:14px 16px;border:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:24px;color:var(--pecan);line-height:1">${totalItems}</div>
+      <div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-b);margin-top:4px">Total Items</div>
+    </div>
+    <div style="background:white;border-radius:var(--r);padding:14px 16px;border:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:24px;color:var(--pecan);line-height:1">${fmt(totals.total)}</div>
+      <div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-b);margin-top:4px">Proposal Total</div>
+    </div>
+  </div>`;
+  if (needsAttention > 0) {
+    html += `<div style="background:rgba(180,50,50,0.06);border:1px solid rgba(180,50,50,0.15);border-radius:var(--r);padding:10px 14px;font-family:var(--font-b);font-size:12px;color:#b33;margin-bottom:18px">\u2691 ${needsAttention} item${needsAttention!==1?'s':''} flagged as needing attention</div>`;
+  }
+  html += '</div>';
+
+  // Right column: project address book
+  html += '<div>';
+  html += '<div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Project Address Book</div>';
+  if (addressBook.length) {
+    html += addressBook.map(c => {
+      const typeLabel = CONTACT_TYPES.find(t => t.id === c.type)?.label || '';
+      const poc = (c.people||[])[0];
+      return `
+      <div style="background:white;border-radius:var(--r);padding:12px 14px;border:1px solid var(--border);margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name)}</div>
+          ${typeLabel ? '<span class="type-badge type-'+c.type+'">'+typeLabel+'</span>' : ''}
+        </div>
+        ${poc ? '<div style="font-size:11px;color:var(--text-mid);margin-top:3px">'+escH(poc.name)+(poc.email?' \u00b7 <span style="color:var(--russet)">'+escH(poc.email)+'</span>':'')+'</div>' : ''}
+        ${c.city ? '<div style="font-size:10px;color:var(--text-light);margin-top:2px;font-style:italic">'+escH(c.city)+'</div>' : ''}
+      </div>`;
+    }).join('');
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:14px 0">No contacts tagged on items yet. They\'ll appear here automatically.</div>';
+  }
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function renderPDProposal(proj, pid) {
+  const prop = S.proposals[pid];
+  if (!prop) return '<div class="no-results">No proposal data.</div>';
+
+  // Build the proposal toolbar (without project selector) and body
+  let html = `
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+    <button class="btn btn-secondary btn-sm" onclick="addSpace()">+ Add Space</button>
+    <button class="btn btn-dark btn-sm" onclick="window.print()">\u2193 Print / Export</button>
+    <div class="view-tabs" style="margin-left:auto;margin-right:8px">
+      <button class="view-tab${_propFilter==='all'?' active':''}" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
+      <button class="view-tab${_propFilter==='allowances'?' active':''}" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
+    </div>
+    <div class="client-toggle" onclick="toggleClientView()" id="client-toggle-pd">
+      <div class="toggle-sw${S.clientView?' on':''}" id="toggle-sw-pd"></div>
+      <span>Client View</span>
+    </div>
+  </div>`;
+
+  // Apply client view
+  if (S.clientView) html = '<div class="client-view-banner" style="display:block;margin:-22px -30px 16px;padding:7px;background:var(--russet);color:var(--cloud);text-align:center;font-family:var(--font-b);font-size:11px;letter-spacing:0.09em;text-transform:uppercase">\u26a0 Client View Active \u2014 Vendor pricing is hidden</div>' + html;
+
+  // Render the proposal body
+  const pv = $c('view-project-detail');
+  if (pv) pv.classList.toggle('client-view-active', S.clientView);
+
+  // Header
+  html += `
+  <div class="prop-header">
+    <div>
+      <div class="prop-project-name">${escH(proj.name)}</div>
+      <div class="prop-project-meta">${getClientName(proj.clientId) ? escH(getClientName(proj.clientId)) : ''}${proj.city ? ' &nbsp;\u00b7&nbsp; '+escH(proj.city) : ''}</div>
+    </div>
+    <div style="text-align:right">
+      <div class="prop-view-badge ${S.clientView?'client-badge':'internal-badge'}">${S.clientView?'Client View':'Internal View'}</div>
+    </div>
+  </div>`;
+
+  if (!prop.spaces.length) {
+    html += `
+    <div style="text-align:center;padding:50px 30px;color:rgba(91,45,34,0.38);border:2px dashed rgba(91,45,34,0.15);border-radius:8px;">
+      <div style="font-family:var(--font-h);font-size:26px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">No spaces yet.</div>
+      <div style="font-style:italic;font-size:13px;margin-bottom:18px;">Add your first space to start building this proposal.</div>
+      <button class="btn btn-primary btn-sm" onclick="addSpace()">+ Add a Space</button>
+    </div>`;
+  } else {
+    prop.spaces.forEach(sp => { html += renderSpace(sp, pid); });
+    html += '<div style="margin-top:10px"><button class="btn btn-ghost btn-sm" onclick="addSpace()">+ Add Another Space</button></div>';
+    html += renderTotals(prop, pid);
+  }
+  return html;
+}
+
+function renderPDManagement(proj, pid) {
+  const prop = S.proposals[pid];
+  if (!prop || !prop.spaces.length) {
+    return '<div class="no-results">No items yet. Add items in the Proposal tab first.</div>';
+  }
+
+  let html = '';
+  prop.spaces.forEach(sp => {
+    const items = sp.items || [];
+    if (!items.length) return;
+
+    html += `
+    <div style="margin-bottom:28px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px">${escH(sp.name||'Unnamed Space')}</div>`;
+
+    items.forEach(item => {
+      const net = getItemNet(item);
+      const client = getItemClient(item, pid);
+      const statusLabel = STATUSES.find(s => s.v === item.status)?.l || item.status;
+      const statusColor = getStatusColor(item.status);
+      const flags = (item.statusFlags||[]).map(f => {
+        const flag = STATUS_FLAGS.find(sf => sf.v === f);
+        return flag ? '<span style="display:inline-block;font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:2px 8px;border-radius:10px;background:'+flag.color+'15;color:'+flag.color+';border:1px solid '+flag.color+'30;margin-left:6px">'+flag.l+'</span>' : '';
+      }).join('');
+      const isAllowance = !!item.allowance;
+
+      // Status pipeline progress
+      const statusIdx = STATUSES.findIndex(s => s.v === item.status);
+      const pipelineSteps = STATUSES.length;
+      const progress = statusIdx >= 0 ? ((statusIdx + 1) / pipelineSteps * 100) : 0;
+
+      html += `
+      <div style="background:white;border-radius:var(--r);padding:14px 18px;border:1px solid var(--border);margin-bottom:8px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openEditItemModal('${pid}','${sp.id}','${item.id}')">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:8px">
+              ${isAllowance ? '<span class="allowance-a">A</span>' : '<span class="status-dot" style="background:'+statusColor+'"></span>'}
+              ${itemTypeBadge(item.type)}
+              <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'\u2014')}</span>
+              ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
+              ${flags}
+            </div>
+            ${item.contact ? '<div style="font-size:11px;color:var(--text-mid);margin-top:3px">'+escH(item.contact)+'</div>' : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'\u2014'}</div>
+            ${item.dueDate ? '<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Due: '+escH(item.dueDate)+'</div>' : ''}
+          </div>
+        </div>
+        ${!isAllowance ? `
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+          <div style="flex:1;height:4px;background:rgba(91,45,34,0.08);border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${progress}%;background:${statusColor};border-radius:2px;transition:width 0.3s ease"></div>
+          </div>
+          <span style="font-size:10px;font-family:var(--font-b);color:${statusColor};white-space:nowrap">${statusLabel}</span>
+        </div>` : ''}
+        ${(item.trackingNumbers||[]).length ? '<div style="font-size:10px;color:var(--text-mid);margin-top:6px;font-family:var(--font-b)">Tracking: '+(item.trackingNumbers||[]).map(t=>escH(t)).join(', ')+'</div>' : ''}
+        ${item.invoicePhase ? '<div style="font-size:10px;color:var(--text-light);margin-top:2px;font-family:var(--font-b)">Invoice Phase: '+escH(item.invoicePhase)+'</div>' : ''}
+      </div>`;
+    });
+
+    html += '</div>';
+  });
+
+  return html;
+}
+
+function renderPDDocuments(proj, pid) {
+  return `
+  <div style="text-align:center;padding:60px 30px;color:rgba(91,45,34,0.35)">
+    <div style="font-family:var(--font-h);font-size:32px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;opacity:0.3;margin-bottom:8px">Documents</div>
+    <div style="font-style:italic;font-size:13px">Document management is coming soon. Upload areas will be available on individual items and at the project level.</div>
+  </div>`;
+}
+
+function renderPDSettings(proj, pid) {
+  return `
+  <div style="max-width:500px">
+    <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:18px">Project Settings</div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Default Markup %</label>
+        <input type="number" class="fi" id="pds-markup" min="0" step="1" value="${proj.markupPct != null ? proj.markupPct : 25}" onchange="savePDSetting('${pid}','markupPct',parseFloat(this.value)||25)">
+      </div>
+      <div class="fg">
+        <label class="fl">State</label>
+        <input type="text" class="fi" id="pds-state" value="${escH(proj.state||'')}" onchange="savePDSetting('${pid}','state',this.value.trim())">
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Tax Rate %</label>
+        <input type="number" class="fi" id="pds-taxrate" min="0" step="0.01" value="${proj.taxRate||0}" onchange="savePDSetting('${pid}','taxRate',parseFloat(this.value)||0)">
+      </div>
+      <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="checkbox" ${proj.taxFreight?'checked':''} style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer" onchange="savePDSetting('${pid}','taxFreight',this.checked)">
+          Tax freight in this state
+        </label>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:8px">Changes save automatically.</div>
+  </div>`;
+}
+
+function savePDSetting(pid, key, val) {
+  const p = S.projects.find(x => x.id === pid);
+  if (!p) return;
+  p[key] = val;
+  save();
+  toast('Setting updated.');
+}
+
 // ─── PROJECTS ─────────────────────────────────────────────
  
 function renderProjects() {
@@ -2211,7 +2558,7 @@ function renderProjects() {
 function cardHtml(p) {
   const pcount = propCount(p.id);
   return `
-    <div class="proj-card" data-id="${p.id}" onclick="openEditModal('${p.id}')">
+    <div class="proj-card" data-id="${p.id}" onclick="openProjectDetail('${p.id}')">
       <div class="card-name">${escH(p.name)}</div>
       <div class="card-client">${escH(getClientName(p.clientId)||'—')}</div>
       <div class="card-meta">
@@ -2301,6 +2648,7 @@ function saveEditProject() {
   save();
   closeModal('modal-edit');
   renderProjects();
+  if (S.currentView === 'project-detail') renderProjectDetail();
   updateProjSelect();
   toast('Project updated.');
 }
@@ -2684,14 +3032,18 @@ function addSpace() {
   const pid = S.currentPropProject;
   if (!pid) { toast('Select a project first.'); return; }
   S.proposals[pid].spaces.push({ id:uid(), name:'', items:[] });
-  save(); renderPropBody();
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+  else renderPropBody();
 }
 
 function deleteSpace(pid, spId) {
   const prop = S.proposals[pid];
   if (!prop) return;
   prop.spaces = prop.spaces.filter(s => s.id !== spId);
-  save(); renderPropBody();
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+  else renderPropBody();
 }
 
 function mutSpace(pid, spId, key, val) {
@@ -2704,7 +3056,9 @@ function deleteItem(pid, spId, iid) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (!sp) return;
   sp.items = (sp.items||[]).filter(i => i.id !== iid);
-  save(); renderPropBody();
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+  else renderPropBody();
   toast('Item removed.');
 }
 
@@ -2998,7 +3352,7 @@ function saveItem() {
     type,
     name,
     room: $c('ai-room').value,
-    status: 'pending',
+    status: 'proposed',
     notes: $c('ai-notes').value.trim(),
     _open: false,
     allowance: $c('ai-allowance').checked,
@@ -3036,7 +3390,8 @@ function saveItem() {
 
   save();
   closeModal('modal-add-item');
-  renderPropBody();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+  else renderPropBody();
 }
 
 function deleteItemFromModal() {
@@ -3048,7 +3403,8 @@ function deleteItemFromModal() {
   if (sp) sp.items = (sp.items || []).filter(i => i.id !== itemId);
   save();
   closeModal('modal-add-item');
-  renderPropBody();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+  else renderPropBody();
   toast('Item removed.');
 }
 
@@ -3064,12 +3420,12 @@ function setPropFilter(filter) {
 
 function toggleClientView() {
   S.clientView = !S.clientView;
-  const sw = $c('toggle-sw');
-  const pv = $c('view-proposal');
-  sw.classList.toggle('on', S.clientView);
-  pv.classList.toggle('client-view-active', S.clientView);
+  // Update toggle switches (there may be multiple)
+  $a('.toggle-sw').forEach(sw => sw.classList.toggle('on', S.clientView));
+  $a('.view').forEach(v => v.classList.toggle('client-view-active', S.clientView));
   save();
-  if (S.currentPropProject) renderPropBody();
+  if (S._detailProjectId && _projDetailTab === 'proposal') renderProjectDetail();
+  else if (S.currentPropProject) renderPropBody();
 }
  
 // ─── SAMPLE DATA ──────────────────────────────────────────
