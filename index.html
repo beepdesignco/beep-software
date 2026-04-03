@@ -3069,6 +3069,20 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
 
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           ${renderTrackingSection(pid, spId, itemId, '', item.trackingNumbers)}
+          ${item.type === 'constructed' && (item.components||[]).some(c => (c.trackingNumbers||[]).length) ? `
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-family:var(--font-b);font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">From Components</div>
+            ${(item.components||[]).filter(c => (c.trackingNumbers||[]).length).map(c => {
+              const nums = (c.trackingNumbers||[]).map(t => typeof t === 'string' ? {number:t,carrier:'',description:''} : t);
+              return nums.map(t => `
+              <div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px">
+                <span style="font-family:var(--font-b);color:var(--text-dark);font-weight:700">${escH(t.number)}</span>
+                ${t.carrier ? `<span style="color:var(--text-mid)">· ${escH(t.carrier)}</span>` : ''}
+                <span style="color:var(--russet);font-size:10px">${escH(c.name)}</span>
+                ${t.description ? `<span style="color:var(--text-light);font-style:italic;font-size:10px">${escH(t.description)}</span>` : ''}
+              </div>`).join('');
+            }).join('')}
+          </div>` : ''}
         </div>
       </div>
 
