@@ -1908,12 +1908,12 @@ function componentEffectiveMarkup(comp, parentItem, pid) {
 }
 
 function calcConstructedNet(item) {
-  return (item.components || []).reduce((s, c) => s + parse$(c.netCost), 0);
+  return (item.components || []).reduce((s, c) => s + parse$(c.netCost) * (parseInt(c.qty) || 1), 0);
 }
 
 function calcConstructedClient(item, pid) {
   return (item.components || []).reduce((s, c) => {
-    const net = parse$(c.netCost);
+    const net = parse$(c.netCost) * (parseInt(c.qty) || 1);
     const markup = componentEffectiveMarkup(c, item, pid) / 100;
     return s + net * (1 + markup);
   }, 0);
@@ -2315,23 +2315,27 @@ function renderItemRow(item, spId, pid) {
   let compRows = '';
   if (item.type === 'constructed' && item.components && item.components.length) {
     compRows = item.components.map(c => {
-      const cNet = parse$(c.netCost);
+      const cNetEach = parse$(c.netCost);
+      const cQty = parseInt(c.qty) || 1;
+      const cNetTotal = cNetEach * cQty;
       const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
-      const cClient = cNet * (1 + cMarkup);
+      const cClientTotal = cNetTotal * (1 + cMarkup);
       const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || (c.componentType === 'other' ? 'Other' : '');
       const cMarkupNote = c.billCostOnly ? '<span class="markup-tag">cost only</span>' :
         (c.adjustMarkup != null && c.adjustMarkup !== '' ? `<span class="markup-tag">${c.adjustMarkup}%</span>` : '');
+      const qtyNote = cQty > 1 ? `<span style="font-size:10px;color:var(--text-mid);margin-left:4px">×${cQty}</span>` : '';
       return `
         <tr class="comp-row">
           <td></td>
           <td style="padding-left:28px">
             <span style="font-size:12px;color:var(--text-dark)">${escH(c.name||'')}</span>
             ${cTypeLabel ? `<span class="comp-type-label">${cTypeLabel}</span>` : ''}
+            ${qtyNote}
             ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
             ${cMarkupNote}
           </td>
-          <td class="hide-client" style="text-align:right;font-size:12px;color:var(--text-mid);padding:6px 10px">${cNet>0?fmt(cNet):'—'}</td>
-          <td style="text-align:right;font-size:12px;color:var(--russet);padding:6px 10px">${cClient>0?fmt(cClient):'—'}</td>
+          <td class="hide-client" style="text-align:right;font-size:12px;color:var(--text-mid);padding:6px 10px">${cNetTotal>0?fmt(cNetTotal):'—'}${cQty>1&&cNetEach>0?`<div style="font-size:9px;color:var(--text-light)">${fmt(cNetEach)} ea.</div>`:''}</td>
+          <td style="text-align:right;font-size:12px;color:var(--russet);padding:6px 10px">${cClientTotal>0?fmt(cClientTotal):'—'}</td>
           <td colspan="3" style="padding:6px 10px">
             ${c.note ? `<span style="font-size:10px;color:var(--text-light);font-style:italic">${escH(c.note)}</span>` : ''}
           </td>
@@ -2537,7 +2541,7 @@ function populateRoomSelect(pid) {
 
 function addModalComponent(comp) {
   _modalComponents.push(comp || {
-    id: uid(), name: '', componentType: '', contact: '', netCost: '',
+    id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1,
     billCostOnly: false, adjustMarkup: null, note: ''
   });
   renderModalComponents();
@@ -2569,8 +2573,11 @@ function renderModalComponents() {
         <div class="fg"><label class="fl">Contact</label>
           <input type="text" class="fi comp-contact" value="${escH(c.contact)}" placeholder="Vendor / workroom">
         </div>
-        <div class="fg"><label class="fl">Net Cost</label>
+        <div class="fg"><label class="fl">Net Cost (each)</label>
           <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00">
+        </div>
+        <div class="fg" style="max-width:70px"><label class="fl">Qty</label>
+          <input type="number" class="fi comp-qty" value="${c.qty || 1}" min="1" step="1" style="text-align:center">
         </div>
       </div>
       <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
@@ -2610,6 +2617,7 @@ function readModalComponentsFromDOM() {
       _modalComponents[i].componentType = el.querySelector('.comp-type')?.value || '';
       _modalComponents[i].contact = el.querySelector('.comp-contact')?.value.trim() || '';
       _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
+      _modalComponents[i].qty = parseInt(el.querySelector('.comp-qty')?.value) || 1;
       _modalComponents[i].billCostOnly = el.querySelector('.comp-billcost')?.checked || false;
       const adj = el.querySelector('.comp-adj')?.value;
       _modalComponents[i].adjustMarkup = adj !== '' && adj != null ? parseFloat(adj) : null;
@@ -3715,7 +3723,7 @@ function addSampleData() {
           { id:uid(), type:'constructed', name:'Custom Banquette Upholstery', room:'Bar Nero', status:'waiting_quote',
             notes:'Waiting on COM yardage req from workroom.', _open:false, billCostOnly:false, adjustMarkup:null,
             components:[
-              { id:uid(), name:'Upholstery Fabric', componentType:'material', contact:'Paul+', netCost:'960', billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Upholstery Fabric', componentType:'material', contact:'Paul+', netCost:'120', qty:8, billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Foam & Batting', componentType:'material', contact:'', netCost:'340', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Upholstery Labor', componentType:'labor', contact:'Douglass Workroom', netCost:'850', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Freight', componentType:'shipping', contact:'', netCost:'120', billCostOnly:false, adjustMarkup:null, note:'' },
