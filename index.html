@@ -741,6 +741,68 @@ tr:hover .row-btns { opacity:1; }
   to   { transform:translateX(0);    opacity:1; }
 }
  
+/* ===================== ITEM TYPES ===================== */
+
+.item-type-badge {
+  display:inline-block;
+  font-size:9px;
+  font-family:var(--font-h);
+  font-weight:800;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  padding:2px 6px;
+  border-radius:3px;
+  white-space:nowrap;
+  line-height:1.3;
+}
+.badge-co { background:rgba(63,21,28,0.12); color:var(--mahogany); }
+.badge-rm { background:rgba(150,61,39,0.1); color:var(--russet); }
+.badge-ol { background:rgba(91,45,34,0.08); color:var(--text-mid); }
+
+.markup-tag {
+  display:inline-block;
+  font-size:9px;
+  font-family:var(--font-b);
+  color:var(--russet);
+  background:rgba(150,61,39,0.08);
+  border:1px solid rgba(150,61,39,0.18);
+  border-radius:8px;
+  padding:0 6px;
+  margin-left:6px;
+  vertical-align:middle;
+}
+
+.comp-row td {
+  background:rgba(243,232,214,0.45) !important;
+  border-bottom:1px solid rgba(91,45,34,0.05) !important;
+  padding:5px 10px !important;
+}
+
+.comp-type-label {
+  display:inline-block;
+  font-size:9px;
+  font-family:var(--font-h);
+  font-weight:700;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  color:var(--text-light);
+  background:rgba(91,45,34,0.06);
+  padding:1px 6px;
+  border-radius:8px;
+  margin-left:6px;
+  vertical-align:middle;
+}
+
+.component-table { border:none !important; }
+.component-table td { border-bottom:1px solid rgba(91,45,34,0.05) !important; }
+
+/* Print: always show components */
+@media print {
+  .notes-row { display:table-row !important; }
+  .comp-row { display:table-row !important; }
+  .expand-btn, .del-btn, .row-btns { display:none !important; }
+}
+
 /* ===================== MISC ===================== */
  
 .placeholder-view {
@@ -1134,6 +1196,7 @@ tr:hover .row-btns { opacity:1; }
           <option value="">— Select a project —</option>
         </select>
         <button class="btn btn-ghost btn-sm" onclick="openNewProjModal('proposal')">+ New Project</button>
+        <button class="btn btn-ghost btn-sm hide-client" id="prop-settings-btn" onclick="if(S.currentPropProject) openProjectSettings(S.currentPropProject)" style="display:none">⚙ Settings</button>
         <div class="client-toggle" onclick="toggleClientView()" id="client-toggle">
           <div class="toggle-sw" id="toggle-sw"></div>
           <span>Client View</span>
@@ -1317,12 +1380,159 @@ tr:hover .row-btns { opacity:1; }
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" onclick="deleteProject(document.getElementById('ep-id').value)">Delete</button>
       <div style="flex:1"></div>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-edit');openProjectSettings($c('ep-id').value)">⚙ Project Settings</button>
       <button class="btn btn-secondary" onclick="closeModal('modal-edit')">Cancel</button>
       <button class="btn btn-primary" onclick="saveEditProject()">Save Changes</button>
     </div>
   </div>
 </div>
- 
+
+<!-- ═════════════════ PROJECT SETTINGS MODAL ═════════════════ -->
+<div class="overlay" id="modal-proj-settings">
+  <div class="modal" style="width:440px">
+    <button class="modal-x" onclick="closeModal('modal-proj-settings')">✕</button>
+    <div class="modal-title">Project Settings</div>
+    <input type="hidden" id="ps-id">
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic" id="ps-proj-label"></div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Default Markup %</label>
+        <input type="number" class="fi" id="ps-markup" min="0" step="1" placeholder="25">
+      </div>
+      <div class="fg">
+        <label class="fl">State</label>
+        <input type="text" class="fi" id="ps-state" placeholder="e.g. Louisiana">
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Tax Rate %</label>
+        <input type="number" class="fi" id="ps-taxrate" min="0" step="0.01" placeholder="0">
+      </div>
+      <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="checkbox" id="ps-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+          Tax freight in this state
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-proj-settings')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProjectSettings()">Save Settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ ADD ITEM MODAL ═════════════════ -->
+<div class="overlay" id="modal-add-item">
+  <div class="modal" style="width:560px">
+    <button class="modal-x" onclick="closeModal('modal-add-item')">✕</button>
+    <div class="modal-title" id="ai-title">Add Line Item</div>
+    <input type="hidden" id="ai-pid">
+    <input type="hidden" id="ai-spid">
+    <input type="hidden" id="ai-id">
+
+    <!-- TYPE TOGGLE -->
+    <div class="fg">
+      <label class="fl">Item Type</label>
+      <div class="type-selector" id="ai-type-selector">
+        <button type="button" class="type-sel-btn active" onclick="setItemType('constructed')">Constructed Order</button>
+        <button type="button" class="type-sel-btn" onclick="setItemType('readymade')">Ready Made</button>
+        <button type="button" class="type-sel-btn" onclick="setItemType('openline')">Open Line Item</button>
+      </div>
+      <input type="hidden" id="ai-type" value="constructed">
+    </div>
+
+    <!-- COMMON FIELDS -->
+    <div class="fg">
+      <label class="fl">Item Name</label>
+      <input type="text" class="fi" id="ai-name" placeholder="e.g. Custom Drapery — Master Bedroom">
+    </div>
+    <div class="frow">
+      <div class="fg" id="ai-contact-wrap">
+        <label class="fl">Contact</label>
+        <input type="text" class="fi" id="ai-contact" placeholder="Vendor, showroom, workroom…">
+      </div>
+      <div class="fg">
+        <label class="fl">Room / Location</label>
+        <select class="fi fsel" id="ai-room"><!-- populated by JS --></select>
+      </div>
+    </div>
+
+    <!-- NET PRICE (readymade & openline only) -->
+    <div class="frow" id="ai-price-row">
+      <div class="fg">
+        <label class="fl">Net Price (your cost)</label>
+        <input type="text" class="fi" id="ai-net" placeholder="$0.00">
+      </div>
+      <div class="fg">
+        <label class="fl">Qty</label>
+        <input type="number" class="fi" id="ai-qty" value="1" min="1" step="1">
+      </div>
+    </div>
+
+    <!-- CATEGORY (openline only) -->
+    <div class="fg" id="ai-category-wrap" style="display:none">
+      <label class="fl">Category</label>
+      <select class="fi fsel" id="ai-category">
+        <option value="">—</option>
+        <option value="Freight Charges">Freight Charges</option>
+        <option value="Misc. Reimbursable">Misc. Reimbursable</option>
+        <option value="Tariffs">Tariffs</option>
+        <option value="Tax">Tax</option>
+        <option value="Tip">Tip</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+
+    <!-- MARKUP OVERRIDES -->
+    <div style="display:flex;gap:16px;align-items:center;padding:8px 0;margin-bottom:10px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="ai-billcost" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        Bill cost only
+      </label>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">Custom markup:</span>
+        <input type="number" class="fi" id="ai-adj-markup" style="width:70px;padding:5px 8px;font-size:12px" placeholder="—" min="0" step="1">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-light)">%</span>
+      </div>
+    </div>
+
+    <!-- COMPONENTS (constructed only) -->
+    <div id="ai-components-section">
+      <div class="modal-section-hd">Components</div>
+      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:8px">
+        Add each piece that makes up this item. Their costs will total automatically.
+      </div>
+      <div id="ai-components-list"><!-- rendered by JS --></div>
+      <button class="btn btn-ghost btn-sm" onclick="addModalComponent()" style="margin-top:4px">+ Add Component</button>
+    </div>
+
+    <!-- ADDITIONAL CHARGES (readymade only) -->
+    <div id="ai-charges-section" style="display:none">
+      <div class="modal-section-hd">Additional Charges</div>
+      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:8px">
+        Freight, tariffs, tips, or any other costs on top of the base price.
+      </div>
+      <div id="ai-charges-list"><!-- rendered by JS --></div>
+      <button class="btn btn-ghost btn-sm" onclick="addModalCharge()" style="margin-top:4px">+ Add Charge</button>
+    </div>
+
+    <div class="fg" style="margin-top:12px">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="ai-notes" style="resize:vertical;min-height:48px" placeholder="Vendor info, specs, sizing, anything useful…"></textarea>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="ai-delete-btn" style="display:none" onclick="deleteItemFromModal()">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-add-item')">Cancel</button>
+      <button class="btn btn-primary" id="ai-save-btn" onclick="saveItem()">Add Item</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ CONTACT MODAL ═════════════════ -->
 <div class="overlay" id="modal-contact">
   <div class="modal" style="width:580px">
@@ -1518,6 +1728,27 @@ const EMPTY_MSGS = {
   continued:   'No ongoing relationships. Stay in touch.',
   mini_session:'Nothing small-scale at the moment.',
 };
+
+const COMPONENT_TYPES = [
+  { id:'material',     label:'Material' },
+  { id:'labor',        label:'Labor' },
+  { id:'hardware',     label:'Hardware' },
+  { id:'service',      label:'Service' },
+  { id:'shipping',     label:'Shipping / Handling' },
+  { id:'receiving',    label:'Receiving / Storage' },
+  { id:'installation', label:'Installation' },
+  { id:'other',        label:'Other' },
+];
+
+const CHARGE_CATEGORIES = [
+  'Freight','Tariffs','Tax','Tip','Misc. Reimbursable','Other',
+];
+
+const ITEM_TYPES = [
+  { id:'constructed', label:'Constructed Order', badge:'CO' },
+  { id:'readymade',   label:'Ready Made',        badge:'RM' },
+  { id:'openline',    label:'Open Line Item',    badge:'OL' },
+];
  
 // ─── STATE ────────────────────────────────────────────────
  
@@ -1548,6 +1779,7 @@ let S = {
   clientView: false,
   dragId: null,
   _returnView: null,
+  _dataVersion: 2,
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -1583,6 +1815,44 @@ function load() {
         c.lines = c.lines.map(b => ({ name: b, categories: [] }));
       }
     });
+    // ── v2 migration: project settings + typed proposal items ──
+    if (!S._dataVersion || S._dataVersion < 2) {
+      // Add project settings fields
+      S.projects.forEach(p => {
+        if (p.markupPct === undefined) p.markupPct = 25;
+        if (p.state === undefined)     p.state = '';
+        if (p.taxRate === undefined)   p.taxRate = 0;
+        if (p.taxFreight === undefined)p.taxFreight = false;
+      });
+      // Migrate flat proposal items → typed items (default to readymade)
+      Object.keys(S.proposals).forEach(pid => {
+        const prop = S.proposals[pid];
+        (prop.spaces || []).forEach(sp => {
+          (sp.items || []).forEach((item, idx) => {
+            if (!item.type) {
+              sp.items[idx] = {
+                id: item.id,
+                type: 'readymade',
+                name: item.name || '',
+                room: '',
+                contact: item.vendor || '',
+                netPrice: item.priceNet || '',
+                qty: item.qty || '1',
+                status: item.status || 'pending',
+                notes: item.notes || '',
+                link: item.link || '',
+                _open: item._open || false,
+                billCostOnly: false,
+                adjustMarkup: null,
+                additionalCharges: [],
+              };
+            }
+          });
+        });
+      });
+      S._dataVersion = 2;
+      save();
+    }
   } catch(e){}
 }
  
@@ -1606,6 +1876,62 @@ function escH(s) {
   return String(s||'')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── PRICING UTILS ────────────────────────────────────────
+
+function getProject(pid) { return S.projects.find(p => p.id === pid); }
+
+function projectMarkup(pid) {
+  const proj = getProject(pid);
+  return (proj && proj.markupPct != null) ? proj.markupPct : 25;
+}
+
+function effectiveMarkup(item, pid) {
+  if (item.billCostOnly) return 0;
+  if (item.adjustMarkup != null && item.adjustMarkup !== '') return parseFloat(item.adjustMarkup);
+  return projectMarkup(pid);
+}
+
+function calcClientPrice(net, item, pid) {
+  const n = parse$(net);
+  if (n <= 0) return 0;
+  return n * (1 + effectiveMarkup(item, pid) / 100);
+}
+
+function componentEffectiveMarkup(comp, parentItem, pid) {
+  if (comp.billCostOnly) return 0;
+  if (comp.adjustMarkup != null && comp.adjustMarkup !== '') return parseFloat(comp.adjustMarkup);
+  if (parentItem.adjustMarkup != null && parentItem.adjustMarkup !== '') return parseFloat(parentItem.adjustMarkup);
+  if (parentItem.billCostOnly) return 0;
+  return projectMarkup(pid);
+}
+
+function calcConstructedNet(item) {
+  return (item.components || []).reduce((s, c) => s + parse$(c.netCost), 0);
+}
+
+function calcConstructedClient(item, pid) {
+  return (item.components || []).reduce((s, c) => {
+    const net = parse$(c.netCost);
+    const markup = componentEffectiveMarkup(c, item, pid) / 100;
+    return s + net * (1 + markup);
+  }, 0);
+}
+
+function calcReadyMadeNet(item) {
+  return parse$(item.netPrice) + (item.additionalCharges || []).reduce((s, ch) => s + parse$(ch.amount), 0);
+}
+
+function calcReadyMadeClient(item, pid) {
+  let total = calcClientPrice(item.netPrice, item, pid);
+  (item.additionalCharges || []).forEach(ch => {
+    const net = parse$(ch.amount);
+    const fakeItem = { billCostOnly: ch.billCostOnly, adjustMarkup: ch.adjustMarkup };
+    if (fakeItem.adjustMarkup == null) { fakeItem.billCostOnly = item.billCostOnly; fakeItem.adjustMarkup = item.adjustMarkup; }
+    total += calcClientPrice(net, fakeItem, pid);
+  });
+  return total;
 }
  
 function toast(msg) {
@@ -1743,6 +2069,10 @@ function createProject() {
     city:    $c('np-city').value.trim(),
     stage:   $c('np-stage').value,
     created: new Date().toISOString().slice(0,10),
+    markupPct: 25,
+    state: '',
+    taxRate: 0,
+    taxFreight: false,
   };
  
   S.projects.push(p);
@@ -1802,6 +2132,34 @@ function deleteProject(id) {
 }
  
 function closeModal(id) { $c(id).classList.remove('open'); }
+
+// ─── PROJECT SETTINGS ─────────────────────────────────────
+
+function openProjectSettings(pid) {
+  const p = S.projects.find(x => x.id === pid);
+  if (!p) return;
+  $c('ps-id').value = pid;
+  $c('ps-proj-label').textContent = p.name + (p.client ? ' — ' + p.client : '');
+  $c('ps-markup').value = p.markupPct != null ? p.markupPct : 25;
+  $c('ps-state').value = p.state || '';
+  $c('ps-taxrate').value = p.taxRate || 0;
+  $c('ps-taxfreight').checked = !!p.taxFreight;
+  $c('modal-proj-settings').classList.add('open');
+}
+
+function saveProjectSettings() {
+  const pid = $c('ps-id').value;
+  const p = S.projects.find(x => x.id === pid);
+  if (!p) return;
+  p.markupPct = parseFloat($c('ps-markup').value) || 25;
+  p.state = $c('ps-state').value.trim();
+  p.taxRate = parseFloat($c('ps-taxrate').value) || 0;
+  p.taxFreight = $c('ps-taxfreight').checked;
+  save();
+  closeModal('modal-proj-settings');
+  if (S.currentPropProject === pid) renderPropBody();
+  toast('Project settings saved.');
+}
  
 // Close on overlay click
 $a('.overlay').forEach(ov => {
@@ -1829,6 +2187,8 @@ function updateProjSelect() {
 function loadProposal(pid) {
   S.currentPropProject = pid || null;
   if (pid && !S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
+  const psBtn = $c('prop-settings-btn');
+  if (psBtn) psBtn.style.display = pid ? '' : 'none';
   save();
   renderPropBody();
 }
@@ -1888,7 +2248,7 @@ function renderPropBody() {
 function renderSpace(sp, pid) {
   const items = sp.items || [];
   let rows = items.map(item => renderItemRow(item, sp.id, pid)).join('');
- 
+
   return `
     <div class="space-section" id="sp-${sp.id}">
       <div class="space-header">
@@ -1901,10 +2261,11 @@ function renderSpace(sp, pid) {
       <table class="prop-table">
         <thead>
           <tr>
-            <th style="width:34%">Invoice Item</th>
-            <th class="r hide-client" style="width:9%">Price Net (N)</th>
-            <th class="r" style="width:10%">Price Per (C)</th>
-            <th class="r" style="width:7%">Qty</th>
+            <th style="width:4%"></th>
+            <th style="width:30%">Item</th>
+            <th class="r hide-client" style="width:10%">Net</th>
+            <th class="r" style="width:10%">Client</th>
+            <th class="r" style="width:6%">Qty</th>
             <th class="r" style="width:10%">Total</th>
             <th style="width:14%">Status</th>
             <th style="width:38px"></th>
@@ -1913,187 +2274,208 @@ function renderSpace(sp, pid) {
         <tbody>
           ${rows}
           <tr class="add-item-tr">
-            <td colspan="7">
-              <button class="add-item-btn" onclick="addItem('${pid}','${sp.id}')">+ Add item</button>
+            <td colspan="8">
+              <button class="add-item-btn" onclick="openAddItemModal('${pid}','${sp.id}')">+ Add item</button>
             </td>
           </tr>
         </tbody>
       </table>
     </div>`;
 }
- 
+
+function itemTypeBadge(type) {
+  const t = ITEM_TYPES.find(it => it.id === type);
+  if (!t) return '';
+  const cls = type === 'constructed' ? 'badge-co' : type === 'readymade' ? 'badge-rm' : 'badge-ol';
+  return `<span class="item-type-badge ${cls}">${t.badge}</span>`;
+}
+
+function getItemNet(item) {
+  if (item.type === 'constructed') return calcConstructedNet(item);
+  if (item.type === 'readymade') return calcReadyMadeNet(item);
+  return parse$(item.netPrice);
+}
+
+function getItemClient(item, pid) {
+  if (item.type === 'constructed') return calcConstructedClient(item, pid);
+  if (item.type === 'readymade') return calcReadyMadeClient(item, pid);
+  return calcClientPrice(item.netPrice, item, pid);
+}
+
 function renderItemRow(item, spId, pid) {
-  const net    = parse$(item.priceNet);
-  const client = net > 0 ? net * 1.25 : 0;
-  const qty    = parseFloat(item.qty) || 0;
-  const total  = client * qty;
-  const sopts  = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''}>${s.l}</option>`).join('');
- 
+  const net = getItemNet(item);
+  const client = getItemClient(item, pid);
+  const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
+  const total = client * qty;
+  const sopts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''}>${s.l}</option>`).join('');
+  const markupNote = item.billCostOnly ? '<span class="markup-tag">cost only</span>' :
+    (item.adjustMarkup != null && item.adjustMarkup !== '' ? `<span class="markup-tag">${item.adjustMarkup}%</span>` : '');
+
+  // Component rows for constructed orders
+  let compRows = '';
+  if (item.type === 'constructed' && item.components && item.components.length) {
+    compRows = item.components.map(c => {
+      const cNet = parse$(c.netCost);
+      const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
+      const cClient = cNet * (1 + cMarkup);
+      const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || (c.componentType === 'other' ? 'Other' : '');
+      const cMarkupNote = c.billCostOnly ? '<span class="markup-tag">cost only</span>' :
+        (c.adjustMarkup != null && c.adjustMarkup !== '' ? `<span class="markup-tag">${c.adjustMarkup}%</span>` : '');
+      return `
+        <tr class="comp-row">
+          <td></td>
+          <td style="padding-left:28px">
+            <span style="font-size:12px;color:var(--text-dark)">${escH(c.name||'')}</span>
+            ${cTypeLabel ? `<span class="comp-type-label">${cTypeLabel}</span>` : ''}
+            ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
+            ${cMarkupNote}
+          </td>
+          <td class="hide-client" style="text-align:right;font-size:12px;color:var(--text-mid);padding:6px 10px">${cNet>0?fmt(cNet):'—'}</td>
+          <td style="text-align:right;font-size:12px;color:var(--russet);padding:6px 10px">${cClient>0?fmt(cClient):'—'}</td>
+          <td colspan="3" style="padding:6px 10px">
+            ${c.note ? `<span style="font-size:10px;color:var(--text-light);font-style:italic">${escH(c.note)}</span>` : ''}
+          </td>
+          <td></td>
+        </tr>`;
+    }).join('');
+  }
+
+  // Additional charges for ready-made
+  let chargeRows = '';
+  if (item.type === 'readymade' && item.additionalCharges && item.additionalCharges.length) {
+    chargeRows = item.additionalCharges.map(ch => {
+      const chNet = parse$(ch.amount);
+      const fakeItem = { billCostOnly: ch.billCostOnly || item.billCostOnly, adjustMarkup: ch.adjustMarkup != null ? ch.adjustMarkup : item.adjustMarkup };
+      const chClient = calcClientPrice(ch.amount, fakeItem, pid);
+      return `
+        <tr class="comp-row">
+          <td></td>
+          <td style="padding-left:28px">
+            <span style="font-size:12px;color:var(--text-dark)">${escH(ch.name||'')}</span>
+            ${ch.category ? `<span class="comp-type-label">${escH(ch.category)}</span>` : ''}
+          </td>
+          <td class="hide-client" style="text-align:right;font-size:12px;color:var(--text-mid);padding:6px 10px">${chNet>0?fmt(chNet):'—'}</td>
+          <td style="text-align:right;font-size:12px;color:var(--russet);padding:6px 10px">${chClient>0?fmt(chClient):'—'}</td>
+          <td colspan="3"></td><td></td>
+        </tr>`;
+    }).join('');
+  }
+
+  const hasExpandable = (item.type === 'constructed' && compRows) || (item.type === 'readymade' && chargeRows) || item.notes;
+  const contactStr = item.contact ? `<span style="font-size:10.5px;color:var(--text-mid);margin-left:6px">· ${escH(item.contact)}</span>` : '';
+
   return `
-    <tr id="row-${item.id}" class="${item._open?'expanded-row':''}">
-      <td>
-        <input class="cell-in" type="text" value="${escH(item.name||'')}"
-          placeholder="Item description…"
-          onchange="mutItem('${pid}','${spId}','${item.id}','name',this.value)">
+    <tr id="row-${item.id}" class="${item._open?'expanded-row':''}" style="cursor:pointer" onclick="openEditItemModal('${pid}','${spId}','${item.id}')">
+      <td style="padding:6px 4px 6px 10px">${itemTypeBadge(item.type)}</td>
+      <td style="padding:9px 10px">
+        <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.02em;color:var(--mahogany)">${escH(item.name||'—')}</span>
+        ${contactStr} ${markupNote}
+        ${item.room ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.room)}</div>` : ''}
+        ${item.category ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.category)}</div>` : ''}
       </td>
-      <td class="hide-client">
-        <input class="cell-in r" type="text" value="${escH(item.priceNet||'')}"
-          placeholder="—"
-          style="width:88px"
-          onchange="mutItem('${pid}','${spId}','${item.id}','priceNet',this.value)">
-      </td>
-      <td>
-        <div class="cell-ro calc" id="cpc-${item.id}">${client>0?fmt(client):'—'}</div>
-      </td>
-      <td>
-        <input class="cell-in r" type="text" value="${escH(item.qty||'')}"
-          placeholder="1"
-          style="width:56px"
-          onchange="mutItem('${pid}','${spId}','${item.id}','qty',this.value)">
-      </td>
-      <td>
-        <div class="cell-ro" id="ctot-${item.id}">${total>0?fmt(total):'—'}</div>
-      </td>
-      <td>
+      <td class="hide-client"><div class="cell-ro">${net>0?fmt(net):'—'}</div></td>
+      <td><div class="cell-ro calc">${client>0?fmt(client):'—'}</div></td>
+      <td><div class="cell-ro">${item.type==='constructed'?'—':(qty||'—')}</div></td>
+      <td><div class="cell-ro">${total>0?fmt(total):'—'}</div></td>
+      <td onclick="event.stopPropagation()">
         <select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)">${sopts}</select>
       </td>
-      <td>
-        <div class="row-btns">
-          <button class="row-btn expand-btn${item._open?' open':''}"
+      <td onclick="event.stopPropagation()">
+        <div class="row-btns" style="opacity:1">
+          ${hasExpandable ? `<button class="row-btn expand-btn${item._open?' open':''}"
             onclick="toggleNotes('${pid}','${spId}','${item.id}')"
-            title="Toggle notes">▼</button>
+            title="Expand details">▼</button>` : ''}
           <button class="row-btn del-btn"
             onclick="deleteItem('${pid}','${spId}','${item.id}')"
             title="Remove item">✕</button>
         </div>
       </td>
     </tr>
+    ${hasExpandable ? `
     <tr class="notes-row${item._open?' open':''}" id="notes-${item.id}">
-      <td colspan="7">
-        <div class="notes-grid">
-          <div class="nf">
-            <label>Notes &amp; Details</label>
-            <textarea placeholder="Vendor info, specs, sizing, options you're considering…"
-              onchange="mutItem('${pid}','${spId}','${item.id}','notes',this.value)">${escH(item.notes||'')}</textarea>
-          </div>
-          <div class="nf">
-            <label>Link / URL</label>
-            <input type="text" placeholder="https://…" value="${escH(item.link||'')}"
-              onchange="mutItem('${pid}','${spId}','${item.id}','link',this.value)">
-            <label class="sub-label">Vendor</label>
-            <input type="text" placeholder="e.g. Holland &amp; Sherry" value="${escH(item.vendor||'')}"
-              onchange="mutItem('${pid}','${spId}','${item.id}','vendor',this.value)">
-          </div>
-          <div class="nf">
-            <label>C / N Flag</label>
-            <select onchange="mutItem('${pid}','${spId}','${item.id}','flag',this.value)">
-              <option value="" ${!item.flag?'selected':''}>—</option>
-              <option value="N" ${item.flag==='N'?'selected':''}>N — Net / Vendor</option>
-              <option value="C" ${item.flag==='C'?'selected':''}>C — Client Price</option>
-            </select>
-          </div>
-        </div>
+      <td colspan="8">
+        ${compRows ? `<table class="prop-table component-table" style="margin-bottom:8px">${compRows}</table>` : ''}
+        ${chargeRows ? `<table class="prop-table component-table" style="margin-bottom:8px">${chargeRows}</table>` : ''}
+        ${item.notes ? `<div style="padding:8px 14px;font-size:12px;color:var(--text-mid);font-style:italic">${escH(item.notes)}</div>` : ''}
       </td>
-    </tr>`;
+    </tr>` : ''}`;
 }
- 
-function renderTotals(prop, pid) {
-  let sub = 0;
+
+function calcProposalTotals(prop, pid) {
+  const proj = getProject(pid);
+  let subtotal = 0;
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
-      const net = parse$(item.priceNet);
-      sub += (net>0 ? net*1.25 : 0) * (parseFloat(item.qty)||0);
+      const client = getItemClient(item, pid);
+      const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
+      subtotal += client * qty;
     });
   });
-  const fr  = parse$(prop.freight);
-  const tx  = parse$(prop.tax);
-  const grd = sub + fr + tx;
- 
+  const taxRate = (proj?.taxRate || 0) / 100;
+  const tax = subtotal * taxRate;
+  return { subtotal, tax, total: subtotal + tax };
+}
+
+function renderTotals(prop, pid) {
+  const proj = getProject(pid);
+  const t = calcProposalTotals(prop, pid);
+  const taxLabel = proj?.taxRate ? `Tax (${proj.taxRate}%)` : 'Tax';
+
   return `
     <div class="prop-totals">
       <table class="totals-tbl">
-        <tr><td>Subtotal</td><td id="t-sub">${fmt(sub)}</td></tr>
-        <tr>
-          <td>Freight</td>
-          <td><input class="ttl-in" type="text" value="${escH(prop.freight||'')}" placeholder="$0.00"
-            onchange="mutMeta('${pid}','freight',this.value)"></td>
-        </tr>
-        <tr>
-          <td>Tax</td>
-          <td><input class="ttl-in" type="text" value="${escH(prop.tax||'')}" placeholder="$0.00"
-            onchange="mutMeta('${pid}','tax',this.value)"></td>
-        </tr>
-        <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(grd)}</td></tr>
+        <tr><td>Subtotal</td><td id="t-sub">${fmt(t.subtotal)}</td></tr>
+        <tr><td>${taxLabel}</td><td id="t-tax">${fmt(t.tax)}</td></tr>
+        <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(t.total)}</td></tr>
       </table>
+    </div>
+    <div style="text-align:right;margin-top:6px">
+      <span class="hide-client" style="font-size:10px;color:var(--text-light);font-style:italic">
+        Markup: ${proj?.markupPct || 25}%${proj?.state ? ' · '+escH(proj.state) : ''}${proj?.taxRate ? ' · Tax '+proj.taxRate+'%' : ''}${proj?.taxFreight ? ' · Freight taxed' : ''}
+      </span>
     </div>`;
 }
- 
+
 // ─── PROPOSAL MUTATIONS ───────────────────────────────────
- 
+
 function addSpace() {
   const pid = S.currentPropProject;
   if (!pid) { toast('Select a project first.'); return; }
   S.proposals[pid].spaces.push({ id:uid(), name:'', items:[] });
   save(); renderPropBody();
 }
- 
+
 function deleteSpace(pid, spId) {
   const prop = S.proposals[pid];
   if (!prop) return;
   prop.spaces = prop.spaces.filter(s => s.id !== spId);
   save(); renderPropBody();
 }
- 
+
 function mutSpace(pid, spId, key, val) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (sp) { sp[key] = val; save(); }
 }
- 
-function addItem(pid, spId) {
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  if (!sp) return;
-  const newId = uid();
-  (sp.items = sp.items||[]).push({
-    id:newId, name:'', priceNet:'', qty:'', status:'pending',
-    notes:'', link:'', vendor:'', flag:'', _open:false
-  });
-  save(); renderPropBody();
-  // Focus name of new item
-  setTimeout(() => {
-    const rows = document.querySelectorAll(`#sp-${spId} tbody tr:not(.notes-row):not(.add-item-tr)`);
-    if (rows.length) rows[rows.length-1].querySelector('input')?.focus();
-  }, 60);
-}
- 
+
 function deleteItem(pid, spId, iid) {
+  if (!confirm('Remove this item?')) return;
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (!sp) return;
   sp.items = (sp.items||[]).filter(i => i.id !== iid);
   save(); renderPropBody();
+  toast('Item removed.');
 }
- 
+
 function mutItem(pid, spId, iid, key, val) {
   const sp   = S.proposals[pid]?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === iid);
   if (!item) return;
   item[key] = val;
   save();
- 
-  // Live-update calculated cells without full re-render
-  if (key === 'priceNet' || key === 'qty') {
-    const net    = parse$(item.priceNet);
-    const client = net > 0 ? net * 1.25 : 0;
-    const qty    = parseFloat(item.qty) || 0;
-    const total  = client * qty;
-    const cpc  = document.getElementById('cpc-'+iid);
-    const ctot = document.getElementById('ctot-'+iid);
-    if (cpc)  cpc.textContent  = client>0 ? fmt(client) : '—';
-    if (ctot) ctot.textContent = total>0  ? fmt(total)  : '—';
-    refreshTotals(pid);
-  }
 }
- 
+
 function toggleNotes(pid, spId, iid) {
+  event.stopPropagation();
   const sp   = S.proposals[pid]?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === iid);
   if (!item) return;
@@ -2106,34 +2488,307 @@ function toggleNotes(pid, spId, iid) {
   if (row)   row.classList.toggle('expanded-row', item._open);
   if (btn)   btn.classList.toggle('open', item._open);
 }
- 
-function mutMeta(pid, key, val) {
-  const prop = S.proposals[pid];
-  if (!prop) return;
-  prop[key] = val;
-  save();
-  refreshTotals(pid);
-}
- 
+
 function refreshTotals(pid) {
   const prop = S.proposals[pid];
   if (!prop) return;
-  let sub = 0;
-  (prop.spaces||[]).forEach(sp => {
-    (sp.items||[]).forEach(item => {
-      const net = parse$(item.priceNet);
-      sub += (net>0 ? net*1.25 : 0) * (parseFloat(item.qty)||0);
-    });
-  });
-  const fr  = parse$(prop.freight);
-  const tx  = parse$(prop.tax);
-  const grd = sub + fr + tx;
+  const t = calcProposalTotals(prop, pid);
   const tSub = document.getElementById('t-sub');
+  const tTax = document.getElementById('t-tax');
   const tGrd = document.getElementById('t-grd');
-  if (tSub) tSub.textContent = fmt(sub);
-  if (tGrd) tGrd.textContent = fmt(grd);
+  if (tSub) tSub.textContent = fmt(t.subtotal);
+  if (tTax) tTax.textContent = fmt(t.tax);
+  if (tGrd) tGrd.textContent = fmt(t.total);
 }
- 
+
+// ─── ITEM MODAL ───────────────────────────────────────────
+
+let _modalComponents = [];
+let _modalCharges = [];
+
+function setItemType(type) {
+  $c('ai-type').value = type;
+  $a('#ai-type-selector .type-sel-btn').forEach(b => {
+    const t = ITEM_TYPES.find(it => b.textContent.trim() === it.label);
+    b.classList.toggle('active', t && t.id === type);
+  });
+  $c('ai-components-section').style.display = type === 'constructed' ? '' : 'none';
+  $c('ai-charges-section').style.display = type === 'readymade' ? '' : 'none';
+  $c('ai-price-row').style.display = type === 'constructed' ? 'none' : '';
+  $c('ai-category-wrap').style.display = type === 'openline' ? '' : 'none';
+  $c('ai-contact-wrap').style.display = type === 'constructed' ? 'none' : '';
+}
+
+function populateRoomSelect(pid) {
+  const sel = $c('ai-room');
+  const prop = S.proposals[pid];
+  sel.innerHTML = '<option value="">—</option>';
+  if (prop && prop.spaces) {
+    prop.spaces.forEach(sp => {
+      if (sp.name) {
+        const o = document.createElement('option');
+        o.value = sp.name;
+        o.textContent = sp.name;
+        sel.appendChild(o);
+      }
+    });
+  }
+}
+
+function addModalComponent(comp) {
+  _modalComponents.push(comp || {
+    id: uid(), name: '', componentType: '', contact: '', netCost: '',
+    billCostOnly: false, adjustMarkup: null, note: ''
+  });
+  renderModalComponents();
+}
+
+function renderModalComponents() {
+  const list = $c('ai-components-list');
+  list.innerHTML = _modalComponents.map((c, i) => {
+    const typeOpts = COMPONENT_TYPES.map(t =>
+      `<option value="${t.id}" ${c.componentType === t.id ? 'selected' : ''}>${t.label}</option>`
+    ).join('');
+    return `
+    <div class="person-entry" style="margin-bottom:6px" data-cidx="${i}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span class="person-entry-lbl">Component ${i + 1}</span>
+        <button type="button" class="remove-poc-btn" onclick="removeModalComponent(${i})">Remove</button>
+      </div>
+      <div class="frow">
+        <div class="fg"><label class="fl">Name</label>
+          <input type="text" class="fi comp-name" value="${escH(c.name)}" placeholder="e.g. Face Fabric">
+        </div>
+        <div class="fg"><label class="fl">Type</label>
+          <select class="fi fsel comp-type" onchange="onCompTypeChange(${i}, this.value)">
+            <option value="">—</option>${typeOpts}
+          </select>
+        </div>
+      </div>
+      <div class="frow">
+        <div class="fg"><label class="fl">Contact</label>
+          <input type="text" class="fi comp-contact" value="${escH(c.contact)}" placeholder="Vendor / workroom">
+        </div>
+        <div class="fg"><label class="fl">Net Cost</label>
+          <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00">
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
+          <input type="checkbox" class="comp-billcost" ${c.billCostOnly ? 'checked' : ''} style="accent-color:var(--russet);width:13px;height:13px">
+          Bill cost only
+        </label>
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark)">Markup:</span>
+        <input type="number" class="fi comp-adj" style="width:60px;padding:4px 6px;font-size:11px" value="${c.adjustMarkup != null ? c.adjustMarkup : ''}" placeholder="—" min="0" step="1">
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-light)">%</span>
+      </div>
+      ${c.componentType === 'other' || c.componentType === '' ? `
+      <div class="fg" style="margin-top:6px">
+        <label class="fl">Note (can be hidden from proposal/print)</label>
+        <input type="text" class="fi comp-note" value="${escH(c.note || '')}" placeholder="Internal note…">
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function onCompTypeChange(idx, val) {
+  readModalComponentsFromDOM();
+  _modalComponents[idx].componentType = val;
+  renderModalComponents();
+}
+
+function removeModalComponent(idx) {
+  _modalComponents.splice(idx, 1);
+  renderModalComponents();
+}
+
+function readModalComponentsFromDOM() {
+  const entries = $a('#ai-components-list .person-entry');
+  entries.forEach((el, i) => {
+    if (_modalComponents[i]) {
+      _modalComponents[i].name = el.querySelector('.comp-name')?.value.trim() || '';
+      _modalComponents[i].componentType = el.querySelector('.comp-type')?.value || '';
+      _modalComponents[i].contact = el.querySelector('.comp-contact')?.value.trim() || '';
+      _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
+      _modalComponents[i].billCostOnly = el.querySelector('.comp-billcost')?.checked || false;
+      const adj = el.querySelector('.comp-adj')?.value;
+      _modalComponents[i].adjustMarkup = adj !== '' && adj != null ? parseFloat(adj) : null;
+      const noteEl = el.querySelector('.comp-note');
+      if (noteEl) _modalComponents[i].note = noteEl.value.trim();
+    }
+  });
+}
+
+function addModalCharge(ch) {
+  _modalCharges.push(ch || { id: uid(), name: '', category: '', amount: '', billCostOnly: false, adjustMarkup: null });
+  renderModalCharges();
+}
+
+function renderModalCharges() {
+  const list = $c('ai-charges-list');
+  const catOpts = CHARGE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('');
+  list.innerHTML = _modalCharges.map((ch, i) => `
+    <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px;background:rgba(91,45,34,0.04);padding:8px 10px;border-radius:var(--r);border:1px solid var(--border)" data-chidx="${i}">
+      <div style="flex:1">
+        <label class="fl">Description</label>
+        <input type="text" class="fi ch-name" value="${escH(ch.name)}" placeholder="e.g. Freight" style="font-size:12px;padding:6px 8px">
+      </div>
+      <div style="width:130px">
+        <label class="fl">Category</label>
+        <select class="fi fsel ch-cat" style="font-size:12px;padding:6px 8px">
+          <option value="">—</option>${catOpts.replace(`"${ch.category}"`, `"${ch.category}" selected`)}
+        </select>
+      </div>
+      <div style="width:90px">
+        <label class="fl">Amount</label>
+        <input type="text" class="fi ch-amt" value="${escH(ch.amount)}" placeholder="$0" style="font-size:12px;padding:6px 8px">
+      </div>
+      <button type="button" class="remove-poc-btn" onclick="removeModalCharge(${i})" style="margin-bottom:4px">✕</button>
+    </div>`).join('');
+}
+
+function removeModalCharge(idx) {
+  readModalChargesFromDOM();
+  _modalCharges.splice(idx, 1);
+  renderModalCharges();
+}
+
+function readModalChargesFromDOM() {
+  const rows = $c('ai-charges-list').children;
+  [...rows].forEach((el, i) => {
+    if (_modalCharges[i]) {
+      _modalCharges[i].name = el.querySelector('.ch-name')?.value.trim() || '';
+      _modalCharges[i].category = el.querySelector('.ch-cat')?.value || '';
+      _modalCharges[i].amount = el.querySelector('.ch-amt')?.value.trim() || '';
+    }
+  });
+}
+
+function openAddItemModal(pid, spId) {
+  $c('ai-title').textContent = 'Add Line Item';
+  $c('ai-save-btn').textContent = 'Add Item';
+  $c('ai-delete-btn').style.display = 'none';
+  $c('ai-pid').value = pid;
+  $c('ai-spid').value = spId;
+  $c('ai-id').value = '';
+  setItemType('constructed');
+  populateRoomSelect(pid);
+  // Pre-select the space this item is being added to
+  const prop = S.proposals[pid];
+  const sp = prop?.spaces.find(s => s.id === spId);
+  if (sp && sp.name) $c('ai-room').value = sp.name;
+  ['ai-name','ai-contact','ai-net','ai-notes'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  $c('ai-qty').value = '1';
+  $c('ai-category').value = '';
+  $c('ai-billcost').checked = false;
+  $c('ai-adj-markup').value = '';
+  _modalComponents = [];
+  _modalCharges = [];
+  renderModalComponents();
+  renderModalCharges();
+  $c('modal-add-item').classList.add('open');
+  setTimeout(() => $c('ai-name').focus(), 80);
+}
+
+function openEditItemModal(pid, spId, itemId) {
+  const prop = S.proposals[pid];
+  const sp = prop?.spaces.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  if (!item) return;
+
+  $c('ai-title').textContent = 'Edit Item';
+  $c('ai-save-btn').textContent = 'Save Changes';
+  $c('ai-delete-btn').style.display = '';
+  $c('ai-pid').value = pid;
+  $c('ai-spid').value = spId;
+  $c('ai-id').value = itemId;
+  setItemType(item.type || 'readymade');
+  populateRoomSelect(pid);
+  $c('ai-room').value = item.room || '';
+  $c('ai-name').value = item.name || '';
+  $c('ai-contact').value = item.contact || '';
+  $c('ai-net').value = item.netPrice || '';
+  $c('ai-qty').value = item.qty || '1';
+  $c('ai-category').value = item.category || '';
+  $c('ai-notes').value = item.notes || '';
+  $c('ai-billcost').checked = !!item.billCostOnly;
+  $c('ai-adj-markup').value = item.adjustMarkup != null ? item.adjustMarkup : '';
+
+  _modalComponents = (item.components || []).map(c => ({ ...c }));
+  _modalCharges = (item.additionalCharges || []).map(ch => ({ ...ch }));
+  renderModalComponents();
+  renderModalCharges();
+  $c('modal-add-item').classList.add('open');
+}
+
+function saveItem() {
+  const pid = $c('ai-pid').value;
+  const spId = $c('ai-spid').value;
+  const itemId = $c('ai-id').value;
+  const type = $c('ai-type').value;
+  const name = $c('ai-name').value.trim();
+  if (!name) { $c('ai-name').focus(); return; }
+
+  readModalComponentsFromDOM();
+  readModalChargesFromDOM();
+
+  const adjVal = $c('ai-adj-markup').value;
+  const base = {
+    type,
+    name,
+    room: $c('ai-room').value,
+    status: 'pending',
+    notes: $c('ai-notes').value.trim(),
+    _open: false,
+    billCostOnly: $c('ai-billcost').checked,
+    adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
+  };
+
+  let item;
+  if (type === 'constructed') {
+    item = { ...base, components: _modalComponents.filter(c => c.name || c.netCost) };
+  } else if (type === 'readymade') {
+    item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
+      qty: $c('ai-qty').value || '1', link: '', additionalCharges: _modalCharges.filter(ch => ch.name || ch.amount) };
+  } else {
+    item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
+      qty: $c('ai-qty').value || '1', category: $c('ai-category').value };
+  }
+
+  const prop = S.proposals[pid];
+  const sp = prop?.spaces.find(s => s.id === spId);
+  if (!sp) return;
+
+  if (itemId) {
+    // Edit existing
+    const idx = sp.items.findIndex(i => i.id === itemId);
+    if (idx > -1) { item.id = itemId; item._open = sp.items[idx]._open; item.status = sp.items[idx].status; sp.items[idx] = item; }
+    toast('Item updated.');
+  } else {
+    // New item
+    item.id = uid();
+    (sp.items = sp.items || []).push(item);
+    toast('Item added.');
+  }
+
+  save();
+  closeModal('modal-add-item');
+  renderPropBody();
+}
+
+function deleteItemFromModal() {
+  const pid = $c('ai-pid').value;
+  const spId = $c('ai-spid').value;
+  const itemId = $c('ai-id').value;
+  if (!itemId || !confirm('Remove this item?')) return;
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  if (sp) sp.items = (sp.items || []).filter(i => i.id !== itemId);
+  save();
+  closeModal('modal-add-item');
+  renderPropBody();
+  toast('Item removed.');
+}
+
 // ─── CLIENT VIEW ──────────────────────────────────────────
  
 function toggleClientView() {
@@ -3041,35 +3696,56 @@ function deleteTimeEntry(id) {
  
 function addSampleData() {
   const proj = [
-    { id:uid(), name:'5914 Coliseum',           client:'November Project',    type:'residential', city:'New Orleans, LA',  stage:'active',    created:'2025-11-01' },
-    { id:uid(), name:'Bar Nero / Mea Culpa',     client:'Restaurant Group',    type:'commercial',  city:'Jackson, MS',      stage:'proposal',  created:'2026-02-01' },
-    { id:uid(), name:'Mandy Alexander Residence',client:'Mandy Alexander',     type:'residential', city:'Baton Rouge, LA',  stage:'continued', created:'2025-09-15' },
-    { id:uid(), name:'E. Blount Drapery',        client:'E. Blount',           type:'residential', city:'Jackson, MS',      stage:'active',    created:'2026-01-10' },
-    { id:uid(), name:'Sonia Thompson Furniture', client:'Sonia Thompson',      type:'residential', city:'Atlanta, GA',      stage:'proposal',  created:'2026-03-01' },
+    { id:uid(), name:'5914 Coliseum',           client:'November Project',    type:'residential', city:'New Orleans, LA',  stage:'active',    created:'2025-11-01', markupPct:25, state:'Louisiana', taxRate:9.45, taxFreight:false },
+    { id:uid(), name:'Bar Nero / Mea Culpa',     client:'Restaurant Group',    type:'commercial',  city:'Jackson, MS',      stage:'proposal',  created:'2026-02-01', markupPct:25, state:'Mississippi', taxRate:7, taxFreight:true },
+    { id:uid(), name:'Mandy Alexander Residence',client:'Mandy Alexander',     type:'residential', city:'Baton Rouge, LA',  stage:'continued', created:'2025-09-15', markupPct:25, state:'Louisiana', taxRate:9.45, taxFreight:false },
+    { id:uid(), name:'E. Blount Drapery',        client:'E. Blount',           type:'residential', city:'Jackson, MS',      stage:'active',    created:'2026-01-10', markupPct:25, state:'Mississippi', taxRate:7, taxFreight:true },
+    { id:uid(), name:'Sonia Thompson Furniture', client:'Sonia Thompson',      type:'residential', city:'Atlanta, GA',      stage:'proposal',  created:'2026-03-01', markupPct:25, state:'Georgia', taxRate:8, taxFreight:false },
   ];
- 
+
   proj.forEach(p => { S.projects.push(p); S.proposals[p.id] = { spaces:[], freight:'', tax:'' }; });
- 
-  // Seed proposal for Bar Nero
+
+  // Seed proposal for Bar Nero with new item types
   const bn = proj[1].id;
   S.proposals[bn] = {
     spaces:[
       {
         id:uid(), name:'Bar Nero',
         items:[
-          { id:uid(), name:'Custom Banquette Upholstery',     priceNet:'2400', qty:'1', status:'waiting_quote',  notes:'Waiting on COM yardage req from workroom.',      link:'', vendor:'Sonia Thompson Studio', flag:'N', _open:false },
-          { id:uid(), name:'Bar Stools — Restoration Hardware',priceNet:'385',  qty:'8', status:'client_approval',notes:'Client has two colorways under consideration.',   link:'', vendor:'Restoration Hardware',  flag:'N', _open:false },
-          { id:uid(), name:'Custom Drapery — Back Bar',       priceNet:'',     qty:'', status:'waiting_qty',    notes:'Waiting on final window measurements from GC.',   link:'', vendor:'',                     flag:'',  _open:false },
+          { id:uid(), type:'constructed', name:'Custom Banquette Upholstery', room:'Bar Nero', status:'waiting_quote',
+            notes:'Waiting on COM yardage req from workroom.', _open:false, billCostOnly:false, adjustMarkup:null,
+            components:[
+              { id:uid(), name:'Upholstery Fabric', componentType:'material', contact:'Paul+', netCost:'960', billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Foam & Batting', componentType:'material', contact:'', netCost:'340', billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Upholstery Labor', componentType:'labor', contact:'Douglass Workroom', netCost:'850', billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Freight', componentType:'shipping', contact:'', netCost:'120', billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Installation', componentType:'installation', contact:'', netCost:'250', billCostOnly:true, adjustMarkup:null, note:'' },
+            ]
+          },
+          { id:uid(), type:'readymade', name:'Bar Stools — Restoration Hardware', room:'Bar Nero', contact:'Restoration Hardware',
+            netPrice:'385', qty:'8', status:'client_approval', notes:'Client has two colorways under consideration.',
+            link:'', _open:false, billCostOnly:false, adjustMarkup:null,
+            additionalCharges:[ { id:uid(), name:'Freight', category:'Freight', amount:'180', billCostOnly:false, adjustMarkup:null } ]
+          },
+          { id:uid(), type:'constructed', name:'Custom Drapery — Back Bar', room:'Bar Nero', status:'waiting_qty',
+            notes:'Waiting on final window measurements from GC.', _open:false, billCostOnly:false, adjustMarkup:null,
+            components:[]
+          },
         ]
       },
       {
         id:uid(), name:'Mea Culpa',
         items:[
-          { id:uid(), name:'Velvet Club Chairs (pair)',        priceNet:'1200', qty:'3', status:'approved',       notes:'Kravet Belshire Velvet — Bordeaux confirmed.',    link:'https://kravet.com', vendor:'Kravet', flag:'N', _open:false },
+          { id:uid(), type:'readymade', name:'Velvet Club Chairs (pair)', room:'Mea Culpa', contact:'Kravet',
+            netPrice:'1200', qty:'3', status:'approved', notes:'Kravet Belshire Velvet — Bordeaux confirmed.',
+            link:'', _open:false, billCostOnly:false, adjustMarkup:null, additionalCharges:[] },
+          { id:uid(), type:'openline', name:'Freight — Paul+ Shipment', room:'Mea Culpa', contact:'',
+            netPrice:'450', qty:'1', category:'Freight Charges', status:'pending', notes:'',
+            _open:false, billCostOnly:false, adjustMarkup:null },
         ]
       }
     ],
-    freight:'450',
+    freight:'',
     tax:'',
   };
  
