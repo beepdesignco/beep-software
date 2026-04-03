@@ -1849,6 +1849,42 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
  
+<!-- ═════════════════ DOC CONTEXT MENU ═════════════════ -->
+<div id="doc-context-menu" style="display:none;position:fixed;z-index:300;background:var(--cloud);border:1px solid var(--border-mid);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:4px 0;min-width:160px">
+  <div onclick="openDocPropertiesModal()" style="padding:8px 16px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);cursor:pointer;transition:var(--t)" onmouseover="this.style.background='rgba(91,45,34,0.06)'" onmouseout="this.style.background='none'">Rename / Organize…</div>
+</div>
+
+<!-- ═════════════════ DOC PROPERTIES MODAL ═════════════════ -->
+<div class="overlay" id="modal-doc-props">
+  <div class="modal" style="width:440px">
+    <button class="modal-x" onclick="closeModal('modal-doc-props')">✕</button>
+    <div class="modal-title">File Properties</div>
+    <input type="hidden" id="dp-pid">
+    <input type="hidden" id="dp-fid">
+
+    <div class="fg">
+      <label class="fl">Display Name</label>
+      <input type="text" class="fi" id="dp-name" placeholder="File name">
+    </div>
+    <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b);margin-top:-10px;margin-bottom:14px">Original: <span id="dp-original"></span></div>
+
+    <div class="fg">
+      <label class="fl">Folders</label>
+      <div id="dp-folders" style="max-height:180px;overflow-y:auto;margin-bottom:8px"></div>
+      <div style="display:flex;gap:6px">
+        <input type="text" class="fi" id="dp-new-folder" placeholder="Create new folder…" style="flex:1;font-size:12px;padding:6px 10px" onkeydown="if(event.key==='Enter'){createFolderFromModal();event.preventDefault()}">
+        <button class="btn btn-secondary btn-sm" onclick="createFolderFromModal()">+ Create</button>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-doc-props')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveDocProperties()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ TOASTS ═════════════════ -->
 <div class="toast-wrap" id="toasts"></div>
  
@@ -3091,7 +3127,7 @@ function handleProjectFileUpload(pid, inputEl) {
 
     const reader = new FileReader();
     reader.onload = function(e) {
-      proj.files.push({ id: uid(), name: file.name, type: file.type || ext, size: file.size, data: e.target.result, uploaded: new Date().toISOString() });
+      proj.files.push({ id: uid(), name: file.name, displayName: file.name, type: file.type || ext, size: file.size, data: e.target.result, uploaded: new Date().toISOString(), folders: [] });
       save();
       renderProjectDetail();
     };
@@ -3109,28 +3145,166 @@ function removeProjectFile(pid, fileId) {
   renderProjectDetail();
 }
 
-function renderFileCard(f, removeOnclick) {
+// ── Folders ──
+
+function getProjectFolders(pid) {
+  const proj = getProject(pid);
+  if (!proj) return [];
+  if (!proj.docFolders) proj.docFolders = [];
+  return proj.docFolders;
+}
+
+function createDocFolder(pid) {
+  const input = $c('doc-new-folder-input');
+  const name = input?.value.trim();
+  if (!name) return;
+  const proj = getProject(pid);
+  if (!proj) return;
+  if (!proj.docFolders) proj.docFolders = [];
+  if (proj.docFolders.find(f => f.name.toLowerCase() === name.toLowerCase())) { toast('Folder already exists.'); return; }
+  proj.docFolders.push({ id: uid(), name });
+  save();
+  input.value = '';
+  renderProjectDetail();
+}
+
+function deleteDocFolder(pid, folderId) {
+  if (!confirm('Delete this folder? Files will not be deleted, just unorganized.')) return;
+  const proj = getProject(pid);
+  if (!proj || !proj.docFolders) return;
+  proj.docFolders = proj.docFolders.filter(f => f.id !== folderId);
+  // Remove folder reference from all files
+  (proj.files||[]).forEach(f => { if (f.folders) f.folders = f.folders.filter(id => id !== folderId); });
+  save();
+  renderProjectDetail();
+}
+
+// ── Right-click context menu ──
+
+let _docCtx = null; // {pid, fileId, x, y}
+
+function showDocContextMenu(e, pid, fileId) {
+  e.preventDefault();
+  e.stopPropagation();
+  _docCtx = {pid, fileId};
+  const menu = $c('doc-context-menu');
+  if (!menu) return;
+  menu.style.display = 'block';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+}
+
+function hideDocContextMenu() {
+  const menu = $c('doc-context-menu');
+  if (menu) menu.style.display = 'none';
+  _docCtx = null;
+}
+
+function openDocPropertiesModal() {
+  if (!_docCtx) return;
+  hideDocContextMenu();
+  const proj = getProject(_docCtx.pid);
+  const file = (proj?.files||[]).find(f => f.id === _docCtx.fileId);
+  if (!file) return;
+
+  $c('dp-pid').value = _docCtx.pid;
+  $c('dp-fid').value = _docCtx.fileId;
+  $c('dp-name').value = file.displayName || file.name;
+  $c('dp-original').textContent = file.name;
+
+  // Render folder checkboxes
+  const folders = getProjectFolders(_docCtx.pid);
+  const fileFolders = file.folders || [];
+  $c('dp-folders').innerHTML = folders.length ? folders.map(f => `
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:3px 0">
+      <input type="checkbox" value="${f.id}" ${fileFolders.includes(f.id)?'checked':''} style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+      ${escH(f.name)}
+    </label>`).join('') : '<div style="font-size:11px;color:var(--text-light);font-style:italic">No folders yet.</div>';
+
+  $c('modal-doc-props').classList.add('open');
+  setTimeout(() => $c('dp-name').focus(), 80);
+}
+
+function saveDocProperties() {
+  const pid = $c('dp-pid').value;
+  const fid = $c('dp-fid').value;
+  const proj = getProject(pid);
+  const file = (proj?.files||[]).find(f => f.id === fid);
+  if (!file) return;
+
+  file.displayName = $c('dp-name').value.trim() || file.name;
+  file.folders = [...$c('dp-folders').querySelectorAll('input:checked')].map(cb => cb.value);
+
+  save();
+  closeModal('modal-doc-props');
+  renderProjectDetail();
+  toast('File updated.');
+}
+
+function createFolderFromModal() {
+  const pid = $c('dp-pid').value;
+  const input = $c('dp-new-folder');
+  const name = input?.value.trim();
+  if (!name) return;
+  const proj = getProject(pid);
+  if (!proj) return;
+  if (!proj.docFolders) proj.docFolders = [];
+  if (proj.docFolders.find(f => f.name.toLowerCase() === name.toLowerCase())) { toast('Folder already exists.'); return; }
+  const newFolder = { id: uid(), name };
+  proj.docFolders.push(newFolder);
+  save();
+  input.value = '';
+
+  // Re-render folder checkboxes and auto-check the new one
+  const file = (proj.files||[]).find(f => f.id === $c('dp-fid').value);
+  const fileFolders = file ? (file.folders||[]) : [];
+  const folders = proj.docFolders;
+  $c('dp-folders').innerHTML = folders.map(f => `
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:3px 0">
+      <input type="checkbox" value="${f.id}" ${fileFolders.includes(f.id) || f.id === newFolder.id ? 'checked' : ''} style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+      ${escH(f.name)}
+    </label>`).join('');
+  toast('Folder created.');
+}
+
+// ── File card with right-click ──
+
+function renderDocFileCard(f, pid, removeOnclick) {
   const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
   const sizeStr = f.size < 1024 ? f.size+'B' : f.size < 1048576 ? (f.size/1024).toFixed(0)+'KB' : (f.size/1048576).toFixed(1)+'MB';
   const dateStr = f.uploaded ? new Date(f.uploaded).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
   const canView = !f.name.endsWith('.dwg');
+  const displayName = f.displayName || f.name;
+  const isRenamed = f.displayName && f.displayName !== f.name;
   return `
-  <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;transition:var(--t)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+  <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;transition:var(--t)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''} oncontextmenu="showDocContextMenu(event,'${pid}','${f.id}')">
     <span style="font-size:20px">${icon}</span>
     <div style="flex:1;min-width:0">
-      <div style="font-family:var(--font-b);font-size:12px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.name)}</div>
-      <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${sizeStr}${dateStr?' · '+dateStr:''}</div>
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(displayName)}</div>
+      <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${sizeStr}${dateStr?' · '+dateStr:''}${isRenamed?' · <span style="font-style:italic">'+escH(f.name)+'</span>':''}</div>
     </div>
-    <button onclick="event.stopPropagation();${removeOnclick}" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px;padding:4px">✕</button>
+    ${removeOnclick ? `<button onclick="event.stopPropagation();${removeOnclick}" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px;padding:4px">✕</button>` : ''}
   </div>`;
 }
 
+// ── Documents tab renderer ──
+
 function renderPDDocuments(proj, pid) {
   const prop = S.proposals[pid];
-
-  // Project-level documents
+  const folders = getProjectFolders(pid);
   const projFiles = proj.files || [];
-  let html = `
+
+  let html = '';
+
+  // Folder management
+  html += `
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+    <input type="text" class="fi" id="doc-new-folder-input" placeholder="New folder name…" style="width:200px;font-size:12px;padding:6px 10px" onkeydown="if(event.key==='Enter'){createDocFolder('${pid}');event.preventDefault()}">
+    <button class="btn btn-secondary btn-sm" onclick="createDocFolder('${pid}')">+ Create Folder</button>
+  </div>`;
+
+  // Project Documents section
+  html += `
   <div style="margin-bottom:28px">
     <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
       <span>Project Documents</span>
@@ -3138,12 +3312,45 @@ function renderPDDocuments(proj, pid) {
         + Upload
         <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg" multiple style="display:none" onchange="handleProjectFileUpload('${pid}',this)">
       </label>
-    </div>
-    ${projFiles.length ? `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">
-      ${projFiles.map(f => renderFileCard(f, `removeProjectFile('${pid}','${f.id}')`)).join('')}
-    </div>` : '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No project-level documents yet. Upload contracts, floor plans, site photos, or any other project files.</div>'}
-  </div>`;
+    </div>`;
+
+  // Render folders with their files
+  if (folders.length) {
+    folders.forEach(folder => {
+      const folderFiles = projFiles.filter(f => (f.folders||[]).includes(folder.id));
+      html += `
+      <div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:14px">📁</span>
+          <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:var(--pecan)">${escH(folder.name)}</span>
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${folderFiles.length} file${folderFiles.length!==1?'s':''}</span>
+          <button onclick="deleteDocFolder('${pid}','${folder.id}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline;margin-left:auto">remove folder</button>
+        </div>
+        ${folderFiles.length ? `
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;padding-left:22px">
+          ${folderFiles.map(f => renderDocFileCard(f, pid, `removeProjectFile('${pid}','${f.id}')`)).join('')}
+        </div>` : '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0 4px 22px">Empty folder. Right-click a file to add it here.</div>'}
+      </div>`;
+    });
+  }
+
+  // Unfiled project documents
+  const unfiledFiles = projFiles.filter(f => !(f.folders||[]).length);
+  if (unfiledFiles.length) {
+    html += `
+    <div style="margin-bottom:16px">
+      ${folders.length ? '<div style="font-family:var(--font-b);font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:8px">Unfiled</div>' : ''}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">
+        ${unfiledFiles.map(f => renderDocFileCard(f, pid, `removeProjectFile('${pid}','${f.id}')`)).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (!projFiles.length) {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No project-level documents yet. Upload contracts, floor plans, site photos, or any other project files.</div>';
+  }
+
+  html += '</div>';
 
   // Item-level documents grouped by space
   if (prop && prop.spaces) {
@@ -3178,12 +3385,13 @@ function renderPDDocuments(proj, pid) {
             ${allFiles.map(f => {
               const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
               const sizeStr = f.size < 1024 ? f.size+'B' : f.size < 1048576 ? (f.size/1024).toFixed(0)+'KB' : (f.size/1048576).toFixed(1)+'MB';
+              const displayName = f.displayName || f.name;
               const canView = !f.name.endsWith('.dwg');
               return `
               <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
                 <span style="font-size:18px">${icon}</span>
                 <div style="flex:1;min-width:0">
-                  <div style="font-family:var(--font-b);font-size:11px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.name)}</div>
+                  <div style="font-family:var(--font-b);font-size:11px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(displayName)}</div>
                   <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${escH(f.source)} · ${sizeStr}</div>
                 </div>
               </div>`;
@@ -3200,8 +3408,12 @@ function renderPDDocuments(proj, pid) {
     }
   }
 
+  // Hint about right-click
+  html += '<div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:16px;text-align:center">Right-click any project file to rename it or organize it into folders.</div>';
+
   return html;
 }
+
 
 function renderPDSettings(proj, pid) {
   return `
@@ -3451,8 +3663,9 @@ $a('.overlay').forEach(ov => {
   ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') $a('.overlay.open').forEach(m => m.classList.remove('open'));
+  if (e.key === 'Escape') { $a('.overlay.open').forEach(m => m.classList.remove('open')); hideDocContextMenu(); }
 });
+document.addEventListener('click', e => { hideDocContextMenu(); });
  
 // ─── PROPOSAL ─────────────────────────────────────────────
  
