@@ -2383,6 +2383,9 @@ function renderPDProposal(proj, pid) {
 }
 
 let _pmDetailItem = null; // {pid, spId, itemId} when viewing item detail
+let _pmSearch = '';
+let _pmStatusFilters = []; // empty = show all
+let _pmExpandedSpaces = {}; // {spaceId: true/false}
 
 function openPMItemDetail(pid, spId, itemId) {
   _pmDetailItem = {pid, spId, itemId};
@@ -2696,6 +2699,94 @@ function renderActivityNote(note, pid, spId, itemId) {
 
 // ── PM Management Tab ──
 
+function pmSearchChanged(val) {
+  _pmSearch = val.toLowerCase().trim();
+  renderProjectDetail();
+}
+
+function togglePMStatusFilter(status) {
+  const idx = _pmStatusFilters.indexOf(status);
+  if (idx > -1) _pmStatusFilters.splice(idx, 1);
+  else _pmStatusFilters.push(status);
+  renderProjectDetail();
+}
+
+function clearPMStatusFilters() {
+  _pmStatusFilters = [];
+  renderProjectDetail();
+}
+
+function togglePMSpace(spId) {
+  _pmExpandedSpaces[spId] = !_pmExpandedSpaces[spId];
+  renderProjectDetail();
+}
+
+function pmItemMatchesSearch(item) {
+  if (!_pmSearch) return true;
+  const q = _pmSearch;
+  const searchable = [
+    item.name, item.contact, item.room, item.type,
+    ...(item.components||[]).map(c => [c.name, c.contact, c.componentType].join(' ')),
+    ITEM_TYPES.find(t => t.id === item.type)?.label || '',
+  ].join(' ').toLowerCase();
+  return searchable.includes(q);
+}
+
+function pmItemMatchesFilters(item) {
+  if (!_pmStatusFilters.length) return true;
+  return _pmStatusFilters.includes(item.status) ||
+    (item.statusFlags||[]).some(f => _pmStatusFilters.includes(f));
+}
+
+function renderPMItemCard(item, sp, pid) {
+  const client = getItemClient(item, pid);
+  const statusLabel = STATUSES.find(s => s.v === item.status)?.l || item.status;
+  const statusColor = getStatusColor(item.status);
+  const flags = (item.statusFlags||[]).map(f => {
+    const flag = STATUS_FLAGS.find(sf => sf.v === f);
+    return flag ? `<span style="display:inline-block;font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:2px 8px;border-radius:10px;background:${flag.color}15;color:${flag.color};border:1px solid ${flag.color}30;margin-left:6px">${flag.l}</span>` : '';
+  }).join('');
+  const isAllowance = !!item.allowance;
+  const statusIdx = STATUSES.findIndex(s => s.v === item.status);
+  const progress = statusIdx >= 0 ? ((statusIdx + 1) / STATUSES.length * 100) : 0;
+  const noteCount = (item.activityLog||[]).length;
+  const trackCount = (item.trackingNumbers||[]).length + (item.components||[]).reduce((s,c) => s + (c.trackingNumbers||[]).length, 0);
+  const fileCount = (item.files||[]).length + (item.components||[]).reduce((s,c) => s + (c.files||[]).length, 0);
+
+  return `
+  <div style="background:white;border-radius:var(--r);padding:14px 18px;border:1px solid var(--border);margin-bottom:8px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openPMItemDetail('${pid}','${sp.id}','${item.id}')">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:8px">
+          ${isAllowance ? '<span class="allowance-a">A</span>' : `<span class="status-dot" style="background:${statusColor}"></span>`}
+          ${itemTypeBadge(item.type)}
+          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'—')}</span>
+          ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
+          ${flags}
+        </div>
+        ${item.contact ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${escH(item.contact)}</div>` : ''}
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
+        ${item.dueDate ? `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Due: ${escH(item.dueDate)}</div>` : ''}
+      </div>
+    </div>
+    ${!isAllowance ? `
+    <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+      <div style="flex:1;height:4px;background:rgba(91,45,34,0.08);border-radius:2px;overflow:hidden">
+        <div style="height:100%;width:${progress}%;background:${statusColor};border-radius:2px;transition:width 0.3s ease"></div>
+      </div>
+      <span style="font-size:10px;font-family:var(--font-b);color:${statusColor};white-space:nowrap">${statusLabel}</span>
+    </div>` : ''}
+    <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;font-family:var(--font-b);color:var(--text-light)">
+      ${trackCount ? `<span>📦 ${trackCount} tracking</span>` : ''}
+      ${fileCount ? `<span>📎 ${fileCount} file${fileCount!==1?'s':''}</span>` : ''}
+      ${noteCount ? `<span>💬 ${noteCount} note${noteCount!==1?'s':''}</span>` : ''}
+      ${item.invoicePhase ? `<span>Invoice: ${escH(item.invoicePhase)}</span>` : ''}
+    </div>
+  </div>`;
+}
+
 function renderPDManagement(proj, pid) {
   const prop = S.proposals[pid];
   if (!prop || !prop.spaces.length) {
@@ -2706,66 +2797,56 @@ function renderPDManagement(proj, pid) {
     return renderPMItemDetailPanel(_pmDetailItem.pid, _pmDetailItem.spId, _pmDetailItem.itemId);
   }
 
-  let html = '';
+  // Search bar
+  let html = `
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+    <input type="text" class="search-in" value="${escH(_pmSearch)}" placeholder="Search items, vendors, workrooms…" oninput="pmSearchChanged(this.value)" style="width:260px">
+    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('pm-filter-panel').style.display=document.getElementById('pm-filter-panel').style.display==='none'?'':'none'" style="font-size:11px">
+      ◇ Filter by Status ${_pmStatusFilters.length ? `(${_pmStatusFilters.length})` : ''}
+    </button>
+    ${_pmStatusFilters.length ? `<button class="btn btn-ghost btn-sm" onclick="clearPMStatusFilters()" style="font-size:10px;color:var(--russet)">Clear filters</button>` : ''}
+  </div>`;
+
+  // Status filter panel
+  html += `<div id="pm-filter-panel" style="display:${_pmStatusFilters.length ? '' : 'none'};margin-bottom:16px;padding:12px 14px;background:rgba(91,45,34,0.03);border:1px solid var(--border);border-radius:var(--rl)">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Filter by Status</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">
+      ${STATUSES.map(s => {
+        const active = _pmStatusFilters.includes(s.v);
+        return `<button onclick="togglePMStatusFilter('${s.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?getStatusColor(s.v):'var(--border)'};background:${active?getStatusColor(s.v)+'18':'white'};color:${active?getStatusColor(s.v):'var(--text-mid)'}">${s.l}</button>`;
+      }).join('')}
+      <span style="width:8px"></span>
+      ${STATUS_FLAGS.map(f => {
+        const active = _pmStatusFilters.includes(f.v);
+        return `<button onclick="togglePMStatusFilter('${f.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?f.color:f.color+'40'};background:${active?f.color+'18':'white'};color:${active?f.color:'var(--text-light)'}">${f.l}</button>`;
+      }).join('')}
+    </div>
+  </div>`;
+
+  // Spaces with collapsible items
+  let hasResults = false;
   prop.spaces.forEach(sp => {
-    const items = sp.items || [];
+    let items = (sp.items || []).filter(i => pmItemMatchesSearch(i) && pmItemMatchesFilters(i));
     if (!items.length) return;
+    hasResults = true;
+
+    const isExpanded = !!_pmExpandedSpaces[sp.id];
+    const itemCount = items.length;
 
     html += `
-    <div style="margin-bottom:28px">
-      <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px">${escH(sp.name||'Unnamed Space')}</div>`;
-
-    items.forEach(item => {
-      const client = getItemClient(item, pid);
-      const statusLabel = STATUSES.find(s => s.v === item.status)?.l || item.status;
-      const statusColor = getStatusColor(item.status);
-      const flags = (item.statusFlags||[]).map(f => {
-        const flag = STATUS_FLAGS.find(sf => sf.v === f);
-        return flag ? `<span style="display:inline-block;font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:2px 8px;border-radius:10px;background:${flag.color}15;color:${flag.color};border:1px solid ${flag.color}30;margin-left:6px">${flag.l}</span>` : '';
-      }).join('');
-      const isAllowance = !!item.allowance;
-      const statusIdx = STATUSES.findIndex(s => s.v === item.status);
-      const progress = statusIdx >= 0 ? ((statusIdx + 1) / STATUSES.length * 100) : 0;
-      const noteCount = (item.activityLog||[]).length;
-      const trackCount = (item.trackingNumbers||[]).length + (item.components||[]).reduce((s,c) => s + (c.trackingNumbers||[]).length, 0);
-      const fileCount = (item.files||[]).length + (item.components||[]).reduce((s,c) => s + (c.files||[]).length, 0);
-
-      html += `
-      <div style="background:white;border-radius:var(--r);padding:14px 18px;border:1px solid var(--border);margin-bottom:8px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openPMItemDetail('${pid}','${sp.id}','${item.id}')">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
-          <div style="flex:1">
-            <div style="display:flex;align-items:center;gap:8px">
-              ${isAllowance ? '<span class="allowance-a">A</span>' : `<span class="status-dot" style="background:${statusColor}"></span>`}
-              ${itemTypeBadge(item.type)}
-              <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'—')}</span>
-              ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
-              ${flags}
-            </div>
-            ${item.contact ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${escH(item.contact)}</div>` : ''}
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
-            ${item.dueDate ? `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Due: ${escH(item.dueDate)}</div>` : ''}
-          </div>
-        </div>
-        ${!isAllowance ? `
-        <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
-          <div style="flex:1;height:4px;background:rgba(91,45,34,0.08);border-radius:2px;overflow:hidden">
-            <div style="height:100%;width:${progress}%;background:${statusColor};border-radius:2px;transition:width 0.3s ease"></div>
-          </div>
-          <span style="font-size:10px;font-family:var(--font-b);color:${statusColor};white-space:nowrap">${statusLabel}</span>
-        </div>` : ''}
-        <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;font-family:var(--font-b);color:var(--text-light)">
-          ${trackCount ? `<span>📦 ${trackCount} tracking</span>` : ''}
-          ${fileCount ? `<span>📎 ${fileCount} file${fileCount!==1?'s':''}</span>` : ''}
-          ${noteCount ? `<span>💬 ${noteCount} note${noteCount!==1?'s':''}</span>` : ''}
-          ${item.invoicePhase ? `<span>Invoice: ${escH(item.invoicePhase)}</span>` : ''}
-        </div>
-      </div>`;
-    });
-
-    html += '</div>';
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;user-select:none;transition:var(--t)" onclick="togglePMSpace('${sp.id}')" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'">
+        <span style="font-size:10px;color:var(--text-mid);transition:transform 0.2s;transform:rotate(${isExpanded?'180':'0'}deg)">▼</span>
+        <span style="font-family:var(--font-h);font-weight:900;font-size:15px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);flex:1">${escH(sp.name||'Unnamed Space')}</span>
+        <span style="font-size:11px;font-family:var(--font-b);color:var(--text-light)">${itemCount} item${itemCount!==1?'s':''}</span>
+      </div>
+      ${isExpanded ? `<div style="padding:8px 0 0">${items.map(item => renderPMItemCard(item, sp, pid)).join('')}</div>` : ''}
+    </div>`;
   });
+
+  if (!hasResults) {
+    html += '<div class="no-results">No items match your search or filters.</div>';
+  }
 
   return html;
 }
