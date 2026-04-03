@@ -3665,7 +3665,10 @@ $a('.overlay').forEach(ov => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { $a('.overlay.open').forEach(m => m.classList.remove('open')); hideDocContextMenu(); }
 });
-document.addEventListener('click', e => { hideDocContextMenu(); });
+document.addEventListener('click', e => {
+  const menu = $c('doc-context-menu');
+  if (menu && !menu.contains(e.target)) hideDocContextMenu();
+});
  
 // ─── PROPOSAL ─────────────────────────────────────────────
  
