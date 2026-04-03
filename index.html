@@ -793,6 +793,14 @@ tr:hover .row-btns { opacity:1; }
   vertical-align:middle;
 }
 
+.status-dot {
+  display:inline-block;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  vertical-align:middle;
+}
+
 .component-table { border:none !important; }
 .component-table td { border-bottom:1px solid rgba(91,45,34,0.05) !important; }
 
@@ -2320,8 +2328,9 @@ function renderSpace(sp, pid) {
       <table class="prop-table">
         <thead>
           <tr>
+            <th style="width:18px"></th>
             <th style="width:4%"></th>
-            <th style="width:30%">Item</th>
+            <th style="width:28%">Item</th>
             <th class="r hide-client" style="width:10%">Net</th>
             <th class="r" style="width:10%">Price</th>
             <th class="r" style="width:6%">Qty</th>
@@ -2333,7 +2342,7 @@ function renderSpace(sp, pid) {
         <tbody>
           ${rows}
           <tr class="add-item-tr">
-            <td colspan="8">
+            <td colspan="9">
               <button class="add-item-btn" onclick="openAddItemModal('${pid}','${sp.id}')">+ Add item</button>
             </td>
           </tr>
@@ -2430,7 +2439,8 @@ function renderItemRow(item, spId, pid) {
 
   return `
     <tr id="row-${item.id}" class="${item._open?'expanded-row':''}" style="cursor:pointer" onclick="openEditItemModal('${pid}','${spId}','${item.id}')">
-      <td style="padding:6px 4px 6px 10px">${itemTypeBadge(item.type)}</td>
+      <td style="padding:6px 4px 6px 10px;text-align:center"><span class="status-dot" style="background:${getStatusColor(item.status)}"></span></td>
+      <td style="padding:6px 4px 6px 4px">${itemTypeBadge(item.type)}</td>
       <td style="padding:9px 10px">
         <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.02em;color:var(--mahogany)">${escH(item.name||'—')}</span>
         ${contactStr} ${markupNote}
@@ -2457,7 +2467,7 @@ function renderItemRow(item, spId, pid) {
     </tr>
     ${hasExpandable ? `
     <tr class="notes-row${item._open?' open':''}" id="notes-${item.id}">
-      <td colspan="8">
+      <td colspan="9">
         ${compRows ? `<table class="prop-table component-table" style="margin-bottom:8px">${compRows}</table>` : ''}
         ${chargeRows ? `<table class="prop-table component-table" style="margin-bottom:8px">${chargeRows}</table>` : ''}
         ${item.notes ? `<div style="padding:8px 14px;font-size:12px;color:var(--text-mid);font-style:italic">${escH(item.notes)}</div>` : ''}
