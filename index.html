@@ -171,9 +171,9 @@ html,body { height:100%; font-family:var(--font-b); background:var(--cloud); col
 .btn-dark { background:var(--mahogany); color:var(--cloud); }
 .btn-dark:hover { background:#2a0d12; }
  
-/* ===================== PIPELINE / KANBAN ===================== */
+/* ===================== PROJECTS / KANBAN ===================== */
  
-.pipeline-body {
+.projects-body {
   flex:1;
   overflow-x:auto;
   overflow-y:hidden;
@@ -182,9 +182,9 @@ html,body { height:100%; font-family:var(--font-b); background:var(--cloud); col
   gap:14px;
   align-items:flex-start;
 }
-.pipeline-body::-webkit-scrollbar { height:6px; }
-.pipeline-body::-webkit-scrollbar-track { background:transparent; }
-.pipeline-body::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.18); border-radius:3px; }
+.projects-body::-webkit-scrollbar { height:6px; }
+.projects-body::-webkit-scrollbar-track { background:transparent; }
+.projects-body::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.18); border-radius:3px; }
  
 .kanban-col {
   width:232px;
@@ -1155,13 +1155,17 @@ tr:hover .row-btns { opacity:1; }
     </div>
     <div class="sidebar-nav">
       <div class="nav-section-label">Active Modules</div>
-      <div class="nav-item active" onclick="showView('pipeline')" data-view="pipeline">
+      <div class="nav-item active" onclick="showView('projects')" data-view="projects">
         <span class="nav-icon">◈</span>
-        <span class="nav-label">Pipeline</span>
+        <span class="nav-label">Projects</span>
       </div>
       <div class="nav-item" onclick="showView('proposal')" data-view="proposal">
         <span class="nav-icon">▦</span>
         <span class="nav-label">Proposals</span>
+      </div>
+      <div class="nav-item" onclick="showView('clients')" data-view="clients">
+        <span class="nav-icon">◇</span>
+        <span class="nav-label">Clients</span>
       </div>
       <div class="nav-section-label" style="margin-top:10px">On the Horizon</div>
       <div class="nav-item" onclick="showView('time')" data-view="time">
@@ -1199,16 +1203,16 @@ tr:hover .row-btns { opacity:1; }
   <!-- ═══════════════════ MAIN ═══════════════════ -->
   <main class="main">
  
-    <!-- ─────────── PIPELINE VIEW ─────────── -->
-    <div class="view active" id="view-pipeline">
+    <!-- ─────────── PROJECTS VIEW ─────────── -->
+    <div class="view active" id="view-projects">
       <div class="page-header">
         <div>
-          <div class="page-title">Project Pipeline</div>
+          <div class="page-title">Projects</div>
           <div class="page-sub">The full picture, at a glance.</div>
         </div>
         <button class="btn btn-primary" onclick="openNewProjModal()">+ New Project</button>
       </div>
-      <div class="pipeline-body" id="pipeline-board"><!-- rendered by JS --></div>
+      <div class="projects-body" id="projects-board"><!-- rendered by JS --></div>
     </div>
  
     <!-- ─────────── PROPOSAL VIEW ─────────── -->
@@ -1271,6 +1275,23 @@ tr:hover .row-btns { opacity:1; }
       <div class="contacts-body" id="contacts-body"><!-- rendered by JS --></div>
     </div>
  
+    <!-- ─────────── CLIENTS VIEW ─────────── -->
+    <div class="view" id="view-clients">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Clients</div>
+          <div class="page-sub">The people behind the projects.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="openNewClientModal()">+ New Client</button>
+        </div>
+      </div>
+      <div class="contacts-toolbar">
+        <input type="text" class="search-in" id="client-search" placeholder="Search clients…" oninput="renderClients()">
+      </div>
+      <div class="contacts-body" id="clients-body"><!-- rendered by JS --></div>
+    </div>
+
     <!-- ─────────── TIME TRACKER VIEW ─────────── -->
     <div class="view" id="view-time">
       <div class="page-header">
@@ -1342,8 +1363,8 @@ tr:hover .row-btns { opacity:1; }
     </div>
     <div class="frow">
       <div class="fg">
-        <label class="fl">Client Name</label>
-        <input type="text" class="fi" id="np-client" placeholder="e.g. Mandy Alexander">
+        <label class="fl">Client</label>
+        <select class="fi fsel" id="np-client"><!-- populated by JS --></select>
       </div>
       <div class="fg">
         <label class="fl">Project Type</label>
@@ -1388,8 +1409,8 @@ tr:hover .row-btns { opacity:1; }
     </div>
     <div class="frow">
       <div class="fg">
-        <label class="fl">Client Name</label>
-        <input type="text" class="fi" id="ep-client">
+        <label class="fl">Client</label>
+        <select class="fi fsel" id="ep-client"><!-- populated by JS --></select>
       </div>
       <div class="fg">
         <label class="fl">Project Type</label>
@@ -1580,6 +1601,43 @@ tr:hover .row-btns { opacity:1; }
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-add-item')">Cancel</button>
       <button class="btn btn-primary" id="ai-save-btn" onclick="saveItem()">Add Item</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ CLIENT MODAL ═════════════════ -->
+<div class="overlay" id="modal-client">
+  <div class="modal" style="width:500px">
+    <button class="modal-x" onclick="closeModal('modal-client')">✕</button>
+    <div class="modal-title" id="cl-modal-title">New Client</div>
+    <input type="hidden" id="cl-id">
+    <div class="fg">
+      <label class="fl">Client Name</label>
+      <input type="text" class="fi" id="cl-name" placeholder="e.g. Mandy Alexander">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" id="cl-email" placeholder="email@example.com">
+      </div>
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" id="cl-phone" placeholder="(555) 000-0000">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Address</label>
+      <input type="text" class="fi" id="cl-address" placeholder="Street address, city, state">
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="cl-notes" style="resize:vertical;min-height:52px" placeholder="Preferences, referral source, anything useful…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="cl-delete-btn" style="display:none" onclick="deleteClient($c('cl-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-client')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveClient()">Save Client</button>
     </div>
   </div>
 </div>
@@ -1866,17 +1924,18 @@ const CONTACT_TYPES = [
 let S = {
   projects: [],
   proposals: {},
+  clients: [],
   contacts: [],
   timeEntries: [],
   activeTimer: null,   // { projectId, person, startMs }
   categories: [],
-  currentView: 'pipeline',
+  currentView: 'projects',
   currentPropProject: null,
   currentContactTab: 'all',
   clientView: false,
   dragId: null,
   _returnView: null,
-  _dataVersion: 2,
+  _dataVersion: 3,
   qtyUnits: [],
   statusColors: {},
 };
@@ -1952,6 +2011,26 @@ function load() {
         });
       });
       S._dataVersion = 2;
+      save();
+    }
+    // ── v3 migration: freeform client → Clients records ──
+    if (!S._dataVersion || S._dataVersion < 3) {
+      if (!S.clients) S.clients = [];
+      S.projects.forEach(p => {
+        if (p.client && !p.clientId) {
+          const name = p.client.trim();
+          if (name) {
+            let existing = S.clients.find(c => c.name.toLowerCase() === name.toLowerCase());
+            if (!existing) {
+              existing = { id: uid(), name, email:'', phone:'', address:'', notes:'', created: new Date().toISOString().slice(0,10) };
+              S.clients.push(existing);
+            }
+            p.clientId = existing.id;
+          }
+          delete p.client;
+        }
+      });
+      S._dataVersion = 3;
       save();
     }
   } catch(e){}
@@ -2057,17 +2136,18 @@ function showView(v) {
   const nav = $q(`[data-view="${v}"]`);
   if (nav) nav.classList.add('active');
   S.currentView = v;
-  if (v === 'pipeline') renderPipeline();
+  if (v === 'projects') renderProjects();
   if (v === 'proposal') { updateProjSelect(); if (S.currentPropProject) loadProposal(S.currentPropProject); }
+  if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'time') renderTime();
   save();
 }
  
-// ─── PIPELINE ─────────────────────────────────────────────
+// ─── PROJECTS ─────────────────────────────────────────────
  
-function renderPipeline() {
-  const board = $c('pipeline-board');
+function renderProjects() {
+  const board = $c('projects-board');
   board.innerHTML = '';
  
   STAGES.forEach(stage => {
@@ -2096,7 +2176,7 @@ function renderPipeline() {
         if (proj && proj.stage !== stage.id) {
           proj.stage = stage.id;
           save();
-          renderPipeline();
+          renderProjects();
           toast('Moved to ' + stage.label);
         }
         S.dragId = null;
@@ -2133,7 +2213,7 @@ function cardHtml(p) {
   return `
     <div class="proj-card" data-id="${p.id}" onclick="openEditModal('${p.id}')">
       <div class="card-name">${escH(p.name)}</div>
-      <div class="card-client">${escH(p.client||'—')}</div>
+      <div class="card-client">${escH(getClientName(p.clientId)||'—')}</div>
       <div class="card-meta">
         <span class="badge badge-${p.type==='commercial'?'com':'res'}">${p.type==='commercial'?'Commercial':'Residential'}</span>
         ${p.city?`<span class="card-city">${escH(p.city)}</span>`:''}
@@ -2155,7 +2235,9 @@ let _stagePreset = null;
 function openNewProjModal(returnView, stagePreset) {
   _stagePreset = stagePreset || null;
   S._returnView = returnView || null;
-  ['np-name','np-client','np-city'].forEach(id => { $c(id).value = ''; });
+  $c('np-name').value = '';
+  $c('np-city').value = '';
+  $c('np-client').innerHTML = clientSelectOptions('');
   $c('np-type').value  = 'residential';
   $c('np-stage').value = stagePreset || 'master_design';
   $c('modal-new').classList.add('open');
@@ -2169,7 +2251,7 @@ function createProject() {
   const p = {
     id:      uid(),
     name,
-    client:  $c('np-client').value.trim(),
+    clientId: $c('np-client').value,
     type:    $c('np-type').value,
     city:    $c('np-city').value.trim(),
     stage:   $c('np-stage').value,
@@ -2184,7 +2266,7 @@ function createProject() {
   S.proposals[p.id] = { spaces:[], freight:'', tax:'' };
   save();
   closeModal('modal-new');
-  renderPipeline();
+  renderProjects();
   updateProjSelect();
   toast(`"${p.name}" added.`);
  
@@ -2200,7 +2282,7 @@ function openEditModal(pid) {
   if (!p) return;
   $c('ep-id').value    = p.id;
   $c('ep-name').value  = p.name;
-  $c('ep-client').value= p.client||'';
+  $c('ep-client').innerHTML = clientSelectOptions(p.clientId||'');
   $c('ep-type').value  = p.type||'residential';
   $c('ep-city').value  = p.city||'';
   $c('ep-stage').value = p.stage;
@@ -2212,13 +2294,13 @@ function saveEditProject() {
   const p  = S.projects.find(x => x.id === id);
   if (!p) return;
   p.name   = $c('ep-name').value.trim() || p.name;
-  p.client = $c('ep-client').value.trim();
+  p.clientId = $c('ep-client').value;
   p.type   = $c('ep-type').value;
   p.city   = $c('ep-city').value.trim();
   p.stage  = $c('ep-stage').value;
   save();
   closeModal('modal-edit');
-  renderPipeline();
+  renderProjects();
   updateProjSelect();
   toast('Project updated.');
 }
@@ -2230,7 +2312,7 @@ function deleteProject(id) {
   if (S.currentPropProject === id) { S.currentPropProject = null; }
   save();
   closeModal('modal-edit');
-  renderPipeline();
+  renderProjects();
   updateProjSelect();
   if (S.currentView === 'proposal') renderPropBody();
   toast('Project deleted.');
@@ -2244,7 +2326,7 @@ function openProjectSettings(pid) {
   const p = S.projects.find(x => x.id === pid);
   if (!p) return;
   $c('ps-id').value = pid;
-  $c('ps-proj-label').textContent = p.name + (p.client ? ' — ' + p.client : '');
+  $c('ps-proj-label').textContent = p.name + (getClientName(p.clientId) ? ' — ' + getClientName(p.clientId) : '');
   $c('ps-markup').value = p.markupPct != null ? p.markupPct : 25;
   $c('ps-state').value = p.state || '';
   $c('ps-taxrate').value = p.taxRate || 0;
@@ -2283,7 +2365,7 @@ function updateProjSelect() {
   S.projects.forEach(p => {
     const o = document.createElement('option');
     o.value = p.id;
-    o.textContent = p.name + (p.client ? ' — ' + p.client : '');
+    o.textContent = p.name + (getClientName(p.clientId) ? ' — ' + getClientName(p.clientId) : '');
     sel.appendChild(o);
   });
   if (cur) sel.value = cur;
@@ -2324,7 +2406,7 @@ function renderPropBody() {
     <div class="prop-header">
       <div>
         <div class="prop-project-name">${escH(proj.name)}</div>
-        <div class="prop-project-meta">${proj.client ? escH(proj.client) : ''}${proj.city ? ' &nbsp;·&nbsp; '+escH(proj.city) : ''}</div>
+        <div class="prop-project-meta">${getClientName(proj.clientId) ? escH(getClientName(proj.clientId)) : ''}${proj.city ? ' &nbsp;·&nbsp; '+escH(proj.city) : ''}</div>
       </div>
       <div style="text-align:right">
         <div class="prop-view-badge ${S.clientView?'client-badge':'internal-badge'}">${S.clientView?'Client View':'Internal View'}</div>
@@ -3144,6 +3226,113 @@ function removeListItem(listKey, val) {
   }
 }
  
+// ─── CLIENTS ──────────────────────────────────────────────
+
+function getClientName(clientId) {
+  if (!clientId) return '';
+  const c = (S.clients||[]).find(x => x.id === clientId);
+  return c ? c.name : '';
+}
+
+function renderClients() {
+  const body = $c('clients-body');
+  if (!body) return;
+  const query = ($c('client-search')?.value || '').toLowerCase().trim();
+  let clients = S.clients || [];
+  if (query) {
+    clients = clients.filter(c =>
+      [c.name, c.email, c.phone, c.address, c.notes].join(' ').toLowerCase().includes(query)
+    );
+  }
+  if (!clients.length) {
+    body.innerHTML = `<div class="no-results">${query ? 'No clients match that search.' : 'No clients yet. Add your first one.'}</div>`;
+    return;
+  }
+  const sorted = [...clients].sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  const projCounts = {};
+  (S.projects||[]).forEach(p => {
+    if (p.clientId) projCounts[p.clientId] = (projCounts[p.clientId]||0) + 1;
+  });
+  body.innerHTML = `<div class="contacts-grid">${sorted.map(c => {
+    const count = projCounts[c.id] || 0;
+    return `
+    <div class="contact-card" onclick="openEditClientModal('${c.id}')">
+      <div class="contact-name">${escH(c.name)}</div>
+      ${c.email ? `<div style="font-size:11.5px;color:var(--russet);margin-top:3px">${escH(c.email)}</div>` : ''}
+      ${c.phone ? `<div style="font-size:11.5px;color:var(--text-mid);margin-top:1px">${escH(c.phone)}</div>` : ''}
+      ${c.address ? `<div style="font-size:11px;color:var(--text-light);margin-top:3px;font-style:italic">${escH(c.address)}</div>` : ''}
+      ${count > 0 ? `<div style="font-size:10px;color:var(--russet);margin-top:6px;font-family:var(--font-b)">${count} project${count!==1?'s':''}</div>` : ''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function openNewClientModal() {
+  $c('cl-modal-title').textContent = 'New Client';
+  $c('cl-id').value = '';
+  $c('cl-delete-btn').style.display = 'none';
+  ['cl-name','cl-email','cl-phone','cl-address','cl-notes'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  $c('modal-client').classList.add('open');
+  setTimeout(() => $c('cl-name').focus(), 80);
+}
+
+function openEditClientModal(id) {
+  const c = (S.clients||[]).find(x => x.id === id);
+  if (!c) return;
+  $c('cl-modal-title').textContent = 'Edit Client';
+  $c('cl-id').value = c.id;
+  $c('cl-delete-btn').style.display = '';
+  $c('cl-name').value = c.name || '';
+  $c('cl-email').value = c.email || '';
+  $c('cl-phone').value = c.phone || '';
+  $c('cl-address').value = c.address || '';
+  $c('cl-notes').value = c.notes || '';
+  $c('modal-client').classList.add('open');
+}
+
+function saveClient() {
+  const id = $c('cl-id').value;
+  const name = $c('cl-name').value.trim();
+  if (!name) { $c('cl-name').focus(); return; }
+  const data = {
+    name,
+    email: $c('cl-email').value.trim(),
+    phone: $c('cl-phone').value.trim(),
+    address: $c('cl-address').value.trim(),
+    notes: $c('cl-notes').value.trim(),
+  };
+  if (!S.clients) S.clients = [];
+  if (id) {
+    const c = S.clients.find(x => x.id === id);
+    if (c) Object.assign(c, data);
+    toast('Client updated.');
+  } else {
+    S.clients.push({ id: uid(), created: new Date().toISOString().slice(0,10), ...data });
+    toast('Client added.');
+  }
+  save();
+  closeModal('modal-client');
+  renderClients();
+  renderProjects();
+}
+
+function deleteClient(id) {
+  if (!id || !confirm('Remove this client? Projects linked to them will be unlinked.')) return;
+  S.clients = (S.clients||[]).filter(c => c.id !== id);
+  (S.projects||[]).forEach(p => { if (p.clientId === id) p.clientId = ''; });
+  save();
+  closeModal('modal-client');
+  renderClients();
+  renderProjects();
+  toast('Client removed.');
+}
+
+function clientSelectOptions(selectedId) {
+  return '<option value="">— No client —</option>' +
+    (S.clients||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(c =>
+      `<option value="${c.id}" ${c.id===selectedId?'selected':''}>${escH(c.name)}</option>`
+    ).join('');
+}
+
 // ─── APP SETTINGS ─────────────────────────────────────────
 
 function openAppSettings() {
@@ -3635,7 +3824,7 @@ function renderTimeSummary(entries) {
   const cards = Object.entries(byProj).map(([pid, ents]) => {
     const proj = (S.projects||[]).find(p => p.id === pid);
     const name = proj ? proj.name : 'Unknown Project';
-    const client = proj ? proj.client : '';
+    const client = proj ? getClientName(proj.clientId) : '';
     const totalHrs  = ents.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
     const totalFee  = ents.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
     const unbilledFee = ents.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
@@ -3719,7 +3908,7 @@ function setTimeDetailFilter(f) {
 function renderTimeDetail(allEntries) {
   const proj = (S.projects||[]).find(p => p.id === _timeDetailProj);
   const name = proj?.name || 'Unknown Project';
-  const client = proj?.client || '';
+  const client = proj ? getClientName(proj.clientId) : '';
  
   // Filter by project first
   const projEntries = allEntries.filter(e => e.projectId === _timeDetailProj);
@@ -3960,14 +4149,23 @@ function deleteTimeEntry(id) {
 }
  
 function addSampleData() {
-  const proj = [
-    { id:uid(), name:'5914 Coliseum',           client:'November Project',    type:'residential', city:'New Orleans, LA',  stage:'active',    created:'2025-11-01', markupPct:25, state:'Louisiana', taxRate:9.45, taxFreight:false },
-    { id:uid(), name:'Bar Nero / Mea Culpa',     client:'Restaurant Group',    type:'commercial',  city:'Jackson, MS',      stage:'proposal',  created:'2026-02-01', markupPct:25, state:'Mississippi', taxRate:7, taxFreight:true },
-    { id:uid(), name:'Mandy Alexander Residence',client:'Mandy Alexander',     type:'residential', city:'Baton Rouge, LA',  stage:'continued', created:'2025-09-15', markupPct:25, state:'Louisiana', taxRate:9.45, taxFreight:false },
-    { id:uid(), name:'E. Blount Drapery',        client:'E. Blount',           type:'residential', city:'Jackson, MS',      stage:'active',    created:'2026-01-10', markupPct:25, state:'Mississippi', taxRate:7, taxFreight:true },
-    { id:uid(), name:'Sonia Thompson Furniture', client:'Sonia Thompson',      type:'residential', city:'Atlanta, GA',      stage:'proposal',  created:'2026-03-01', markupPct:25, state:'Georgia', taxRate:8, taxFreight:false },
+  // Create sample clients first
+  const sampleClients = [
+    { id:uid(), name:'November Project',  email:'', phone:'', address:'New Orleans, LA', notes:'', created:'2025-11-01' },
+    { id:uid(), name:'Restaurant Group',  email:'', phone:'', address:'Jackson, MS',     notes:'', created:'2026-02-01' },
+    { id:uid(), name:'Mandy Alexander',   email:'', phone:'', address:'Baton Rouge, LA', notes:'', created:'2025-09-15' },
+    { id:uid(), name:'E. Blount',         email:'', phone:'', address:'Jackson, MS',     notes:'', created:'2026-01-10' },
+    { id:uid(), name:'Sonia Thompson',    email:'', phone:'', address:'Atlanta, GA',     notes:'', created:'2026-03-01' },
   ];
+  S.clients = sampleClients;
 
+  const proj = [
+    { id:uid(), name:'5914 Coliseum',           clientId:sampleClients[0].id, type:'residential', city:'New Orleans, LA',  stage:'active',    created:'2025-11-01', markupPct:25, state:'Louisiana', taxRate:9.45, taxFreight:false },
+    { id:uid(), name:'Bar Nero / Mea Culpa',     clientId:sampleClients[1].id, type:'commercial',  city:'Jackson, MS',      stage:'proposal',  created:'2026-02-01', markupPct:25, state:'Mississippi', taxRate:7, taxFreight:true },
+    { id:uid(), name:'Mandy Alexander Residence',clientId:sampleClients[2].id, type:'residential', city:'Baton Rouge, LA',  stage:'continued', created:'2025-09-15', markupPct:25, state:'Louisiana', taxRate:9.45, taxFreight:false },
+    { id:uid(), name:'E. Blount Drapery',        clientId:sampleClients[3].id, type:'residential', city:'Jackson, MS',      stage:'active',    created:'2026-01-10', markupPct:25, state:'Mississippi', taxRate:7, taxFreight:true },
+    { id:uid(), name:'Sonia Thompson Furniture', clientId:sampleClients[4].id, type:'residential', city:'Atlanta, GA',      stage:'proposal',  created:'2026-03-01', markupPct:25, state:'Georgia', taxRate:8, taxFreight:false },
+  ];
   proj.forEach(p => { S.projects.push(p); S.proposals[p.id] = { spaces:[], freight:'', tax:'' }; });
 
   // Seed proposal for Bar Nero with new item types
@@ -4106,7 +4304,7 @@ function init() {
  
   if (!S.projects.length) addSampleData();
  
-  renderPipeline();
+  renderProjects();
   updateProjSelect();
  
   // Restore contacts tab
@@ -4114,7 +4312,7 @@ function init() {
     $a('[data-ctab]').forEach(b => b.classList.toggle('active', b.dataset.ctab === S.currentContactTab));
   }
  
-  if (S.currentView && S.currentView !== 'pipeline') {
+  if (S.currentView && S.currentView !== 'projects') {
     showView(S.currentView);
     if (S.currentView === 'proposal' && S.currentPropProject) {
       $c('proj-select').value = S.currentPropProject;
