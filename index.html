@@ -801,6 +801,31 @@ tr:hover .row-btns { opacity:1; }
   vertical-align:middle;
 }
 
+.allowance-a {
+  display:inline-block;
+  font-family:var(--font-h);
+  font-weight:900;
+  font-size:12px;
+  color:#b33;
+  line-height:1;
+  vertical-align:middle;
+}
+
+.allowance-badge {
+  display:inline-block;
+  font-size:9px;
+  font-family:var(--font-h);
+  font-weight:800;
+  color:#b33;
+  background:rgba(180,50,50,0.08);
+  border:1px solid rgba(180,50,50,0.2);
+  border-radius:3px;
+  padding:0 5px;
+  margin-left:6px;
+  vertical-align:middle;
+  letter-spacing:0.06em;
+}
+
 .component-table { border:none !important; }
 .component-table td { border-bottom:1px solid rgba(91,45,34,0.05) !important; }
 
@@ -1206,6 +1231,10 @@ tr:hover .row-btns { opacity:1; }
         </select>
         <button class="btn btn-ghost btn-sm" onclick="openNewProjModal('proposal')">+ New Project</button>
         <button class="btn btn-ghost btn-sm hide-client" id="prop-settings-btn" onclick="if(S.currentPropProject) openProjectSettings(S.currentPropProject)" style="display:none">⚙ Settings</button>
+        <div class="view-tabs" id="prop-view-tabs" style="display:none;margin-left:auto;margin-right:8px">
+          <button class="view-tab active" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
+          <button class="view-tab" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
+        </div>
         <div class="client-toggle" onclick="toggleClientView()" id="client-toggle">
           <div class="toggle-sw" id="toggle-sw"></div>
           <span>Client View</span>
@@ -1497,6 +1526,15 @@ tr:hover .row-btns { opacity:1; }
         <option value="Tip">Tip</option>
         <option value="Other">Other</option>
       </select>
+    </div>
+
+    <!-- ALLOWANCE -->
+    <div style="padding:6px 0;margin-bottom:4px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="ai-allowance" style="accent-color:#b33;width:15px;height:15px;cursor:pointer">
+        <span>Mark as <strong style="color:#b33">Allowance</strong></span>
+        <span style="font-size:10px;color:var(--text-light);font-style:italic;margin-left:4px">— shows name, price & qty only on proposal</span>
+      </label>
     </div>
 
     <!-- MARKUP OVERRIDES -->
@@ -2256,6 +2294,8 @@ function loadProposal(pid) {
   if (pid && !S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
   const psBtn = $c('prop-settings-btn');
   if (psBtn) psBtn.style.display = pid ? '' : 'none';
+  const pvTabs = $c('prop-view-tabs');
+  if (pvTabs) pvTabs.style.display = pid ? '' : 'none';
   save();
   renderPropBody();
 }
@@ -2313,7 +2353,9 @@ function renderPropBody() {
 }
  
 function renderSpace(sp, pid) {
-  const items = sp.items || [];
+  let items = sp.items || [];
+  if (_propFilter === 'allowances') items = items.filter(i => i.allowance);
+  if (!items.length && _propFilter === 'allowances') return '';
   let rows = items.map(item => renderItemRow(item, sp.id, pid)).join('');
 
   return `
@@ -2434,25 +2476,31 @@ function renderItemRow(item, spId, pid) {
     }).join('');
   }
 
-  const hasExpandable = (item.type === 'constructed' && compRows) || (item.type === 'readymade' && chargeRows) || item.notes;
-  const contactStr = item.contact ? `<span style="font-size:10.5px;color:var(--text-mid);margin-left:6px">· ${escH(item.contact)}</span>` : '';
+  const isAllowance = !!item.allowance;
+  const hasExpandable = !isAllowance && ((item.type === 'constructed' && compRows) || (item.type === 'readymade' && chargeRows) || item.notes);
+  const contactStr = !isAllowance && item.contact ? `<span style="font-size:10.5px;color:var(--text-mid);margin-left:6px">· ${escH(item.contact)}</span>` : '';
+  const allowanceBadge = isAllowance ? '<span class="allowance-badge">A</span>' : '';
+  const statusIndicator = isAllowance
+    ? `<span class="allowance-a">A</span>`
+    : `<span class="status-dot" style="background:${getStatusColor(item.status)}"></span>`;
 
   return `
     <tr id="row-${item.id}" class="${item._open?'expanded-row':''}" style="cursor:pointer" onclick="openEditItemModal('${pid}','${spId}','${item.id}')">
-      <td style="padding:6px 4px 6px 10px;text-align:center"><span class="status-dot" style="background:${getStatusColor(item.status)}"></span></td>
+      <td style="padding:6px 4px 6px 10px;text-align:center">${statusIndicator}</td>
       <td style="padding:6px 4px 6px 4px">${itemTypeBadge(item.type)}</td>
       <td style="padding:9px 10px">
         <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.02em;color:var(--mahogany)">${escH(item.name||'—')}</span>
-        ${contactStr} ${markupNote}
-        ${item.room ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.room)}</div>` : ''}
-        ${item.category ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.category)}</div>` : ''}
+        ${allowanceBadge} ${contactStr} ${isAllowance ? '' : markupNote}
+        ${!isAllowance && item.room ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.room)}</div>` : ''}
+        ${!isAllowance && item.category ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.category)}</div>` : ''}
       </td>
-      <td class="hide-client"><div class="cell-ro">${net>0?fmt(net):'—'}</div></td>
+      <td class="hide-client"><div class="cell-ro">${!isAllowance && net>0?fmt(net):'—'}</div></td>
       <td><div class="cell-ro calc">${client>0?fmt(client):'—'}</div></td>
       <td><div class="cell-ro">${item.type==='constructed'?'—':(qty ? qty + (item.qtyUnit ? ' '+item.qtyUnit : '') : '—')}</div></td>
       <td><div class="cell-ro">${total>0?fmt(total):'—'}</div></td>
       <td class="hide-client" onclick="event.stopPropagation()">
-        <select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)" style="color:${getStatusColor(item.status)}">${sopts}</select>
+        ${isAllowance ? '<span style="font-family:var(--font-b);font-size:11px;color:var(--text-light);padding:9px 6px;display:block">Allowance</span>' :
+        `<select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)" style="color:${getStatusColor(item.status)}">${sopts}</select>`}
       </td>
       <td onclick="event.stopPropagation()">
         <div class="row-btns" style="opacity:1">
@@ -2475,19 +2523,59 @@ function renderItemRow(item, spId, pid) {
     </tr>` : ''}`;
 }
 
+function isFreightItem(item) {
+  // Open line items categorized as freight
+  if (item.type === 'openline' && item.category && item.category.toLowerCase().includes('freight')) return true;
+  return false;
+}
+
+function getFreightFromCharges(item, pid) {
+  // Sum additional charges tagged as Freight on ready-made items
+  if (item.type !== 'readymade' || !item.additionalCharges) return 0;
+  return item.additionalCharges
+    .filter(ch => (ch.category || '').toLowerCase().includes('freight'))
+    .reduce((s, ch) => {
+      const fakeItem = { billCostOnly: ch.billCostOnly || item.billCostOnly, adjustMarkup: ch.adjustMarkup != null ? ch.adjustMarkup : item.adjustMarkup };
+      return s + calcClientPrice(ch.amount, fakeItem, pid);
+    }, 0);
+}
+
+function getFreightFromComponents(item, pid) {
+  // Sum components tagged as shipping on constructed orders
+  if (item.type !== 'constructed' || !item.components) return 0;
+  return item.components
+    .filter(c => c.componentType === 'shipping')
+    .reduce((s, c) => {
+      const net = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+      const markup = componentEffectiveMarkup(c, item, pid) / 100;
+      return s + net * (1 + markup);
+    }, 0);
+}
+
 function calcProposalTotals(prop, pid) {
   const proj = getProject(pid);
   let subtotal = 0;
+  let freight = 0;
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
       const client = getItemClient(item, pid);
       const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
-      subtotal += client * qty;
+      const lineTotal = client * qty;
+
+      if (isFreightItem(item)) {
+        freight += lineTotal;
+      } else {
+        // Extract freight portions from within items
+        const itemFreight = getFreightFromCharges(item, pid) + getFreightFromComponents(item, pid);
+        freight += itemFreight * qty;
+        subtotal += lineTotal - (itemFreight * qty);
+      }
     });
   });
   const taxRate = (proj?.taxRate || 0) / 100;
-  const tax = subtotal * taxRate;
-  return { subtotal, tax, total: subtotal + tax };
+  const taxableBase = proj?.taxFreight ? (subtotal + freight) : subtotal;
+  const tax = taxableBase * taxRate;
+  return { subtotal, freight, tax, total: subtotal + freight + tax };
 }
 
 function renderTotals(prop, pid) {
@@ -2499,7 +2587,8 @@ function renderTotals(prop, pid) {
     <div class="prop-totals">
       <table class="totals-tbl">
         <tr><td>Subtotal</td><td id="t-sub">${fmt(t.subtotal)}</td></tr>
-        <tr><td>${taxLabel}</td><td id="t-tax">${fmt(t.tax)}</td></tr>
+        ${t.freight > 0 ? `<tr><td>Freight</td><td id="t-fr">${fmt(t.freight)}</td></tr>` : ''}
+        <tr><td>${taxLabel}${proj?.taxFreight ? ' (incl. freight)' : ''}</td><td id="t-tax">${fmt(t.tax)}</td></tr>
         <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(t.total)}</td></tr>
       </table>
     </div>
@@ -2568,9 +2657,11 @@ function refreshTotals(pid) {
   if (!prop) return;
   const t = calcProposalTotals(prop, pid);
   const tSub = document.getElementById('t-sub');
+  const tFr  = document.getElementById('t-fr');
   const tTax = document.getElementById('t-tax');
   const tGrd = document.getElementById('t-grd');
   if (tSub) tSub.textContent = fmt(t.subtotal);
+  if (tFr)  tFr.textContent  = fmt(t.freight);
   if (tTax) tTax.textContent = fmt(t.tax);
   if (tGrd) tGrd.textContent = fmt(t.total);
 }
@@ -2763,6 +2854,7 @@ function openAddItemModal(pid, spId) {
   $c('ai-qty').value = '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
+  $c('ai-allowance').checked = false;
   $c('ai-billcost').checked = false;
   $c('ai-adj-markup').value = '';
   _modalComponents = [];
@@ -2795,6 +2887,7 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions(item.qtyUnit || '');
   $c('ai-category').value = item.category || '';
   $c('ai-notes').value = item.notes || '';
+  $c('ai-allowance').checked = !!item.allowance;
   $c('ai-billcost').checked = !!item.billCostOnly;
   $c('ai-adj-markup').value = item.adjustMarkup != null ? item.adjustMarkup : '';
 
@@ -2824,6 +2917,7 @@ function saveItem() {
     status: 'pending',
     notes: $c('ai-notes').value.trim(),
     _open: false,
+    allowance: $c('ai-allowance').checked,
     billCostOnly: $c('ai-billcost').checked,
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
   };
@@ -2876,6 +2970,14 @@ function deleteItemFromModal() {
 
 // ─── CLIENT VIEW ──────────────────────────────────────────
  
+let _propFilter = 'all'; // 'all' | 'allowances'
+
+function setPropFilter(filter) {
+  _propFilter = filter;
+  $a('[data-ptab]').forEach(b => b.classList.toggle('active', b.dataset.ptab === filter));
+  renderPropBody();
+}
+
 function toggleClientView() {
   S.clientView = !S.clientView;
   const sw = $c('toggle-sw');
