@@ -2394,17 +2394,29 @@ function closePMItemDetail() {
   renderProjectDetail();
 }
 
-function savePMField(pid, spId, itemId, key, val) {
+function _getItem(pid, spId, itemId) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
+  return sp?.items?.find(i => i.id === itemId);
+}
+
+function savePMField(pid, spId, itemId, key, val) {
+  const item = _getItem(pid, spId, itemId);
   if (!item) return;
   item[key] = val;
   save();
 }
 
+function saveCompField(pid, spId, itemId, compId, key, val) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const comp = (item.components||[]).find(c => c.id === compId);
+  if (!comp) return;
+  comp[key] = val;
+  save();
+}
+
 function toggleStatusFlag(pid, spId, itemId, flag) {
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
+  const item = _getItem(pid, spId, itemId);
   if (!item) return;
   if (!item.statusFlags) item.statusFlags = [];
   const idx = item.statusFlags.indexOf(flag);
@@ -2414,70 +2426,275 @@ function toggleStatusFlag(pid, spId, itemId, flag) {
   renderProjectDetail();
 }
 
-function addTrackingNumber(pid, spId, itemId) {
-  const input = $c('pm-tracking-input');
-  const val = input?.value.trim();
-  if (!val) return;
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
-  if (!item) return;
-  if (!item.trackingNumbers) item.trackingNumbers = [];
-  item.trackingNumbers.push(val);
+// ── Tracking Numbers (enhanced: carrier + description) ──
+
+function addTrackingNumber(pid, spId, itemId, compId) {
+  const suffix = compId || '';
+  const numEl = $c('pm-tracking-num'+suffix);
+  const carrierEl = $c('pm-tracking-carrier'+suffix);
+  const descEl = $c('pm-tracking-desc'+suffix);
+  const num = numEl?.value.trim();
+  if (!num) return;
+
+  const entry = { id: uid(), number: num, carrier: carrierEl?.value.trim()||'', description: descEl?.value.trim()||'' };
+
+  if (compId) {
+    const item = _getItem(pid, spId, itemId);
+    const comp = (item?.components||[]).find(c => c.id === compId);
+    if (!comp) return;
+    if (!comp.trackingNumbers) comp.trackingNumbers = [];
+    comp.trackingNumbers.push(entry);
+  } else {
+    const item = _getItem(pid, spId, itemId);
+    if (!item) return;
+    if (!item.trackingNumbers) item.trackingNumbers = [];
+    // Migrate old string format if needed
+    item.trackingNumbers = item.trackingNumbers.map(t => typeof t === 'string' ? {id:uid(),number:t,carrier:'',description:''} : t);
+    item.trackingNumbers.push(entry);
+  }
   save();
-  input.value = '';
+  if (numEl) numEl.value = '';
+  if (carrierEl) carrierEl.value = '';
+  if (descEl) descEl.value = '';
   renderProjectDetail();
 }
 
-function removeTrackingNumber(pid, spId, itemId, idx) {
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
-  if (!item || !item.trackingNumbers) return;
-  item.trackingNumbers.splice(idx, 1);
+function removeTrackingNumber(pid, spId, itemId, compId, trackId) {
+  if (compId) {
+    const item = _getItem(pid, spId, itemId);
+    const comp = (item?.components||[]).find(c => c.id === compId);
+    if (comp && comp.trackingNumbers) comp.trackingNumbers = comp.trackingNumbers.filter(t => t.id !== trackId);
+  } else {
+    const item = _getItem(pid, spId, itemId);
+    if (item && item.trackingNumbers) item.trackingNumbers = item.trackingNumbers.filter(t => (typeof t === 'object' ? t.id : false) !== trackId);
+  }
   save();
   renderProjectDetail();
 }
 
-function addActivityNote(pid, spId, itemId) {
-  const input = $c('pm-note-input');
+// ── Activity Notes (with edit/delete) ──
+
+function addActivityNote(pid, spId, itemId, compId) {
+  const suffix = compId ? '-'+compId : '';
+  const input = $c('pm-note-input'+suffix);
   const val = input?.value.trim();
   if (!val) return;
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
+
+  const note = { id: uid(), author: 'Baylor', text: val, timestamp: new Date().toISOString(), compId: compId||null };
+
+  const item = _getItem(pid, spId, itemId);
   if (!item) return;
   if (!item.activityLog) item.activityLog = [];
-  item.activityLog.unshift({
-    id: uid(),
-    author: 'Baylor',
-    text: val,
-    timestamp: new Date().toISOString()
-  });
+  item.activityLog.unshift(note);
   save();
-  input.value = '';
+  if (input) input.value = '';
   renderProjectDetail();
 }
 
-function addItemLink(pid, spId, itemId) {
-  const input = $c('pm-link-input');
+function deleteActivityNote(pid, spId, itemId, noteId) {
+  if (!confirm('Delete this note?')) return;
+  const item = _getItem(pid, spId, itemId);
+  if (!item || !item.activityLog) return;
+  item.activityLog = item.activityLog.filter(n => n.id !== noteId);
+  save();
+  renderProjectDetail();
+}
+
+function startEditNote(noteId) {
+  const el = document.getElementById('note-text-'+noteId);
+  const editEl = document.getElementById('note-edit-'+noteId);
+  const actionsEl = document.getElementById('note-actions-'+noteId);
+  if (el) el.style.display = 'none';
+  if (editEl) { editEl.style.display = ''; editEl.querySelector('textarea')?.focus(); }
+  if (actionsEl) actionsEl.style.display = 'none';
+}
+
+function saveEditNote(pid, spId, itemId, noteId) {
+  const textarea = document.querySelector('#note-edit-'+noteId+' textarea');
+  const val = textarea?.value.trim();
+  if (!val) return;
+  const item = _getItem(pid, spId, itemId);
+  if (!item || !item.activityLog) return;
+  const note = item.activityLog.find(n => n.id === noteId);
+  if (note) { note.text = val; note.edited = new Date().toISOString(); }
+  save();
+  renderProjectDetail();
+}
+
+function cancelEditNote(noteId) {
+  const el = document.getElementById('note-text-'+noteId);
+  const editEl = document.getElementById('note-edit-'+noteId);
+  const actionsEl = document.getElementById('note-actions-'+noteId);
+  if (el) el.style.display = '';
+  if (editEl) editEl.style.display = 'none';
+  if (actionsEl) actionsEl.style.display = '';
+}
+
+// ── File Upload ──
+
+function handleFileUpload(pid, spId, itemId, compId, inputEl) {
+  const files = inputEl.files;
+  if (!files || !files.length) return;
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+
+  const target = compId ? (item.components||[]).find(c => c.id === compId) : item;
+  if (!target) return;
+  if (!target.files) target.files = [];
+
+  [...files].forEach(file => {
+    const allowed = ['application/pdf','image/png','image/jpeg','image/jpg'];
+    if (!allowed.includes(file.type)) { toast('Only PDF, PNG, and JPG files are supported.'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast('File too large (max 5MB).'); return; }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      target.files.push({ id: uid(), name: file.name, type: file.type, size: file.size, data: e.target.result, uploaded: new Date().toISOString() });
+      save();
+      renderProjectDetail();
+    };
+    reader.readAsDataURL(file);
+  });
+  inputEl.value = '';
+}
+
+function removeFile(pid, spId, itemId, compId, fileId) {
+  if (!confirm('Remove this file?')) return;
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const target = compId ? (item.components||[]).find(c => c.id === compId) : item;
+  if (!target || !target.files) return;
+  target.files = target.files.filter(f => f.id !== fileId);
+  save();
+  renderProjectDetail();
+}
+
+function viewFile(fileData) {
+  const w = window.open();
+  if (fileData.type === 'application/pdf') {
+    w.document.write('<iframe src="'+fileData.data+'" style="width:100%;height:100%;border:none"></iframe>');
+  } else {
+    w.document.write('<img src="'+fileData.data+'" style="max-width:100%">');
+  }
+}
+
+// ── Links ──
+
+function addItemLink(pid, spId, itemId, compId) {
+  const suffix = compId || '';
+  const input = $c('pm-link-input'+suffix);
   const val = input?.value.trim();
   if (!val) return;
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
-  if (!item) return;
-  if (!item.links) item.links = [];
-  item.links.push(val);
+  if (compId) {
+    const item = _getItem(pid, spId, itemId);
+    const comp = (item?.components||[]).find(c => c.id === compId);
+    if (!comp) return;
+    if (!comp.links) comp.links = [];
+    comp.links.push(val);
+  } else {
+    const item = _getItem(pid, spId, itemId);
+    if (!item) return;
+    if (!item.links) item.links = [];
+    item.links.push(val);
+  }
   save();
-  input.value = '';
+  if (input) input.value = '';
   renderProjectDetail();
 }
 
-function removeItemLink(pid, spId, itemId, idx) {
-  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  const item = sp?.items?.find(i => i.id === itemId);
-  if (!item || !item.links) return;
-  item.links.splice(idx, 1);
+function removeItemLink(pid, spId, itemId, compId, idx) {
+  if (compId) {
+    const item = _getItem(pid, spId, itemId);
+    const comp = (item?.components||[]).find(c => c.id === compId);
+    if (comp && comp.links) comp.links.splice(idx, 1);
+  } else {
+    const item = _getItem(pid, spId, itemId);
+    if (item && item.links) item.links.splice(idx, 1);
+  }
   save();
   renderProjectDetail();
 }
+
+// ── Rendering helpers ──
+
+function renderTrackingSection(pid, spId, itemId, compId, trackingNumbers) {
+  const suffix = compId || '';
+  const nums = (trackingNumbers||[]).map(t => typeof t === 'string' ? {id:uid(),number:t,carrier:'',description:''} : t);
+  const listHtml = nums.map(t => `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;padding:4px 0;border-bottom:1px solid var(--border)">
+      <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700">${escH(t.number)}</span>
+      ${t.carrier ? `<span style="font-size:10px;color:var(--text-mid)">· ${escH(t.carrier)}</span>` : ''}
+      ${t.description ? `<span style="font-size:10px;color:var(--text-light);font-style:italic">${escH(t.description)}</span>` : ''}
+      <button onclick="removeTrackingNumber('${pid}','${spId}','${itemId}','${compId||''}','${t.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;margin-left:auto">✕</button>
+    </div>`).join('');
+
+  return `
+  <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:6px">Tracking</div>
+  ${listHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:4px">No tracking numbers.</div>'}
+  <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+    <input type="text" class="fi" id="pm-tracking-num${suffix}" placeholder="Tracking #" style="flex:2;font-size:11px;padding:5px 7px;min-width:120px">
+    <input type="text" class="fi" id="pm-tracking-carrier${suffix}" placeholder="Carrier" style="flex:1;font-size:11px;padding:5px 7px;min-width:80px">
+    <input type="text" class="fi" id="pm-tracking-desc${suffix}" placeholder="What's being tracked" style="flex:2;font-size:11px;padding:5px 7px;min-width:100px">
+    <button class="btn btn-secondary btn-sm" onclick="addTrackingNumber('${pid}','${spId}','${itemId}','${compId||''}')" style="font-size:10px;padding:5px 10px">Add</button>
+  </div>`;
+}
+
+function renderFilesSection(pid, spId, itemId, compId, files) {
+  const fileList = (files||[]).map(f => {
+    const icon = f.type === 'application/pdf' ? '📄' : '🖼';
+    const sizeStr = f.size < 1024 ? f.size+'B' : (f.size/1024).toFixed(0)+'KB';
+    return `
+    <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b);cursor:pointer" onclick="viewFile(${escH(JSON.stringify(f)).replace(/"/g,'&quot;')})">
+      <span>${icon}</span>
+      <span style="color:var(--russet);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.name)}</span>
+      <span style="color:var(--text-light)">${sizeStr}</span>
+      <button onclick="event.stopPropagation();removeFile('${pid}','${spId}','${itemId}','${compId||''}','${f.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px">✕</button>
+    </div>`;
+  }).join('');
+
+  return `
+  <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:6px">Files</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${fileList || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No files.</span>'}</div>
+  <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0">
+    <span>+ Upload</span>
+    <input type="file" accept=".pdf,.png,.jpg,.jpeg" multiple style="display:none" onchange="handleFileUpload('${pid}','${spId}','${itemId}','${compId||''}',this)">
+  </label>`;
+}
+
+function renderActivityNote(note, pid, spId, itemId) {
+  const d = new Date(note.timestamp);
+  const dateStr = d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  const compLabel = note.compId ? (() => {
+    const item = _getItem(pid, spId, itemId);
+    const comp = (item?.components||[]).find(c => c.id === note.compId);
+    return comp ? comp.name : '';
+  })() : '';
+
+  return `
+  <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+      <div>
+        <span style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">${escH(note.author)}</span>
+        ${compLabel ? `<span style="font-size:10px;color:var(--russet);margin-left:6px;font-family:var(--font-b)">re: ${escH(compLabel)}</span>` : ''}
+      </div>
+      <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);white-space:nowrap">${dateStr}${note.edited ? ' (edited)' : ''}</span>
+    </div>
+    <div id="note-text-${note.id}" style="font-size:12.5px;color:var(--text-dark);margin-top:4px;font-family:var(--font-b);line-height:1.5;white-space:pre-wrap">${escH(note.text)}</div>
+    <div id="note-edit-${note.id}" style="display:none;margin-top:4px">
+      <textarea class="fi" style="resize:vertical;min-height:44px;font-size:12px;width:100%">${escH(note.text)}</textarea>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        <button class="btn btn-primary btn-sm" onclick="saveEditNote('${pid}','${spId}','${itemId}','${note.id}')" style="font-size:10px;padding:4px 10px">Save</button>
+        <button class="btn btn-ghost btn-sm" onclick="cancelEditNote('${note.id}')" style="font-size:10px;padding:4px 10px">Cancel</button>
+      </div>
+    </div>
+    <div id="note-actions-${note.id}" style="display:flex;gap:8px;margin-top:4px">
+      <button onclick="startEditNote('${note.id}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">edit</button>
+      <button onclick="deleteActivityNote('${pid}','${spId}','${itemId}','${note.id}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">delete</button>
+    </div>
+  </div>`;
+}
+
+// ── PM Management Tab ──
 
 function renderPDManagement(proj, pid) {
   const prop = S.proposals[pid];
@@ -2485,7 +2702,6 @@ function renderPDManagement(proj, pid) {
     return '<div class="no-results">No items yet. Add items in the Proposal tab first.</div>';
   }
 
-  // If viewing item detail, show that instead
   if (_pmDetailItem && _pmDetailItem.pid === pid) {
     return renderPMItemDetailPanel(_pmDetailItem.pid, _pmDetailItem.spId, _pmDetailItem.itemId);
   }
@@ -2511,6 +2727,8 @@ function renderPDManagement(proj, pid) {
       const statusIdx = STATUSES.findIndex(s => s.v === item.status);
       const progress = statusIdx >= 0 ? ((statusIdx + 1) / STATUSES.length * 100) : 0;
       const noteCount = (item.activityLog||[]).length;
+      const trackCount = (item.trackingNumbers||[]).length + (item.components||[]).reduce((s,c) => s + (c.trackingNumbers||[]).length, 0);
+      const fileCount = (item.files||[]).length + (item.components||[]).reduce((s,c) => s + (c.files||[]).length, 0);
 
       html += `
       <div style="background:white;border-radius:var(--r);padding:14px 18px;border:1px solid var(--border);margin-bottom:8px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openPMItemDetail('${pid}','${sp.id}','${item.id}')">
@@ -2538,7 +2756,8 @@ function renderPDManagement(proj, pid) {
           <span style="font-size:10px;font-family:var(--font-b);color:${statusColor};white-space:nowrap">${statusLabel}</span>
         </div>` : ''}
         <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;font-family:var(--font-b);color:var(--text-light)">
-          ${(item.trackingNumbers||[]).length ? `<span>📦 ${item.trackingNumbers.length} tracking #</span>` : ''}
+          ${trackCount ? `<span>📦 ${trackCount} tracking</span>` : ''}
+          ${fileCount ? `<span>📎 ${fileCount} file${fileCount!==1?'s':''}</span>` : ''}
           ${noteCount ? `<span>💬 ${noteCount} note${noteCount!==1?'s':''}</span>` : ''}
           ${item.invoicePhase ? `<span>Invoice: ${escH(item.invoicePhase)}</span>` : ''}
         </div>
@@ -2561,56 +2780,91 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   const statusColor = getStatusColor(item.status);
   const statusIdx = STATUSES.findIndex(s => s.v === item.status);
   const isAllowance = !!item.allowance;
-
   const statusOpts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${s.l}</option>`).join('');
 
-  // Components list for constructed orders
+  // ── Components section for constructed orders ──
   let compSection = '';
   if (item.type === 'constructed' && item.components && item.components.length) {
     compSection = `
     <div style="margin-bottom:20px">
-      <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);padding-bottom:6px;border-bottom:2px solid var(--pecan);margin-bottom:8px">Components</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);padding-bottom:6px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Components</div>
       ${item.components.map(c => {
         const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
         const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
+        const cStatusOpts = STATUSES.map(s => `<option value="${s.v}" ${(c.status||'proposed')===s.v?'selected':''}>${s.l}</option>`).join('');
+        const cLinksHtml = (c.links||[]).map((l,i) => `
+          <div style="display:inline-flex;align-items:center;gap:4px;margin-right:6px">
+            <a href="${escH(l)}" target="_blank" style="font-size:11px;color:var(--russet);text-decoration:none" onclick="event.stopPropagation()">${escH(l).substring(0,40)}${l.length>40?'…':''}</a>
+            <button onclick="removeItemLink('${pid}','${spId}','${itemId}','${c.id}',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
+          </div>`).join('');
+
         return `
-        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
-          <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}</span>
-          ${cTypeLabel ? `<span class="comp-type-label">${cTypeLabel}</span>` : ''}
-          ${c.contact ? `<span style="color:var(--text-light);font-size:11px">${escH(c.contact)}</span>` : ''}
-          <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):'—'}</span>
+        <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+            <div>
+              <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name||'—')}</span>
+              ${cTypeLabel ? `<span class="comp-type-label" style="margin-left:6px">${cTypeLabel}</span>` : ''}
+              ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:6px">· ${escH(c.contact)}</span>` : ''}
+            </div>
+            <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${cNet>0?fmt(cNet):'—'}</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+            <div>
+              <label class="fl">Status</label>
+              <select class="fi fsel" style="font-size:11px;padding:5px 7px" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','status',this.value)">${cStatusOpts}</select>
+            </div>
+            <div>
+              <label class="fl">Due Date</label>
+              <input type="date" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.dueDate||'')}" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','dueDate',this.value)">
+            </div>
+            <div>
+              <label class="fl">Invoice Phase</label>
+              <input type="text" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.invoicePhase||'')}" placeholder="Phase" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','invoicePhase',this.value)">
+            </div>
+          </div>
+
+          <div style="margin-bottom:8px">
+            <label class="fl">Description</label>
+            <textarea class="fi" style="resize:vertical;min-height:40px;font-size:11px" placeholder="Component details…" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','description',this.value)">${escH(c.description||'')}</textarea>
+          </div>
+
+          ${renderTrackingSection(pid, spId, itemId, c.id, c.trackingNumbers)}
+
+          <div style="margin-top:10px">
+            <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:4px">Links</div>
+            ${cLinksHtml || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No links.</span>'}
+            <div style="display:flex;gap:4px;margin-top:4px">
+              <input type="text" class="fi" id="pm-link-input${c.id}" placeholder="https://…" style="flex:1;font-size:11px;padding:5px 7px">
+              <button class="btn btn-secondary btn-sm" onclick="addItemLink('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Add</button>
+            </div>
+          </div>
+
+          <div style="margin-top:10px">
+            ${renderFilesSection(pid, spId, itemId, c.id, c.files)}
+          </div>
+
+          <div style="margin-top:8px">
+            <div style="display:flex;gap:4px">
+              <input type="text" class="fi" id="pm-note-input-${c.id}" placeholder="Add a note about ${escH(c.name||'this component')}…" style="flex:1;font-size:11px;padding:5px 7px" onkeydown="if(event.key==='Enter'){addActivityNote('${pid}','${spId}','${itemId}','${c.id}');event.preventDefault()}">
+              <button class="btn btn-secondary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Note</button>
+            </div>
+          </div>
         </div>`;
       }).join('')}
     </div>`;
   }
 
-  // Tracking numbers
-  const trackingHtml = (item.trackingNumbers||[]).map((t,i) => `
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-      <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${escH(t)}</span>
-      <button onclick="removeTrackingNumber('${pid}','${spId}','${itemId}',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button>
-    </div>`).join('');
-
-  // Links
+  // ── Item-level links ──
   const linksHtml = (item.links||[]).map((l,i) => `
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
       <a href="${escH(l)}" target="_blank" style="font-family:var(--font-b);font-size:12px;color:var(--russet);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px" onclick="event.stopPropagation()">${escH(l)}</a>
-      <button onclick="removeItemLink('${pid}','${spId}','${itemId}',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button>
+      <button onclick="removeItemLink('${pid}','${spId}','${itemId}','',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button>
     </div>`).join('');
 
-  // Activity log
-  const activityHtml = (item.activityLog||[]).map(note => {
-    const d = new Date(note.timestamp);
-    const dateStr = d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    return `
-    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <span style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">${escH(note.author)}</span>
-        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${dateStr}</span>
-      </div>
-      <div style="font-size:12.5px;color:var(--text-dark);margin-top:4px;font-family:var(--font-b);line-height:1.5">${escH(note.text)}</div>
-    </div>`;
-  }).join('');
+  // ── All activity notes (item + components), sorted by timestamp ──
+  const allNotes = (item.activityLog||[]).slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const activityHtml = allNotes.map(note => renderActivityNote(note, pid, spId, itemId)).join('');
 
   return `
   <div>
@@ -2633,12 +2887,11 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
-
-      <!-- Left: Status & Details -->
+      <!-- Left: Status & Dates -->
       <div>
         ${!isAllowance ? `
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
-          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Status</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Item Status</div>
           <select class="fi fsel" style="font-size:13px;color:${statusColor};margin-bottom:10px" onchange="savePMField('${pid}','${spId}','${itemId}','status',this.value);renderProjectDetail()">${statusOpts}</select>
           <div style="height:6px;background:rgba(91,45,34,0.08);border-radius:3px;overflow:hidden;margin-bottom:10px">
             <div style="height:100%;width:${statusIdx>=0?((statusIdx+1)/STATUSES.length*100):0}%;background:${statusColor};border-radius:3px;transition:width 0.3s ease"></div>
@@ -2665,45 +2918,45 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         </div>
 
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
-          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Tracking Numbers</div>
-          ${trackingHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:6px">No tracking numbers yet.</div>'}
-          <div style="display:flex;gap:6px;margin-top:6px">
-            <input type="text" class="fi" id="pm-tracking-input" placeholder="Add tracking #" style="flex:1;font-size:12px;padding:6px 8px" onkeydown="if(event.key==='Enter'){addTrackingNumber('${pid}','${spId}','${itemId}');event.preventDefault()}">
-            <button class="btn btn-secondary btn-sm" onclick="addTrackingNumber('${pid}','${spId}','${itemId}')">Add</button>
-          </div>
+          ${renderTrackingSection(pid, spId, itemId, '', item.trackingNumbers)}
         </div>
-
-        ${compSection}
       </div>
 
-      <!-- Right: Description, Links, Notes -->
+      <!-- Right: Description, Links, Files -->
       <div>
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Description</div>
-          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px" placeholder="Detailed description, specs, sizing, options…" onchange="savePMField('${pid}','${spId}','${itemId}','description',this.value)">${escH(item.description||'')}</textarea>
+          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px" placeholder="Detailed description, specs, sizing…" onchange="savePMField('${pid}','${spId}','${itemId}','description',this.value)">${escH(item.description||'')}</textarea>
         </div>
 
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Links</div>
           ${linksHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:6px">No links yet.</div>'}
           <div style="display:flex;gap:6px;margin-top:6px">
-            <input type="text" class="fi" id="pm-link-input" placeholder="https://…" style="flex:1;font-size:12px;padding:6px 8px" onkeydown="if(event.key==='Enter'){addItemLink('${pid}','${spId}','${itemId}');event.preventDefault()}">
-            <button class="btn btn-secondary btn-sm" onclick="addItemLink('${pid}','${spId}','${itemId}')">Add</button>
+            <input type="text" class="fi" id="pm-link-input" placeholder="https://…" style="flex:1;font-size:12px;padding:6px 8px" onkeydown="if(event.key==='Enter'){addItemLink('${pid}','${spId}','${itemId}','');event.preventDefault()}">
+            <button class="btn btn-secondary btn-sm" onclick="addItemLink('${pid}','${spId}','${itemId}','')">Add</button>
           </div>
         </div>
 
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border)">
-          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Notes & Activity</div>
-          <div style="display:flex;gap:6px;margin-bottom:12px">
-            <textarea class="fi" id="pm-note-input" style="resize:vertical;min-height:44px;font-size:12px;flex:1" placeholder="Add a note…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){addActivityNote('${pid}','${spId}','${itemId}');event.preventDefault()}"></textarea>
-            <button class="btn btn-primary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}')" style="align-self:flex-end">Post</button>
-          </div>
-          <div style="max-height:400px;overflow-y:auto">
-            ${activityHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:10px 0">No notes yet. Add the first one above.</div>'}
-          </div>
+          ${renderFilesSection(pid, spId, itemId, '', item.files)}
         </div>
       </div>
+    </div>
 
+    <!-- Components (constructed orders) -->
+    ${compSection}
+
+    <!-- Notes & Activity (all notes from item + components, unified feed) -->
+    <div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);padding-bottom:6px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Notes & Activity</div>
+      <div style="display:flex;gap:6px;margin-bottom:14px">
+        <textarea class="fi" id="pm-note-input" style="resize:vertical;min-height:44px;font-size:12px;flex:1" placeholder="Add a note about this item…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){addActivityNote('${pid}','${spId}','${itemId}','');event.preventDefault()}"></textarea>
+        <button class="btn btn-primary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}','')" style="align-self:flex-end">Post</button>
+      </div>
+      <div style="max-height:500px;overflow-y:auto">
+        ${activityHtml || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:10px 0">No notes yet. Add the first one above, or add notes on individual components.</div>'}
+      </div>
     </div>
   </div>`;
 }
