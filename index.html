@@ -3202,18 +3202,20 @@ function hideDocContextMenu() {
 
 function openDocPropertiesModal() {
   if (!_docCtx) return;
-  hideDocContextMenu();
-  const proj = getProject(_docCtx.pid);
-  const file = (proj?.files||[]).find(f => f.id === _docCtx.fileId);
+  const ctx = {..._docCtx};
+  const menu = $c('doc-context-menu');
+  if (menu) menu.style.display = 'none';
+  const proj = getProject(ctx.pid);
+  const file = (proj?.files||[]).find(f => f.id === ctx.fileId);
   if (!file) return;
 
-  $c('dp-pid').value = _docCtx.pid;
-  $c('dp-fid').value = _docCtx.fileId;
+  $c('dp-pid').value = ctx.pid;
+  $c('dp-fid').value = ctx.fileId;
   $c('dp-name').value = file.displayName || file.name;
   $c('dp-original').textContent = file.name;
 
   // Render folder checkboxes
-  const folders = getProjectFolders(_docCtx.pid);
+  const folders = getProjectFolders(ctx.pid);
   const fileFolders = file.folders || [];
   $c('dp-folders').innerHTML = folders.length ? folders.map(f => `
     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:3px 0">
