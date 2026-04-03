@@ -2440,6 +2440,7 @@ function renderItemRow(item, spId, pid) {
           <td></td>
           <td style="padding-left:28px">
             <span style="font-size:12px;color:var(--text-dark)">${escH(c.name||'')}</span>
+            ${c.allowance ? '<span class="allowance-badge">A</span>' : ''}
             ${cTypeLabel ? `<span class="comp-type-label">${cTypeLabel}</span>` : ''}
             ${qtyNote}
             ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
@@ -2494,7 +2495,7 @@ function renderItemRow(item, spId, pid) {
         ${!isAllowance && item.room ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.room)}</div>` : ''}
         ${!isAllowance && item.category ? `<div style="font-size:10px;color:var(--text-light);margin-top:1px">${escH(item.category)}</div>` : ''}
       </td>
-      <td class="hide-client"><div class="cell-ro">${!isAllowance && net>0?fmt(net):'—'}</div></td>
+      <td class="hide-client"><div class="cell-ro">${net>0?fmt(net):'—'}</div></td>
       <td><div class="cell-ro calc">${client>0?fmt(client):'—'}</div></td>
       <td><div class="cell-ro">${item.type==='constructed'?'—':(qty ? qty + (item.qtyUnit ? ' '+item.qtyUnit : '') : '—')}</div></td>
       <td><div class="cell-ro">${total>0?fmt(total):'—'}</div></td>
@@ -2592,11 +2593,7 @@ function renderTotals(prop, pid) {
         <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(t.total)}</td></tr>
       </table>
     </div>
-    <div style="text-align:right;margin-top:6px">
-      <span class="hide-client" style="font-size:10px;color:var(--text-light);font-style:italic">
-        Markup: ${proj?.markupPct || 25}%${proj?.state ? ' · '+escH(proj.state) : ''}${proj?.taxRate ? ' · Tax '+proj.taxRate+'%' : ''}${proj?.taxFreight ? ' · Freight taxed' : ''}
-      </span>
-    </div>`;
+    `;
 }
 
 // ─── PROPOSAL MUTATIONS ───────────────────────────────────
@@ -2703,7 +2700,7 @@ function populateRoomSelect(pid) {
 function addModalComponent(comp) {
   _modalComponents.push(comp || {
     id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1, qtyUnit: '',
-    billCostOnly: false, adjustMarkup: null, note: ''
+    allowance: false, billCostOnly: false, adjustMarkup: null, note: ''
   });
   renderModalComponents();
 }
@@ -2744,7 +2741,11 @@ function renderModalComponents() {
           <select class="fi fsel comp-unit" style="font-size:11px;padding:5px 6px"><option value="">—</option>${qtyUnitOptions(c.qtyUnit||'')}</select>
         </div>
       </div>
-      <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
+      <div style="display:flex;gap:12px;align-items:center;margin-top:4px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:#b33">
+          <input type="checkbox" class="comp-allowance" ${c.allowance ? 'checked' : ''} style="accent-color:#b33;width:13px;height:13px">
+          Allowance
+        </label>
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
           <input type="checkbox" class="comp-billcost" ${c.billCostOnly ? 'checked' : ''} style="accent-color:var(--russet);width:13px;height:13px">
           Bill cost only
@@ -2783,6 +2784,7 @@ function readModalComponentsFromDOM() {
       _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
       _modalComponents[i].qty = parseFloat(el.querySelector('.comp-qty')?.value) || 1;
       _modalComponents[i].qtyUnit = el.querySelector('.comp-unit')?.value || '';
+      _modalComponents[i].allowance = el.querySelector('.comp-allowance')?.checked || false;
       _modalComponents[i].billCostOnly = el.querySelector('.comp-billcost')?.checked || false;
       const adj = el.querySelector('.comp-adj')?.value;
       _modalComponents[i].adjustMarkup = adj !== '' && adj != null ? parseFloat(adj) : null;
