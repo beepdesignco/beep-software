@@ -1926,6 +1926,15 @@ const STATUS_FLAGS = [
   { v:'in_production',   l:'In Production',   color:'#c47a20' },
 ];
 
+const SHIPPING_STATUSES = [
+  { v:'needs_payment', l:'Needs Payment', color:'#c47a20' },
+  { v:'paid_in_full',  l:'Paid in Full',  color:'#1a6e3a' },
+];
+
+function isShippingComp(c) { return c.componentType === 'shipping'; }
+function getShippingStatusColor(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).color || '#c47a20'; }
+function getShippingStatusLabel(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).l || 'Needs Payment'; }
+
 const DEFAULT_STATUS_COLORS = {
   proposed:           '#8a8a8a',
   approved:           '#2d7a4a',
@@ -2833,14 +2842,15 @@ function renderPMItemCard(item, sp, pid) {
       ${noteCount ? `<span>💬 ${noteCount} note${noteCount!==1?'s':''}</span>` : ''}
       ${item.invoicePhase ? `<span>Invoice: ${escH(item.invoicePhase)}</span>` : ''}
     </div>
-    ${item.type === 'constructed' && (item.components||[]).length ? `
-    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
-      ${(item.components||[]).map(c => {
+    ${item.type === 'constructed' && (item.components||[]).length ? (() => {
+      const nonShip = (item.components||[]).filter(c => !isShippingComp(c));
+      const shipComps = (item.components||[]).filter(c => isShippingComp(c));
+      let compHtml = '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">';
+      compHtml += nonShip.map(c => {
         const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
         const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
-        const cStatus = STATUSES.find(s => s.v === (c.status||'proposed'));
         const cStatusColor = getStatusColor(c.status||'proposed');
-        const cStatusLabel = cStatus?.l || 'Proposed';
+        const cStatusLabel = STATUSES.find(s => s.v === (c.status||'proposed'))?.l || 'Proposed';
         const cMatch = compMatchesFilter(c);
         const dimStyle = !cMatch ? 'opacity:0.35;filter:grayscale(1);' : '';
         return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 18px;font-size:11px;${dimStyle}transition:opacity 0.2s">
@@ -2851,8 +2861,33 @@ function renderPMItemCard(item, sp, pid) {
           <span style="font-size:10px;font-family:var(--font-b);color:${cStatusColor};white-space:nowrap">${cStatusLabel}</span>
           <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):''}</span>
         </div>`;
-      }).join('')}
-    </div>` : ''}
+      }).join('');
+      if (shipComps.length) {
+        const shipTotal = shipComps.reduce((s,c) => s + parse$(c.netCost) * (parseFloat(c.qty)||1), 0);
+        compHtml += `<details style="margin-top:6px;padding-left:18px">
+          <summary style="font-size:10px;font-family:var(--font-b);color:var(--text-mid);cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:4px 0">
+            <span style="font-size:8px">▶</span> Shipping & Handling (${shipComps.length}) · ${fmt(shipTotal)}
+          </summary>
+          ${shipComps.map(c => {
+            const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+            const sStatus = c.status || 'needs_payment';
+            const sColor = getShippingStatusColor(sStatus);
+            const sLabel = getShippingStatusLabel(sStatus);
+            const cMatch = compMatchesFilter(c);
+            const dimStyle = !cMatch ? 'opacity:0.35;filter:grayscale(1);' : '';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px;${dimStyle}transition:opacity 0.2s">
+              <span class="status-dot" style="background:${sColor};width:6px;height:6px"></span>
+              <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}</span>
+              ${c.contact ? `<span style="color:var(--text-light);font-size:10px">${escH(c.contact)}</span>` : ''}
+              <span style="font-size:10px;font-family:var(--font-b);color:${sColor};white-space:nowrap">${sLabel}</span>
+              <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):''}</span>
+            </div>`;
+          }).join('')}
+        </details>`;
+      }
+      compHtml += '</div>';
+      return compHtml;
+    })() : ''}
   </div>`;
 }
 
@@ -2941,7 +2976,10 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       ${item.components.map(c => {
         const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
         const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
-        const cStatusOpts = STATUSES.map(s => `<option value="${s.v}" ${(c.status||'proposed')===s.v?'selected':''}>${s.l}</option>`).join('');
+        const cIsShipping = isShippingComp(c);
+        const cStatusList = cIsShipping ? SHIPPING_STATUSES : STATUSES;
+        const cDefaultStatus = cIsShipping ? 'needs_payment' : 'proposed';
+        const cStatusOpts = cStatusList.map(s => `<option value="${s.v}" ${(c.status||cDefaultStatus)===s.v?'selected':''}>${s.l}</option>`).join('');
         const cLinksHtml = (c.links||[]).map((l,i) => `
           <div style="display:inline-flex;align-items:center;gap:4px;margin-right:6px">
             <a href="${escH(l)}" target="_blank" style="font-size:11px;color:var(--russet);text-decoration:none" onclick="event.stopPropagation()">${escH(l).substring(0,40)}${l.length>40?'…':''}</a>
