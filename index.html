@@ -2830,7 +2830,7 @@ function renderPDManagement(proj, pid) {
     if (!items.length) return;
     hasResults = true;
 
-    const isExpanded = !!_pmExpandedSpaces[sp.id];
+    const isExpanded = _pmStatusFilters.length || _pmSearch ? (_pmExpandedSpaces[sp.id] !== false) : !!_pmExpandedSpaces[sp.id];
     const itemCount = items.length;
 
     html += `
