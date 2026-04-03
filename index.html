@@ -1,0 +1,3191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BEEP HQ — Studio Management</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   BEEP HQ — Design System
+   Colors: Pecan #5B2D22 · Mahogany #3F151C · Russet #963D27 · Cloud #F3E8D6
+   Fonts: Barlow Condensed (Knockout sub) · Courier Prime (body)
+   ============================================================ */
+ 
+:root {
+  --pecan:       #5B2D22;
+  --mahogany:    #3F151C;
+  --russet:      #963D27;
+  --cloud:       #F3E8D6;
+  --cloud-dark:  #E6D5BF;
+  --white:       #FFFFFF;
+  --text-dark:   #2A1008;
+  --text-mid:    #7A4535;
+  --text-light:  rgba(91,45,34,0.45);
+  --border:      rgba(91,45,34,0.14);
+  --border-mid:  rgba(91,45,34,0.22);
+ 
+  --font-h: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --font-b: 'Courier Prime', 'Courier New', monospace;
+ 
+  --sidebar-w: 226px;
+  --r:  4px;
+  --rl: 8px;
+  --shadow:   0 2px 8px rgba(63,21,28,0.10);
+  --shadow-lg:0 6px 24px rgba(63,21,28,0.18);
+  --t: all 0.18s ease;
+}
+ 
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+ 
+html,body { height:100%; font-family:var(--font-b); background:var(--cloud); color:var(--text-dark); font-size:14px; line-height:1.5; }
+ 
+/* ===================== LAYOUT ===================== */
+ 
+.app { display:flex; height:100vh; overflow:hidden; }
+ 
+/* ===================== SIDEBAR ===================== */
+ 
+.sidebar {
+  width:var(--sidebar-w);
+  background:var(--mahogany);
+  color:var(--cloud);
+  display:flex;
+  flex-direction:column;
+  flex-shrink:0;
+  overflow-y:auto;
+  user-select:none;
+}
+.sidebar-logo {
+  padding:26px 22px 20px;
+  border-bottom:1px solid rgba(243,232,214,0.1);
+}
+.sidebar-logo .wordmark {
+  font-family:var(--font-h);
+  font-weight:900;
+  font-size:30px;
+  letter-spacing:0.06em;
+  color:var(--cloud);
+  text-transform:uppercase;
+  line-height:1;
+}
+.sidebar-logo .tagline {
+  font-size:10px;
+  color:rgba(243,232,214,0.42);
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  margin-top:4px;
+  font-family:var(--font-b);
+}
+.sidebar-nav { padding:14px 0; flex:1; }
+ 
+.nav-section-label {
+  font-size:9px;
+  letter-spacing:0.16em;
+  text-transform:uppercase;
+  color:rgba(243,232,214,0.3);
+  padding:12px 22px 5px;
+  font-family:var(--font-b);
+}
+.nav-item {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px 22px;
+  cursor:pointer;
+  transition:var(--t);
+  border-left:3px solid transparent;
+  color:rgba(243,232,214,0.62);
+}
+.nav-item:hover { background:rgba(243,232,214,0.06); color:var(--cloud); }
+.nav-item.active { background:rgba(150,61,39,0.22); border-left-color:var(--russet); color:var(--cloud); }
+.nav-icon { font-size:14px; width:18px; text-align:center; flex-shrink:0; }
+.nav-label { font-family:var(--font-h); font-weight:700; font-size:13.5px; letter-spacing:0.05em; text-transform:uppercase; }
+.nav-soon { font-size:9px; margin-left:auto; letter-spacing:0.08em; opacity:0.5; font-family:var(--font-b); }
+ 
+.sidebar-footer {
+  padding:14px 22px;
+  border-top:1px solid rgba(243,232,214,0.08);
+  font-size:10px;
+  color:rgba(243,232,214,0.25);
+  font-family:var(--font-b);
+  line-height:1.6;
+}
+ 
+/* ===================== MAIN ===================== */
+ 
+.main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+ 
+.view { display:none; flex:1; flex-direction:column; overflow:hidden; }
+.view.active { display:flex; }
+ 
+.page-header {
+  background:var(--cloud);
+  border-bottom:1px solid var(--border);
+  padding:18px 30px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-shrink:0;
+}
+.page-title {
+  font-family:var(--font-h);
+  font-weight:900;
+  font-size:34px;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  color:var(--mahogany);
+  line-height:1;
+}
+.page-sub { font-size:11.5px; color:var(--text-mid); margin-top:3px; font-style:italic; }
+ 
+/* ===================== BUTTONS ===================== */
+ 
+.btn {
+  font-family:var(--font-h);
+  font-weight:700;
+  font-size:12.5px;
+  letter-spacing:0.07em;
+  text-transform:uppercase;
+  padding:9px 18px;
+  border:none;
+  border-radius:var(--r);
+  cursor:pointer;
+  transition:var(--t);
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  white-space:nowrap;
+}
+.btn-primary { background:var(--russet); color:var(--cloud); }
+.btn-primary:hover { background:#7a3220; transform:translateY(-1px); box-shadow:var(--shadow); }
+.btn-secondary { background:transparent; color:var(--pecan); border:1.5px solid var(--pecan); }
+.btn-secondary:hover { background:var(--pecan); color:var(--cloud); }
+.btn-ghost { background:transparent; color:var(--text-mid); padding:7px 12px; }
+.btn-ghost:hover { background:rgba(91,45,34,0.08); color:var(--pecan); }
+.btn-sm { font-size:11px; padding:6px 14px; }
+.btn-danger { background:transparent; color:#b33; border:1.5px solid #b33; }
+.btn-danger:hover { background:#b33; color:white; }
+.btn-dark { background:var(--mahogany); color:var(--cloud); }
+.btn-dark:hover { background:#2a0d12; }
+ 
+/* ===================== PIPELINE / KANBAN ===================== */
+ 
+.pipeline-body {
+  flex:1;
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding:22px 28px;
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+}
+.pipeline-body::-webkit-scrollbar { height:6px; }
+.pipeline-body::-webkit-scrollbar-track { background:transparent; }
+.pipeline-body::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.18); border-radius:3px; }
+ 
+.kanban-col {
+  width:232px;
+  min-width:232px;
+  display:flex;
+  flex-direction:column;
+  background:rgba(91,45,34,0.055);
+  border-radius:var(--rl);
+  overflow:hidden;
+  max-height:calc(100vh - 148px);
+  border:1.5px solid rgba(91,45,34,0.09);
+}
+.kanban-col.purgatory-col {
+  background:rgba(63,21,28,0.07);
+  border-color:rgba(63,21,28,0.14);
+}
+.kanban-col.mini-col {
+  border:1.5px dashed rgba(150,61,39,0.28);
+  background:rgba(150,61,39,0.04);
+}
+ 
+.col-header {
+  padding:12px 14px 10px;
+  border-bottom:2px solid rgba(91,45,34,0.1);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-shrink:0;
+}
+.purgatory-col .col-header { border-bottom-color:rgba(63,21,28,0.15); }
+.mini-col .col-header { border-bottom-color:rgba(150,61,39,0.2); }
+ 
+.col-title {
+  font-family:var(--font-h);
+  font-weight:800;
+  font-size:12.5px;
+  text-transform:uppercase;
+  letter-spacing:0.09em;
+  color:var(--pecan);
+}
+.purgatory-col .col-title { color:var(--mahogany); }
+.mini-col .col-title { color:var(--russet); }
+ 
+.col-count {
+  background:rgba(91,45,34,0.1);
+  color:var(--pecan);
+  border-radius:10px;
+  padding:1px 8px;
+  font-size:11px;
+  font-family:var(--font-h);
+  font-weight:700;
+  letter-spacing:0.04em;
+}
+ 
+.col-cards {
+  flex:1;
+  overflow-y:auto;
+  padding:10px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-height:60px;
+}
+.col-cards::-webkit-scrollbar { width:4px; }
+.col-cards::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.15); border-radius:2px; }
+.col-cards.drag-over { background:rgba(150,61,39,0.07); border-radius:4px; }
+ 
+.proj-card {
+  background:var(--white);
+  border-radius:var(--r);
+  padding:11px 13px;
+  cursor:pointer;
+  transition:var(--t);
+  box-shadow:0 1px 3px rgba(63,21,28,0.07);
+  border-left:3px solid transparent;
+}
+.proj-card:hover { box-shadow:var(--shadow); transform:translateY(-1px); border-left-color:var(--russet); }
+.proj-card.dragging { opacity:0.45; transform:rotate(1.5deg); }
+ 
+.card-name {
+  font-family:var(--font-h);
+  font-weight:700;
+  font-size:13.5px;
+  text-transform:uppercase;
+  letter-spacing:0.03em;
+  color:var(--mahogany);
+  line-height:1.2;
+}
+.card-client { font-size:11.5px; color:var(--text-mid); margin-top:2px; }
+.card-meta { display:flex; align-items:center; gap:6px; margin-top:7px; flex-wrap:wrap; }
+ 
+.badge {
+  font-size:9px;
+  font-family:var(--font-h);
+  font-weight:700;
+  letter-spacing:0.09em;
+  text-transform:uppercase;
+  padding:2px 8px;
+  border-radius:10px;
+}
+.badge-res { background:rgba(91,45,34,0.1); color:var(--pecan); }
+.badge-com { background:rgba(150,61,39,0.12); color:var(--russet); }
+.card-city { font-size:10px; color:rgba(122,69,53,0.55); font-style:italic; }
+.card-prop-count { font-size:10px; color:var(--russet); margin-top:5px; font-family:var(--font-b); }
+ 
+.col-footer { padding:8px 10px; flex-shrink:0; }
+.add-card-btn {
+  width:100%;
+  background:transparent;
+  border:1.5px dashed rgba(91,45,34,0.22);
+  color:rgba(91,45,34,0.42);
+  font-family:var(--font-b);
+  font-size:12px;
+  padding:7px;
+  border-radius:var(--r);
+  cursor:pointer;
+  transition:var(--t);
+  text-align:center;
+}
+.add-card-btn:hover { border-color:var(--russet); color:var(--russet); background:rgba(150,61,39,0.04); }
+ 
+.empty-state {
+  text-align:center;
+  padding:18px 10px;
+  color:rgba(91,45,34,0.35);
+  font-size:11px;
+  line-height:1.7;
+  font-style:italic;
+  font-family:var(--font-b);
+}
+ 
+/* ===================== PROPOSAL ===================== */
+ 
+.client-view-banner {
+  display:none;
+  background:var(--russet);
+  color:var(--cloud);
+  text-align:center;
+  padding:7px;
+  font-family:var(--font-b);
+  font-size:11px;
+  letter-spacing:0.09em;
+  text-transform:uppercase;
+}
+.client-view-active .client-view-banner { display:block; }
+.client-view-active .hide-client { display:none !important; }
+ 
+.proposal-toolbar {
+  background:var(--cloud);
+  border-bottom:1px solid var(--border);
+  padding:10px 30px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-shrink:0;
+  flex-wrap:wrap;
+}
+.toolbar-label {
+  font-size:10px;
+  color:var(--text-mid);
+  font-family:var(--font-b);
+  letter-spacing:0.07em;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+.proj-select {
+  font-family:var(--font-b);
+  font-size:13px;
+  color:var(--text-dark);
+  background:white;
+  border:1.5px solid var(--border-mid);
+  border-radius:var(--r);
+  padding:7px 30px 7px 10px;
+  appearance:none;
+  cursor:pointer;
+  min-width:220px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235B2D22' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 10px center;
+}
+.proj-select:focus { outline:none; border-color:var(--russet); box-shadow:0 0 0 3px rgba(150,61,39,0.1); }
+ 
+.client-toggle {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-left:auto;
+  font-size:11px;
+  font-family:var(--font-b);
+  color:var(--text-mid);
+  cursor:pointer;
+  user-select:none;
+}
+.toggle-sw {
+  width:34px;
+  height:19px;
+  background:rgba(91,45,34,0.18);
+  border-radius:10px;
+  position:relative;
+  transition:var(--t);
+  flex-shrink:0;
+}
+.toggle-sw.on { background:var(--russet); }
+.toggle-sw::after {
+  content:'';
+  position:absolute;
+  width:15px;
+  height:15px;
+  background:white;
+  border-radius:50%;
+  top:2px;
+  left:2px;
+  transition:var(--t);
+}
+.toggle-sw.on::after { left:17px; }
+ 
+.proposal-body { flex:1; overflow-y:auto; padding:22px 30px 40px; }
+.proposal-body::-webkit-scrollbar { width:6px; }
+.proposal-body::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.15); border-radius:3px; }
+ 
+.prop-header {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  margin-bottom:22px;
+  padding-bottom:16px;
+  border-bottom:1px solid var(--border);
+}
+.prop-project-name {
+  font-family:var(--font-h);
+  font-weight:800;
+  font-size:20px;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  color:var(--mahogany);
+}
+.prop-project-meta { font-size:12px; color:var(--text-mid); margin-top:2px; }
+.prop-view-badge {
+  font-size:10px;
+  font-family:var(--font-b);
+  font-weight:700;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  padding:4px 10px;
+  border-radius:3px;
+}
+.internal-badge { background:rgba(150,61,39,0.12); color:var(--russet); }
+.client-badge { background:rgba(91,45,34,0.08); color:var(--text-mid); }
+ 
+/* Space Section */
+.space-section { margin-bottom:30px; }
+ 
+.space-header {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:6px 0 8px;
+  border-bottom:2.5px solid var(--pecan);
+  margin-bottom:0;
+}
+.space-name-input {
+  font-family:var(--font-h);
+  font-weight:900;
+  font-size:18px;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  color:var(--mahogany);
+  background:transparent;
+  border:none;
+  outline:none;
+  flex:1;
+  min-width:0;
+}
+.space-name-input::placeholder { opacity:0.35; }
+.space-name-input:focus { background:rgba(150,61,39,0.04); border-radius:3px; padding:0 4px; }
+.space-del-btn {
+  background:none;
+  border:none;
+  color:rgba(91,45,34,0.3);
+  font-size:12px;
+  cursor:pointer;
+  padding:4px 8px;
+  border-radius:3px;
+  font-family:var(--font-b);
+  transition:var(--t);
+  white-space:nowrap;
+  opacity:0;
+}
+.space-section:hover .space-del-btn { opacity:1; }
+.space-del-btn:hover { color:#b33; background:rgba(180,50,50,0.08); }
+ 
+/* Table */
+.prop-table { width:100%; border-collapse:collapse; font-size:13px; }
+ 
+.prop-table th {
+  font-family:var(--font-b);
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:0.11em;
+  text-transform:uppercase;
+  color:rgba(91,45,34,0.52);
+  padding:7px 10px;
+  text-align:left;
+  border-bottom:1px solid var(--border-mid);
+  background:rgba(91,45,34,0.035);
+  white-space:nowrap;
+}
+.prop-table th.r { text-align:right; }
+.prop-table td { padding:0; border-bottom:1px solid rgba(91,45,34,0.07); vertical-align:middle; }
+.prop-table tr:hover td { background:rgba(243,232,214,0.45); }
+.prop-table tr.expanded-row td { background:rgba(243,232,214,0.6); }
+ 
+.cell-in {
+  width:100%;
+  background:transparent;
+  border:none;
+  font-family:var(--font-b);
+  font-size:13px;
+  color:var(--text-dark);
+  padding:9px 10px;
+  outline:none;
+}
+.cell-in:focus { background:rgba(150,61,39,0.05); }
+.cell-in.r { text-align:right; }
+ 
+.cell-ro {
+  padding:9px 10px;
+  color:var(--text-dark);
+  text-align:right;
+  font-family:var(--font-b);
+  font-size:13px;
+  white-space:nowrap;
+  pointer-events:none;
+}
+.cell-ro.calc { color:var(--russet); font-weight:700; }
+ 
+.status-sel {
+  background:transparent;
+  border:none;
+  font-family:var(--font-b);
+  font-size:11px;
+  color:var(--text-mid);
+  padding:9px 6px;
+  appearance:none;
+  cursor:pointer;
+  width:100%;
+  outline:none;
+}
+ 
+.row-btns {
+  display:flex;
+  align-items:center;
+  gap:2px;
+  padding:4px 6px;
+  opacity:0;
+  transition:opacity 0.15s;
+}
+tr:hover .row-btns { opacity:1; }
+.row-btn {
+  background:none;
+  border:none;
+  cursor:pointer;
+  color:rgba(91,45,34,0.35);
+  font-size:13px;
+  width:22px;
+  height:22px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:3px;
+  transition:var(--t);
+}
+.row-btn:hover { background:rgba(91,45,34,0.1); color:var(--pecan); }
+.row-btn.expand-btn { font-size:10px; }
+.row-btn.expand-btn.open { color:var(--russet); transform:rotate(180deg); }
+.row-btn.del-btn:hover { color:#b33; background:rgba(180,50,50,0.08); }
+ 
+/* Notes Panel */
+.notes-row { display:none; }
+.notes-row.open { display:table-row; }
+.notes-row td {
+  padding:12px 14px 16px !important;
+  background:rgba(243,232,214,0.55) !important;
+  border-bottom:2px solid rgba(91,45,34,0.1);
+}
+.notes-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr 160px;
+  gap:14px;
+  align-items:start;
+}
+.nf label {
+  font-size:9.5px;
+  letter-spacing:0.11em;
+  text-transform:uppercase;
+  color:var(--text-mid);
+  display:block;
+  margin-bottom:4px;
+  font-family:var(--font-b);
+  font-weight:700;
+}
+.nf textarea, .nf input[type="text"], .nf select {
+  width:100%;
+  background:white;
+  border:1.5px solid rgba(91,45,34,0.14);
+  border-radius:var(--r);
+  font-family:var(--font-b);
+  font-size:12px;
+  color:var(--text-dark);
+  padding:7px 10px;
+  outline:none;
+  transition:var(--t);
+}
+.nf textarea { resize:vertical; min-height:58px; }
+.nf textarea:focus, .nf input:focus, .nf select:focus { border-color:var(--russet); }
+.nf select { appearance:none; cursor:pointer; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%235B2D22' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 8px center; padding-right:24px; }
+.nf .sub-label { margin-top:8px; }
+ 
+.add-item-tr td { padding:6px 10px !important; background:transparent !important; }
+.add-item-btn {
+  background:none;
+  border:none;
+  color:rgba(91,45,34,0.35);
+  font-family:var(--font-b);
+  font-size:11.5px;
+  cursor:pointer;
+  padding:3px 0;
+  transition:var(--t);
+}
+.add-item-btn:hover { color:var(--russet); }
+ 
+/* Totals */
+.prop-totals { margin-top:18px; display:flex; justify-content:flex-end; }
+.totals-tbl { border-collapse:collapse; min-width:290px; }
+.totals-tbl td { padding:6px 10px; font-family:var(--font-b); font-size:13px; }
+.totals-tbl td:first-child { color:var(--text-mid); text-align:right; letter-spacing:0.03em; }
+.totals-tbl td:last-child { text-align:right; color:var(--text-dark); min-width:110px; }
+.totals-tbl .ttl-row td { border-top:2px solid var(--pecan); padding-top:10px; font-family:var(--font-h); font-weight:800; font-size:15px; color:var(--mahogany); letter-spacing:0.04em; text-transform:uppercase; }
+.ttl-in {
+  background:transparent;
+  border:none;
+  border-bottom:1px solid rgba(91,45,34,0.18);
+  font-family:var(--font-b);
+  font-size:13px;
+  color:var(--text-dark);
+  text-align:right;
+  width:110px;
+  padding:2px 0;
+  outline:none;
+}
+.ttl-in:focus { border-bottom-color:var(--russet); }
+ 
+/* ===================== MODALS ===================== */
+ 
+.overlay {
+  display:none;
+  position:fixed;
+  inset:0;
+  background:rgba(63,21,28,0.48);
+  z-index:100;
+  align-items:center;
+  justify-content:center;
+  backdrop-filter:blur(2px);
+}
+.overlay.open { display:flex; }
+.modal {
+  background:var(--cloud);
+  border-radius:var(--rl);
+  padding:30px;
+  width:480px;
+  max-width:calc(100vw - 40px);
+  box-shadow:var(--shadow-lg);
+  position:relative;
+  max-height:90vh;
+  overflow-y:auto;
+}
+.modal-title {
+  font-family:var(--font-h);
+  font-weight:900;
+  font-size:26px;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  color:var(--mahogany);
+  margin-bottom:20px;
+  line-height:1;
+}
+.modal-x {
+  position:absolute;
+  top:14px;
+  right:14px;
+  background:none;
+  border:none;
+  font-size:18px;
+  cursor:pointer;
+  color:var(--text-mid);
+  transition:var(--t);
+  padding:4px;
+  line-height:1;
+}
+.modal-x:hover { color:var(--russet); transform:rotate(90deg); }
+ 
+.fg { margin-bottom:15px; }
+.fl { display:block; font-size:9.5px; letter-spacing:0.13em; text-transform:uppercase; color:var(--text-mid); margin-bottom:5px; font-family:var(--font-b); font-weight:700; }
+.fi {
+  width:100%;
+  background:white;
+  border:1.5px solid rgba(91,45,34,0.18);
+  border-radius:var(--r);
+  font-family:var(--font-b);
+  font-size:13px;
+  color:var(--text-dark);
+  padding:8px 11px;
+  outline:none;
+  transition:var(--t);
+}
+.fi:focus { border-color:var(--russet); box-shadow:0 0 0 3px rgba(150,61,39,0.1); }
+.fi.fsel {
+  appearance:none;
+  cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235B2D22' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 10px center;
+  padding-right:28px;
+}
+.frow { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+ 
+.modal-footer {
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:10px;
+  margin-top:22px;
+  padding-top:18px;
+  border-top:1px solid var(--border);
+}
+ 
+/* ===================== TOAST ===================== */
+ 
+.toast-wrap { position:fixed; bottom:22px; right:22px; z-index:200; display:flex; flex-direction:column; gap:7px; }
+.toast {
+  background:var(--mahogany);
+  color:var(--cloud);
+  padding:11px 16px;
+  border-radius:var(--r);
+  font-family:var(--font-b);
+  font-size:12.5px;
+  box-shadow:var(--shadow-lg);
+  animation:toastIn 0.25s ease;
+  max-width:280px;
+  border-left:3px solid var(--russet);
+}
+@keyframes toastIn {
+  from { transform:translateX(110%); opacity:0; }
+  to   { transform:translateX(0);    opacity:1; }
+}
+ 
+/* ===================== MISC ===================== */
+ 
+.placeholder-view {
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  flex:1;
+  padding:60px 40px;
+  text-align:center;
+  color:rgba(91,45,34,0.35);
+}
+.placeholder-view .big-label {
+  font-family:var(--font-h);
+  font-size:52px;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  opacity:0.28;
+  line-height:1.1;
+  margin-bottom:12px;
+}
+.placeholder-view .small-label {
+  font-size:13px;
+  font-style:italic;
+  opacity:0.7;
+}
+ 
+.divider { height:1px; background:var(--border); margin:6px 0; }
+ 
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.18); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:rgba(91,45,34,0.3); }
+ 
+/* ===================== CONTACTS ===================== */
+ 
+.contacts-toolbar {
+  background:var(--cloud);
+  border-bottom:1px solid var(--border);
+  padding:10px 30px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-shrink:0;
+  flex-wrap:wrap;
+}
+.search-in {
+  font-family:var(--font-b);
+  font-size:13px;
+  color:var(--text-dark);
+  background:white;
+  border:1.5px solid var(--border-mid);
+  border-radius:var(--r);
+  padding:7px 12px 7px 32px;
+  outline:none;
+  transition:var(--t);
+  width:220px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Ccircle cx='6' cy='6' r='4' stroke='%235B2D22' stroke-width='1.5' fill='none' opacity='.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13' stroke='%235B2D22' stroke-width='1.5' stroke-linecap='round' opacity='.5'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:10px center;
+}
+.search-in:focus { border-color:var(--russet); width:280px; }
+ 
+.view-tabs { display:flex; gap:2px; background:rgba(91,45,34,0.07); border-radius:var(--r); padding:2px; }
+.view-tab {
+  font-family:var(--font-h);
+  font-weight:700;
+  font-size:11px;
+  letter-spacing:0.07em;
+  text-transform:uppercase;
+  padding:5px 14px;
+  border:none;
+  background:transparent;
+  color:var(--text-mid);
+  border-radius:3px;
+  cursor:pointer;
+  transition:var(--t);
+  white-space:nowrap;
+}
+.view-tab.active { background:white; color:var(--mahogany); box-shadow:0 1px 3px rgba(63,21,28,0.1); }
+.view-tab:hover:not(.active) { color:var(--pecan); }
+ 
+.contacts-body { flex:1; overflow-y:auto; padding:22px 30px 40px; }
+.contacts-body::-webkit-scrollbar { width:6px; }
+.contacts-body::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.15); border-radius:3px; }
+ 
+/* All Contacts grid */
+.contacts-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));
+  gap:12px;
+}
+.contact-card {
+  background:white;
+  border-radius:var(--r);
+  padding:14px 16px;
+  cursor:pointer;
+  transition:var(--t);
+  box-shadow:0 1px 3px rgba(63,21,28,0.07);
+  border-left:3px solid transparent;
+  position:relative;
+}
+.contact-card:hover { box-shadow:var(--shadow); transform:translateY(-1px); border-left-color:var(--russet); }
+.contact-name { font-family:var(--font-h); font-weight:700; font-size:15px; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); line-height:1.2; }
+.contact-title { font-size:11.5px; color:var(--text-mid); margin-top:1px; }
+.contact-company { font-size:12px; color:var(--pecan); margin-top:4px; font-weight:700; font-family:var(--font-b); }
+.contact-showroom { font-size:11px; color:var(--text-mid); font-style:italic; }
+.contact-links { display:flex; gap:10px; margin-top:8px; }
+.contact-link {
+  font-size:11px;
+  color:var(--russet);
+  text-decoration:none;
+  font-family:var(--font-b);
+  transition:var(--t);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width:140px;
+}
+.contact-link:hover { text-decoration:underline; }
+.contact-cats { display:flex; gap:4px; flex-wrap:wrap; margin-top:8px; }
+.cat-pill {
+  font-size:9px;
+  font-family:var(--font-h);
+  font-weight:700;
+  letter-spacing:0.07em;
+  text-transform:uppercase;
+  padding:2px 7px;
+  border-radius:10px;
+  background:rgba(91,45,34,0.08);
+  color:var(--pecan);
+}
+ 
+/* Grouped views */
+.group-block { margin-bottom:24px; }
+.group-label {
+  font-family:var(--font-h);
+  font-weight:900;
+  font-size:16px;
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  color:var(--mahogany);
+  padding:6px 0 8px;
+  border-bottom:2px solid var(--pecan);
+  margin-bottom:8px;
+  display:flex;
+  align-items:baseline;
+  gap:10px;
+}
+.group-count { font-size:11px; color:var(--text-mid); font-weight:400; font-family:var(--font-b); letter-spacing:0; }
+.group-rows { display:flex; flex-direction:column; gap:1px; }
+.contact-row {
+  display:grid;
+  grid-template-columns:200px 160px 180px 1fr auto;
+  align-items:center;
+  gap:12px;
+  padding:9px 12px;
+  background:white;
+  border-radius:var(--r);
+  cursor:pointer;
+  transition:var(--t);
+  font-size:13px;
+}
+.contact-row:hover { background:var(--cloud); box-shadow:var(--shadow); }
+.contact-row .cr-name { font-family:var(--font-h); font-weight:700; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); font-size:13px; }
+.contact-row .cr-title { color:var(--text-mid); font-size:12px; }
+.contact-row .cr-email { color:var(--russet); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.contact-row .cr-cats { display:flex; gap:3px; flex-wrap:wrap; }
+ 
+/* No results */
+.no-results { text-align:center; padding:50px 20px; color:rgba(91,45,34,0.35); font-style:italic; font-size:13px; }
+ 
+/* Category checkbox grid in modal */
+.cat-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:6px; }
+.cat-check { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.cat-check input[type="checkbox"] { accent-color:var(--russet); width:14px; height:14px; cursor:pointer; flex-shrink:0; }
+.cat-check span { font-size:12px; color:var(--text-dark); font-family:var(--font-b); }
+ 
+/* Type badges */
+.type-badge { font-size:9px; font-family:var(--font-h); font-weight:700; letter-spacing:0.07em; text-transform:uppercase; padding:2px 8px; border-radius:10px; white-space:nowrap; }
+.type-badge.type-showroom { background:rgba(150,61,39,0.12); color:var(--russet); }
+.type-badge.type-vendor { background:rgba(91,45,34,0.1); color:var(--pecan); }
+.type-badge.type-workroom { background:rgba(63,21,28,0.12); color:var(--mahogany); }
+.type-badge.type-trade_service { background:rgba(40,80,110,0.1); color:#2d5a7a; }
+.type-badge.type-other { background:rgba(100,100,100,0.1); color:#666; }
+ 
+/* Type selector in modal */
+.type-selector { display:flex; gap:5px; flex-wrap:wrap; }
+.type-sel-btn { font-family:var(--font-h); font-weight:700; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; padding:6px 14px; border:1.5px solid var(--border-mid); border-radius:var(--r); cursor:pointer; background:transparent; color:var(--text-mid); transition:var(--t); }
+.type-sel-btn.active { background:var(--russet); color:var(--cloud); border-color:var(--russet); }
+.type-sel-btn:hover:not(.active) { border-color:var(--pecan); color:var(--pecan); }
+ 
+/* POC in cards */
+.poc-list { margin-top:8px; border-top:1px solid var(--border); padding-top:8px; display:flex; flex-direction:column; gap:6px; }
+.poc-row { display:flex; flex-direction:column; gap:1px; }
+.poc-name { font-family:var(--font-b); font-size:12px; font-weight:700; color:var(--text-dark); }
+.poc-role { font-size:11px; color:var(--text-mid); font-style:italic; }
+.poc-email { font-size:11px; color:var(--russet); text-decoration:none; }
+.poc-email:hover { text-decoration:underline; }
+ 
+/* Brand pills on cards */
+.lines-wrap { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
+.brand-pill { font-size:9px; font-family:var(--font-b); padding:2px 7px; border-radius:10px; background:rgba(150,61,39,0.07); color:var(--russet); border:1px solid rgba(150,61,39,0.18); }
+ 
+/* Brand entry (in modal) — expandable with per-brand category picker */
+.brand-entry { border:1px solid rgba(150,61,39,0.2); border-radius:var(--r); margin-bottom:6px; overflow:hidden; }
+.brand-entry-hd { display:flex; align-items:center; gap:6px; padding:6px 10px; background:rgba(150,61,39,0.06); }
+.brand-nm { font-family:var(--font-b); font-size:12px; color:var(--russet); font-weight:700; flex:1; }
+.brand-cats-toggle { background:none; border:1px solid rgba(150,61,39,0.25); border-radius:3px; cursor:pointer; font-size:10px; font-family:var(--font-b); color:var(--text-mid); padding:2px 6px; transition:var(--t); white-space:nowrap; }
+.brand-cats-toggle:hover { border-color:var(--russet); color:var(--russet); }
+.brand-cats-toggle.open { background:rgba(150,61,39,0.1); color:var(--russet); border-color:var(--russet); }
+.brand-rm-btn { background:none; border:none; cursor:pointer; color:rgba(150,61,39,0.4); font-size:14px; padding:0 2px; line-height:1; transition:var(--t); }
+.brand-rm-btn:hover { color:var(--russet); }
+.brand-cats-panel { padding:8px 10px 10px; border-top:1px solid rgba(150,61,39,0.12); background:#fdfaf7; }
+.brand-sub-pills { display:flex; flex-wrap:wrap; gap:3px; margin-top:3px; }
+.brand-sub-pill { font-size:9px; font-family:var(--font-b); padding:1px 6px; border-radius:8px; background:rgba(150,61,39,0.1); color:var(--russet); border:1px solid rgba(150,61,39,0.2); }
+.lines-input-row { display:flex; gap:6px; margin-top:6px; }
+ 
+/* Person entry in modal */
+.person-entry { background:rgba(91,45,34,0.04); border-radius:var(--r); padding:12px 14px; margin-bottom:8px; border:1px solid var(--border); position:relative; }
+.person-entry-hd { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.person-entry-lbl { font-family:var(--font-h); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.07em; color:var(--text-mid); }
+.remove-poc-btn { background:none; border:none; cursor:pointer; color:rgba(91,45,34,0.3); font-size:12px; padding:2px 6px; border-radius:3px; transition:var(--t); font-family:var(--font-b); }
+.remove-poc-btn:hover { color:#b33; background:rgba(180,50,50,0.08); }
+ 
+/* Section divider in modal */
+.modal-section-hd { font-family:var(--font-h); font-weight:800; font-size:13px; text-transform:uppercase; letter-spacing:0.07em; color:var(--mahogany); padding-bottom:8px; border-bottom:2px solid var(--pecan); margin:18px 0 12px; }
+ 
+/* ─── TIME TRACKER ─────────────────────────── */
+ 
+/* Live timer widget */
+.tt-timer-bar { background:var(--mahogany); padding:14px 30px; display:flex; align-items:center; gap:16px; flex-shrink:0; }
+.tt-timer-display { font-family:var(--font-h); font-weight:900; font-size:38px; letter-spacing:0.06em; color:var(--cloud); line-height:1; min-width:130px; }
+.tt-timer-display.idle { color:rgba(243,232,214,0.3); }
+.tt-timer-project-sel { background:rgba(243,232,214,0.1); border:1px solid rgba(243,232,214,0.2); color:var(--cloud); border-radius:var(--r); padding:7px 10px; font-family:var(--font-b); font-size:12px; cursor:pointer; min-width:200px; }
+.tt-timer-project-sel option { background:var(--mahogany); color:var(--cloud); }
+.tt-timer-person-sel { background:rgba(243,232,214,0.1); border:1px solid rgba(243,232,214,0.2); color:var(--cloud); border-radius:var(--r); padding:7px 10px; font-family:var(--font-b); font-size:12px; cursor:pointer; }
+.tt-timer-person-sel option { background:var(--mahogany); color:var(--cloud); }
+.tt-timer-start { background:var(--russet); color:var(--cloud); border:none; border-radius:var(--r); padding:9px 20px; font-family:var(--font-h); font-weight:800; font-size:14px; letter-spacing:0.07em; text-transform:uppercase; cursor:pointer; transition:var(--t); }
+.tt-timer-start:hover { background:#b34a2e; }
+.tt-timer-stop { background:rgba(243,232,214,0.12); color:var(--cloud); border:1px solid rgba(243,232,214,0.3); border-radius:var(--r); padding:9px 18px; font-family:var(--font-h); font-weight:800; font-size:14px; letter-spacing:0.07em; text-transform:uppercase; cursor:pointer; transition:var(--t); }
+.tt-timer-stop:hover { background:rgba(243,232,214,0.2); }
+.tt-timer-cancel { background:none; color:rgba(243,232,214,0.4); border:none; font-family:var(--font-b); font-size:11px; cursor:pointer; padding:4px 6px; transition:var(--t); text-decoration:underline; }
+.tt-timer-cancel:hover { color:rgba(243,232,214,0.8); }
+.tt-timer-label { font-family:var(--font-b); font-size:10px; color:rgba(243,232,214,0.45); text-transform:uppercase; letter-spacing:0.1em; }
+ 
+/* Pulsing dot when running */
+@keyframes tt-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.tt-running-dot { width:8px; height:8px; border-radius:50%; background:var(--russet); display:inline-block; animation:tt-pulse 1.4s ease-in-out infinite; flex-shrink:0; }
+ 
+/* Sidebar running indicator */
+.nav-timer-pill { font-size:9px; font-family:var(--font-b); background:var(--russet); color:var(--cloud); border-radius:8px; padding:1px 7px; margin-left:auto; letter-spacing:0.04em; }
+ 
+.tt-summary-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:18px; }
+.tt-proj-card { background:#fff; border-radius:var(--rl); border:1px solid var(--border); padding:18px 20px; cursor:pointer; transition:var(--t); }
+.tt-proj-card:hover { border-color:var(--pecan); box-shadow:var(--shadow); }
+.tt-proj-name { font-family:var(--font-h); font-weight:800; font-size:18px; color:var(--mahogany); text-transform:uppercase; letter-spacing:0.04em; }
+.tt-proj-client { font-size:11px; color:var(--text-mid); font-style:italic; margin-top:1px; }
+.tt-stat-row { display:flex; gap:18px; margin-top:14px; border-top:1px solid var(--border); padding-top:12px; }
+.tt-stat { display:flex; flex-direction:column; gap:2px; }
+.tt-stat-val { font-family:var(--font-h); font-weight:800; font-size:22px; color:var(--pecan); line-height:1; }
+.tt-stat-lbl { font-size:10px; color:var(--text-light); text-transform:uppercase; letter-spacing:0.08em; font-family:var(--font-b); }
+.tt-unbilled-badge { display:inline-block; background:rgba(150,61,39,0.1); color:var(--russet); border:1px solid rgba(150,61,39,0.22); border-radius:10px; font-size:10px; font-family:var(--font-b); padding:2px 8px; margin-top:8px; }
+.tt-log-table { width:100%; border-collapse:collapse; font-family:var(--font-b); font-size:12px; }
+.tt-log-table th { font-family:var(--font-h); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.07em; color:var(--text-mid); padding:8px 12px; border-bottom:2px solid var(--border); text-align:left; background:var(--cloud); position:sticky;top:0;z-index:1; }
+.tt-log-table td { padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+.tt-log-table tr:hover td { background:rgba(91,45,34,0.03); }
+.tt-log-table tr.is-billed td { opacity:0.55; }
+.tt-billed-pill { display:inline-block; font-size:9px; font-family:var(--font-b); padding:1px 7px; border-radius:8px; background:rgba(40,140,80,0.1); color:#287a4a; border:1px solid rgba(40,140,80,0.2); }
+.tt-unbilled-pill { display:inline-block; font-size:9px; font-family:var(--font-b); padding:1px 7px; border-radius:8px; background:rgba(150,61,39,0.1); color:var(--russet); border:1px solid rgba(150,61,39,0.2); }
+.tt-edit-btn { background:none; border:none; cursor:pointer; color:rgba(91,45,34,0.3); font-size:12px; padding:2px 5px; border-radius:3px; transition:var(--t); }
+.tt-edit-btn:hover { color:var(--russet); background:rgba(150,61,39,0.08); }
+.tt-total-row td { font-weight:700; background:rgba(91,45,34,0.04); border-top:2px solid var(--border); color:var(--pecan); }
+ 
+/* Project detail drill-down */
+.tt-proj-card { cursor:pointer; }
+.tt-detail-back { background:none; border:none; cursor:pointer; font-family:var(--font-b); font-size:12px; color:var(--text-mid); padding:0; display:flex; align-items:center; gap:5px; transition:var(--t); margin-bottom:14px; }
+.tt-detail-back:hover { color:var(--pecan); }
+.tt-detail-title { font-family:var(--font-h); font-weight:900; font-size:28px; text-transform:uppercase; letter-spacing:0.04em; color:var(--mahogany); line-height:1; }
+.tt-detail-client { font-size:12px; color:var(--text-mid); font-style:italic; margin-top:3px; }
+.tt-filter-toggle { display:flex; gap:6px; }
+.tt-filter-btn { background:none; border:1px solid var(--border); border-radius:20px; padding:5px 16px; font-family:var(--font-b); font-size:11px; color:var(--text-mid); cursor:pointer; transition:var(--t); }
+.tt-filter-btn:hover { border-color:var(--pecan); color:var(--pecan); }
+.tt-filter-btn.active { background:var(--pecan); border-color:var(--pecan); color:var(--cloud); }
+.tt-person-strip { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:14px; margin-bottom:24px; }
+.tt-person-card { background:#fff; border-radius:var(--r); border:1px solid var(--border); padding:14px 16px; }
+.tt-person-name { font-family:var(--font-h); font-weight:800; font-size:15px; text-transform:uppercase; letter-spacing:0.05em; color:var(--mahogany); margin-bottom:10px; }
+.tt-person-row { display:flex; justify-content:space-between; align-items:baseline; font-family:var(--font-b); font-size:11px; margin-bottom:4px; }
+.tt-person-row .lbl { color:var(--text-light); }
+.tt-person-row .val { font-weight:700; color:var(--text-dark); }
+.tt-person-row .val.unbilled { color:var(--russet); }
+.tt-person-divider { border:none; border-top:1px solid var(--border); margin:8px 0; }
+.tt-section-head { font-family:var(--font-h); font-weight:800; font-size:13px; text-transform:uppercase; letter-spacing:0.07em; color:var(--mahogany); padding:16px 0 6px; border-bottom:2px solid var(--pecan); margin-bottom:0; }
+.tt-proj-total-bar { background:rgba(91,45,34,0.05); border-radius:var(--r); padding:12px 18px; display:flex; gap:28px; flex-wrap:wrap; align-items:center; margin-bottom:22px; border:1px solid var(--border); }
+.tt-proj-total-bar .tt-stat-val { font-size:20px; }
+ 
+@media print {
+  .sidebar, .proposal-toolbar, .page-header, .row-btns, .space-del-btn,
+  .add-item-tr, .add-space-btn-row, .prop-totals-actions,
+  .client-view-banner, .toast-wrap, .overlay { display:none !important; }
+  .main { width:100%; }
+  body, html { background:white; height:auto; }
+  .view.active { display:block !important; }
+  .proposal-body { overflow:visible; padding:20px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+ 
+  <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="wordmark">Beep HQ</div>
+      <div class="tagline">Studio Management</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-section-label">Active Modules</div>
+      <div class="nav-item active" onclick="showView('pipeline')" data-view="pipeline">
+        <span class="nav-icon">◈</span>
+        <span class="nav-label">Pipeline</span>
+      </div>
+      <div class="nav-item" onclick="showView('proposal')" data-view="proposal">
+        <span class="nav-icon">▦</span>
+        <span class="nav-label">Proposals</span>
+      </div>
+      <div class="nav-section-label" style="margin-top:10px">On the Horizon</div>
+      <div class="nav-item" onclick="showView('time')" data-view="time">
+        <span class="nav-icon">◷</span>
+        <span class="nav-label">Time Tracker</span>
+        <span class="nav-timer-pill" id="nav-timer-pill" style="display:none">⏱ 0:00</span>
+      </div>
+      <div class="nav-item" style="opacity:0.38;cursor:default">
+        <span class="nav-icon">◎</span>
+        <span class="nav-label">Billing</span>
+        <span class="nav-soon">soon</span>
+      </div>
+      <div class="nav-item" style="opacity:0.38;cursor:default">
+        <span class="nav-icon">◫</span>
+        <span class="nav-label">Documents</span>
+        <span class="nav-soon">soon</span>
+      </div>
+      <div class="nav-item" style="opacity:0.38;cursor:default">
+        <span class="nav-icon">⊞</span>
+        <span class="nav-label">Receiving</span>
+        <span class="nav-soon">soon</span>
+      </div>
+      <div class="nav-item" onclick="showView('contacts')" data-view="contacts">
+        <span class="nav-icon">◉</span>
+        <span class="nav-label">Contacts</span>
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      Phase 2 &nbsp;·&nbsp; v0.2<br>
+      Beep Design Co.
+    </div>
+  </nav>
+ 
+  <!-- ═══════════════════ MAIN ═══════════════════ -->
+  <main class="main">
+ 
+    <!-- ─────────── PIPELINE VIEW ─────────── -->
+    <div class="view active" id="view-pipeline">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Project Pipeline</div>
+          <div class="page-sub">The full picture, at a glance.</div>
+        </div>
+        <button class="btn btn-primary" onclick="openNewProjModal()">+ New Project</button>
+      </div>
+      <div class="pipeline-body" id="pipeline-board"><!-- rendered by JS --></div>
+    </div>
+ 
+    <!-- ─────────── PROPOSAL VIEW ─────────── -->
+    <div class="view" id="view-proposal">
+      <div class="client-view-banner">⚠ &nbsp; Client View Active — Vendor pricing is hidden</div>
+      <div class="page-header">
+        <div>
+          <div class="page-title">Proposals</div>
+          <div class="page-sub">What they see vs. what you know.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-secondary btn-sm" onclick="addSpace()">+ Add Space</button>
+          <button class="btn btn-dark btn-sm" onclick="window.print()">↓ Print / Export</button>
+        </div>
+      </div>
+      <div class="proposal-toolbar">
+        <span class="toolbar-label">Project:</span>
+        <select class="proj-select" id="proj-select" onchange="loadProposal(this.value)">
+          <option value="">— Select a project —</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="openNewProjModal('proposal')">+ New Project</button>
+        <div class="client-toggle" onclick="toggleClientView()" id="client-toggle">
+          <div class="toggle-sw" id="toggle-sw"></div>
+          <span>Client View</span>
+        </div>
+      </div>
+      <div class="proposal-body" id="prop-body">
+        <div class="placeholder-view">
+          <div class="big-label">Select a project<br>to get started.</div>
+          <div class="small-label">Furniture doesn't specify itself, unfortunately.</div>
+        </div>
+      </div>
+    </div>
+ 
+    <!-- ─────────── CONTACTS VIEW ─────────── -->
+    <div class="view" id="view-contacts">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Contacts</div>
+          <div class="page-sub">Every vendor, rep, and workroom. One place.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" onclick="openManageLists()">⚙ Manage Lists</button>
+          <button class="btn btn-primary" onclick="openNewContactModal()">+ New Contact</button>
+        </div>
+      </div>
+      <div class="contacts-toolbar">
+        <input type="text" class="search-in" id="contact-search" placeholder="Search name, company, showroom…" oninput="renderContacts()">
+        <div class="view-tabs">
+          <button class="view-tab active" data-ctab="all"      onclick="setContactTab('all')">All</button>
+          <button class="view-tab"        data-ctab="type"     onclick="setContactTab('type')">By Type</button>
+          <button class="view-tab"        data-ctab="category" onclick="setContactTab('category')">By Category</button>
+        </div>
+      </div>
+      <div class="contacts-body" id="contacts-body"><!-- rendered by JS --></div>
+    </div>
+ 
+    <!-- ─────────── TIME TRACKER VIEW ─────────── -->
+    <div class="view" id="view-time">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Time Tracker</div>
+          <div class="page-sub">Log billable hours · Baylor $195/hr · Support $105/hr</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="fi" id="tt-filter-proj" onchange="renderTime()" style="font-size:12px;padding:6px 10px;width:200px">
+            <option value="">All Projects</option>
+          </select>
+          <select class="fi" id="tt-filter-person" onchange="renderTime()" style="font-size:12px;padding:6px 10px">
+            <option value="">All People</option>
+            <option value="baylor">Baylor</option>
+            <option value="support">Support Staff</option>
+          </select>
+          <select class="fi" id="tt-filter-billed" onchange="renderTime()" style="font-size:12px;padding:6px 10px">
+            <option value="">All Entries</option>
+            <option value="unbilled">Unbilled Only</option>
+            <option value="billed">Billed Only</option>
+          </select>
+          <button class="btn btn-primary" onclick="openNewTimeModal()">+ Log Time</button>
+        </div>
+      </div>
+      <!-- Live Timer Bar -->
+      <div class="tt-timer-bar" id="tt-timer-bar">
+        <div>
+          <div class="tt-timer-label">Timer</div>
+          <div class="tt-timer-display idle" id="tt-display">00:00:00</div>
+        </div>
+        <div id="tt-timer-idle" style="display:flex;align-items:center;gap:10px">
+          <select class="tt-timer-project-sel" id="tt-timer-proj">
+            <option value="">— Pick a project —</option>
+          </select>
+          <select class="tt-timer-person-sel" id="tt-timer-person">
+            <option value="baylor">Baylor</option>
+            <option value="support">Support Staff</option>
+          </select>
+          <button class="tt-timer-start" onclick="startTimer()">▶ Start</button>
+        </div>
+        <div id="tt-timer-running" style="display:none;align-items:center;gap:10px">
+          <span class="tt-running-dot"></span>
+          <span id="tt-timer-proj-label" style="font-family:var(--font-b);font-size:12px;color:rgba(243,232,214,0.7)"></span>
+          <button class="tt-timer-stop" onclick="stopTimer()">■ Stop &amp; Log</button>
+          <button class="tt-timer-cancel" onclick="cancelTimer()">discard</button>
+        </div>
+      </div>
+ 
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);background:var(--cloud);display:flex;gap:0">
+        <button class="view-tab active" data-ttab="summary" onclick="setTimeTab('summary')" style="margin-bottom:-1px">Summary</button>
+        <button class="view-tab" data-ttab="log" onclick="setTimeTab('log')" style="margin-bottom:-1px">Full Log</button>
+      </div>
+      <div class="contacts-body" id="tt-body">
+        <div class="no-results">No time entries yet. Hit + Log Time to start the clock.</div>
+      </div>
+    </div>
+ 
+  </main>
+</div>
+ 
+<!-- ═════════════════ NEW PROJECT MODAL ═════════════════ -->
+<div class="overlay" id="modal-new">
+  <div class="modal">
+    <button class="modal-x" onclick="closeModal('modal-new')">✕</button>
+    <div class="modal-title">New Project</div>
+    <div class="fg">
+      <label class="fl">Project Name</label>
+      <input type="text" class="fi" id="np-name" placeholder="e.g. 5914 Coliseum — November">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Client Name</label>
+        <input type="text" class="fi" id="np-client" placeholder="e.g. Mandy Alexander">
+      </div>
+      <div class="fg">
+        <label class="fl">Project Type</label>
+        <select class="fi fsel" id="np-type">
+          <option value="residential">Residential</option>
+          <option value="commercial">Commercial</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">City / Location</label>
+        <input type="text" class="fi" id="np-city" placeholder="e.g. New Orleans, LA">
+      </div>
+      <div class="fg">
+        <label class="fl">Starting Stage</label>
+        <select class="fi fsel" id="np-stage">
+          <option value="lead" selected>Lead</option>
+          <option value="proposal">Proposal Phase</option>
+          <option value="active">Active Project</option>
+          <option value="continued">Continued Relationship</option>
+          <option value="mini_session">Mini Session</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-new')">Cancel</button>
+      <button class="btn btn-primary" onclick="createProject()">Create Project</button>
+    </div>
+  </div>
+</div>
+ 
+<!-- ═════════════════ EDIT PROJECT MODAL ═════════════════ -->
+<div class="overlay" id="modal-edit">
+  <div class="modal">
+    <button class="modal-x" onclick="closeModal('modal-edit')">✕</button>
+    <div class="modal-title">Edit Project</div>
+    <input type="hidden" id="ep-id">
+    <div class="fg">
+      <label class="fl">Project Name</label>
+      <input type="text" class="fi" id="ep-name">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Client Name</label>
+        <input type="text" class="fi" id="ep-client">
+      </div>
+      <div class="fg">
+        <label class="fl">Project Type</label>
+        <select class="fi fsel" id="ep-type">
+          <option value="residential">Residential</option>
+          <option value="commercial">Commercial</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">City / Location</label>
+        <input type="text" class="fi" id="ep-city">
+      </div>
+      <div class="fg">
+        <label class="fl">Stage</label>
+        <select class="fi fsel" id="ep-stage">
+          <option value="lead">Lead</option>
+          <option value="proposal">Proposal Phase</option>
+          <option value="active">Active Project</option>
+          <option value="continued">Continued Relationship</option>
+          <option value="mini_session">Mini Session</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" onclick="deleteProject(document.getElementById('ep-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-edit')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditProject()">Save Changes</button>
+    </div>
+  </div>
+</div>
+ 
+<!-- ═════════════════ CONTACT MODAL ═════════════════ -->
+<div class="overlay" id="modal-contact">
+  <div class="modal" style="width:580px">
+    <button class="modal-x" onclick="closeModal('modal-contact')">✕</button>
+    <div class="modal-title" id="contact-modal-title">New Contact</div>
+    <input type="hidden" id="cm-id">
+ 
+    <!-- TYPE -->
+    <div class="fg">
+      <label class="fl">Contact Type</label>
+      <div class="type-selector" id="cm-type-selector"><!-- rendered by JS --></div>
+      <input type="hidden" id="cm-type" value="showroom">
+    </div>
+ 
+    <!-- ORG INFO -->
+    <div class="frow">
+      <div class="fg"><label class="fl">Name</label><input type="text" class="fi" id="cm-name" placeholder="e.g. Paul+, Douglass Workroom"></div>
+      <div class="fg"><label class="fl">City / Location</label><input type="text" class="fi" id="cm-city" placeholder="e.g. New Orleans, LA"></div>
+    </div>
+    <div class="frow">
+      <div class="fg"><label class="fl">Website</label><input type="text" class="fi" id="cm-website" placeholder="https://…"></div>
+      <div class="fg"><label class="fl">Instagram</label><input type="text" class="fi" id="cm-instagram" placeholder="@handle"></div>
+    </div>
+ 
+    <!-- CATEGORIES -->
+    <div class="fg" id="cm-cats-section">
+      <label class="fl">Categories</label>
+      <!-- For workroom/trade service/other: manual checkboxes -->
+      <div class="cat-grid" id="cm-cats"></div>
+      <!-- For showroom, or vendor with lines: derived from lines -->
+      <div id="cm-cats-derived" style="display:none;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.6">
+        Categories are pulled automatically from the lines carried above — assign categories to each line and they'll appear here.
+      </div>
+    </div>
+ 
+    <!-- LINES CARRIED -->
+    <div class="fg" id="cm-lines-section">
+      <label class="fl">Lines Carried</label>
+      <div id="cm-lines-tags" style="display:flex;flex-wrap:wrap;gap:5px;min-height:10px"></div>
+      <div class="lines-input-row">
+        <input type="text" class="fi" id="cm-line-input" placeholder="Type a line and press Enter…" style="flex:1;font-size:12px;padding:6px 10px"
+          onkeydown="if(event.key==='Enter'){addLineTag();event.preventDefault()}">
+        <button class="btn btn-secondary btn-sm" onclick="addLineTag()">Add</button>
+      </div>
+    </div>
+ 
+    <!-- NOTES -->
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="cm-notes" style="resize:vertical;min-height:52px" placeholder="Lead times, trade terms, account numbers, anything useful…"></textarea>
+    </div>
+ 
+    <!-- POINTS OF CONTACT -->
+    <div class="modal-section-hd">Points of Contact</div>
+    <div id="cm-people-list"><!-- rendered by JS --></div>
+    <button class="btn btn-ghost btn-sm" onclick="addPersonField()" style="margin-top:4px">+ Add Person</button>
+ 
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="cm-delete-btn" onclick="deleteContact($c('cm-id').value)" style="display:none">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-contact')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveContact()">Save Contact</button>
+    </div>
+  </div>
+</div>
+ 
+<!-- ═════════════════ MANAGE LISTS MODAL ═════════════════ -->
+<div class="overlay" id="modal-lists">
+  <div class="modal" style="width:400px">
+    <button class="modal-x" onclick="closeModal('modal-lists')">✕</button>
+    <div class="modal-title">Manage Categories</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic">These categories appear as checkboxes on every contact.</div>
+    <div id="ml-cats-list" style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto;margin-bottom:10px"></div>
+    <div style="display:flex;gap:6px">
+      <input type="text" class="fi" id="ml-cat-input" placeholder="New category…" style="flex:1;font-size:12px;padding:6px 10px"
+        onkeydown="if(event.key==='Enter'){addListItem('categories');event.preventDefault()}">
+      <button class="btn btn-primary btn-sm" onclick="addListItem('categories')">Add</button>
+    </div>
+    <div class="modal-footer" style="margin-top:16px">
+      <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-lists')">Done</button>
+    </div>
+  </div>
+</div>
+ 
+<!-- ═════════════════ TIME ENTRY MODAL ═════════════════ -->
+<div class="overlay" id="modal-time">
+  <div class="modal" style="width:520px">
+    <button class="modal-x" onclick="closeModal('modal-time')">✕</button>
+    <div class="modal-title" id="tm-title">Log Time</div>
+    <input type="hidden" id="tm-id">
+ 
+    <div class="frow">
+      <div class="fg" style="flex:2">
+        <label class="fl">Project</label>
+        <select class="fi" id="tm-project" onchange="tmProjectChange()">
+          <option value="">— Select project —</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">Date</label>
+        <input type="date" class="fi" id="tm-date">
+      </div>
+    </div>
+ 
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Person</label>
+        <select class="fi" id="tm-person" onchange="tmPersonChange()">
+          <option value="baylor">Baylor</option>
+          <option value="support">Support Staff</option>
+          <option value="other">Other…</option>
+        </select>
+      </div>
+      <div class="fg" id="tm-person-custom-wrap" style="display:none">
+        <label class="fl">Name</label>
+        <input type="text" class="fi" id="tm-person-custom" placeholder="Full name">
+      </div>
+      <div class="fg">
+        <label class="fl">Rate ($/hr)</label>
+        <input type="number" class="fi" id="tm-rate" min="0" step="5" placeholder="195">
+      </div>
+      <div class="fg">
+        <label class="fl">Hours</label>
+        <input type="number" class="fi" id="tm-hours" min="0.25" step="0.25" placeholder="1.0" oninput="updateTimeFee()">
+      </div>
+    </div>
+ 
+    <div style="background:rgba(150,61,39,0.07);border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-family:var(--font-b);font-size:13px;display:flex;gap:18px;align-items:center" id="tm-fee-preview">
+      <span style="color:var(--text-mid)">Fee preview:</span>
+      <span id="tm-fee-val" style="font-weight:700;color:var(--pecan);font-size:16px">$0.00</span>
+    </div>
+ 
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="tm-notes" style="resize:vertical;min-height:52px" placeholder="What was worked on? Meeting, site visit, sourcing, drafting…"></textarea>
+    </div>
+ 
+    <div class="fg" style="flex-direction:row;align-items:center;gap:10px;padding:6px 0">
+      <input type="checkbox" id="tm-billed" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+      <label for="tm-billed" style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);cursor:pointer">Mark as already billed</label>
+    </div>
+ 
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="tm-delete-btn" onclick="deleteCurrentTimeEntry()" style="display:none">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-time')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTimeEntry()">Save Entry</button>
+    </div>
+  </div>
+</div>
+ 
+<!-- ═════════════════ TOASTS ═════════════════ -->
+<div class="toast-wrap" id="toasts"></div>
+ 
+<!-- ═══════════════════════════════════════════════════════════
+     JAVASCRIPT
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+ 
+// ─── CONSTANTS ────────────────────────────────────────────
+ 
+const TEAM = [
+  { id:'baylor',  label:'Baylor',        rate:195 },
+  { id:'support', label:'Support Staff', rate:105 },
+];
+ 
+const STAGES = [
+  { id:'lead',         label:'Lead',                   emoji:'◌' },
+  { id:'proposal',     label:'Proposal Phase',         emoji:'◈' },
+  { id:'active',       label:'Active Project',         emoji:'◉' },
+  { id:'continued',    label:'Continued Relationship', emoji:'◎' },
+  { id:'mini_session', label:'Mini Session',           emoji:'◷', cls:'mini-col' },
+];
+ 
+const STATUSES = [
+  { v:'pending',            l:'Pending' },
+  { v:'waiting_quote',      l:'Waiting — Quote' },
+  { v:'waiting_selection',  l:'Waiting — Selection' },
+  { v:'waiting_qty',        l:'Waiting — Qty' },
+  { v:'client_approval',    l:'Needs Client Approval' },
+  { v:'approved',           l:'Approved' },
+  { v:'ordered',            l:'Ordered' },
+  { v:'received',           l:'Received' },
+];
+ 
+const EMPTY_MSGS = {
+  lead:        'No leads. Either slow season or blissful ignorance.',
+  proposal:    'No proposals in the works. The inbox thanks you.',
+  active:      'Nothing active. Either very caught up or very in denial.',
+  continued:   'No ongoing relationships. Stay in touch.',
+  mini_session:'Nothing small-scale at the moment.',
+};
+ 
+// ─── STATE ────────────────────────────────────────────────
+ 
+const CATEGORIES = [
+  'Fabric & Upholstery','Lighting','Wall Treatments','Flooring',
+  'Window Treatments','Tile','Furniture','Countertops & Millwork',
+  'Hardware','Paint','Plumbing','Workroom','Showroom','Trade Service',
+];
+ 
+const CONTACT_TYPES = [
+  { id:'showroom',      label:'Showroom' },
+  { id:'vendor',        label:'Vendor' },
+  { id:'workroom',      label:'Workroom' },
+  { id:'trade_service', label:'Trade Service' },
+  { id:'other',         label:'Other' },
+];
+ 
+let S = {
+  projects: [],
+  proposals: {},
+  contacts: [],
+  timeEntries: [],
+  activeTimer: null,   // { projectId, person, startMs }
+  categories: [],
+  currentView: 'pipeline',
+  currentPropProject: null,
+  currentContactTab: 'all',
+  clientView: false,
+  dragId: null,
+  _returnView: null,
+};
+ 
+// ─── PERSISTENCE ──────────────────────────────────────────
+ 
+function save() {
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch(e){}
+}
+ 
+function load() {
+  try {
+    const d = localStorage.getItem('beep_hq_v1');
+    if (d) { const p = JSON.parse(d); Object.assign(S, p); }
+    // Migrate old stage names to current system
+    const stageMap = {
+      master_design:'proposal', purchasing:'active',
+      purgatory:'active', installation:'active'
+    };
+    S.projects.forEach(p => {
+      if (stageMap[p.stage]) p.stage = stageMap[p.stage];
+    });
+    if (!S.categories || !S.categories.length) S.categories = [...CATEGORIES];
+    // Migrate old 'brands' field → 'lines'
+    S.contacts.forEach(c => {
+      if (c.brands !== undefined && c.lines === undefined) {
+        c.lines = c.brands;
+        delete c.brands;
+      }
+      if (!c.lines) c.lines = [];
+    });
+    // Migrate flat string lines → {name, categories:[]} objects
+    S.contacts.forEach(c => {
+      if (c.lines.length && typeof c.lines[0] === 'string') {
+        c.lines = c.lines.map(b => ({ name: b, categories: [] }));
+      }
+    });
+  } catch(e){}
+}
+ 
+// ─── UTILS ────────────────────────────────────────────────
+ 
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+}
+ 
+function $c(n) { return document.getElementById(n); }
+function $q(s) { return document.querySelector(s); }
+function $a(s) { return document.querySelectorAll(s); }
+ 
+function fmt(n) {
+  const v = parseFloat(n) || 0;
+  return '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function parse$(v) { return parseFloat(String(v||'').replace(/[$,]/g,'')) || 0; }
+ 
+function escH(s) {
+  return String(s||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+ 
+function toast(msg) {
+  const c = $c('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => { t.style.opacity='0'; t.style.transition='opacity 0.3s'; setTimeout(()=>t.remove(),300); }, 2600);
+}
+ 
+// ─── NAVIGATION ───────────────────────────────────────────
+ 
+function showView(v) {
+  $a('.view').forEach(el => el.classList.remove('active'));
+  $a('.nav-item').forEach(el => el.classList.remove('active'));
+  const view = $c('view-'+v);
+  if (view) view.classList.add('active');
+  const nav = $q(`[data-view="${v}"]`);
+  if (nav) nav.classList.add('active');
+  S.currentView = v;
+  if (v === 'pipeline') renderPipeline();
+  if (v === 'proposal') { updateProjSelect(); if (S.currentPropProject) loadProposal(S.currentPropProject); }
+  if (v === 'contacts') renderContacts();
+  if (v === 'time') renderTime();
+  save();
+}
+ 
+// ─── PIPELINE ─────────────────────────────────────────────
+ 
+function renderPipeline() {
+  const board = $c('pipeline-board');
+  board.innerHTML = '';
+ 
+  STAGES.forEach(stage => {
+    const projs = S.projects.filter(p => p.stage === stage.id);
+    const col = document.createElement('div');
+    col.className = 'kanban-col' + (stage.cls ? ' '+stage.cls : '');
+    col.dataset.stage = stage.id;
+ 
+    col.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    col.addEventListener('dragenter', e => {
+      const cc = col.querySelector('.col-cards');
+      if (cc) cc.classList.add('drag-over');
+    });
+    col.addEventListener('dragleave', e => {
+      if (!col.contains(e.relatedTarget)) {
+        const cc = col.querySelector('.col-cards');
+        if (cc) cc.classList.remove('drag-over');
+      }
+    });
+    col.addEventListener('drop', e => {
+      e.preventDefault();
+      const cc = col.querySelector('.col-cards');
+      if (cc) cc.classList.remove('drag-over');
+      if (S.dragId) {
+        const proj = S.projects.find(p => p.id === S.dragId);
+        if (proj && proj.stage !== stage.id) {
+          proj.stage = stage.id;
+          save();
+          renderPipeline();
+          toast('Moved to ' + stage.label);
+        }
+        S.dragId = null;
+      }
+    });
+ 
+    const cards = projs.length
+      ? projs.map(p => cardHtml(p)).join('')
+      : `<div class="empty-state">${EMPTY_MSGS[stage.id]||''}</div>`;
+ 
+    col.innerHTML = `
+      <div class="col-header">
+        <span class="col-title">${stage.emoji}&nbsp; ${stage.label}</span>
+        <span class="col-count">${projs.length}</span>
+      </div>
+      <div class="col-cards" id="col-${stage.id}">${cards}</div>
+      <div class="col-footer">
+        <button class="add-card-btn" onclick="openNewProjModal(null,'${stage.id}')">+ Add project</button>
+      </div>`;
+ 
+    board.appendChild(col);
+  });
+ 
+  // Attach drag events to cards
+  $a('.proj-card').forEach(c => {
+    c.draggable = true;
+    c.addEventListener('dragstart', e => { S.dragId = e.currentTarget.dataset.id; e.currentTarget.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+    c.addEventListener('dragend',   e => { e.currentTarget.classList.remove('dragging'); $a('.col-cards').forEach(cc=>cc.classList.remove('drag-over')); });
+  });
+}
+ 
+function cardHtml(p) {
+  const pcount = propCount(p.id);
+  return `
+    <div class="proj-card" data-id="${p.id}" onclick="openEditModal('${p.id}')">
+      <div class="card-name">${escH(p.name)}</div>
+      <div class="card-client">${escH(p.client||'—')}</div>
+      <div class="card-meta">
+        <span class="badge badge-${p.type==='commercial'?'com':'res'}">${p.type==='commercial'?'Commercial':'Residential'}</span>
+        ${p.city?`<span class="card-city">${escH(p.city)}</span>`:''}
+      </div>
+      ${pcount>0?`<div class="card-prop-count">${pcount} proposal item${pcount!==1?'s':''}</div>`:''}
+    </div>`;
+}
+ 
+function propCount(pid) {
+  const prop = S.proposals[pid];
+  if (!prop||!prop.spaces) return 0;
+  return prop.spaces.reduce((s,sp) => s + (sp.items||[]).length, 0);
+}
+ 
+// ─── PROJECT MODALS ───────────────────────────────────────
+ 
+let _stagePreset = null;
+ 
+function openNewProjModal(returnView, stagePreset) {
+  _stagePreset = stagePreset || null;
+  S._returnView = returnView || null;
+  ['np-name','np-client','np-city'].forEach(id => { $c(id).value = ''; });
+  $c('np-type').value  = 'residential';
+  $c('np-stage').value = stagePreset || 'master_design';
+  $c('modal-new').classList.add('open');
+  setTimeout(() => $c('np-name').focus(), 80);
+}
+ 
+function createProject() {
+  const name = $c('np-name').value.trim();
+  if (!name) { $c('np-name').focus(); return; }
+ 
+  const p = {
+    id:      uid(),
+    name,
+    client:  $c('np-client').value.trim(),
+    type:    $c('np-type').value,
+    city:    $c('np-city').value.trim(),
+    stage:   $c('np-stage').value,
+    created: new Date().toISOString().slice(0,10),
+  };
+ 
+  S.projects.push(p);
+  S.proposals[p.id] = { spaces:[], freight:'', tax:'' };
+  save();
+  closeModal('modal-new');
+  renderPipeline();
+  updateProjSelect();
+  toast(`"${p.name}" added.`);
+ 
+  if (S._returnView === 'proposal') {
+    showView('proposal');
+    loadProposal(p.id);
+    $c('proj-select').value = p.id;
+  }
+}
+ 
+function openEditModal(pid) {
+  const p = S.projects.find(x => x.id === pid);
+  if (!p) return;
+  $c('ep-id').value    = p.id;
+  $c('ep-name').value  = p.name;
+  $c('ep-client').value= p.client||'';
+  $c('ep-type').value  = p.type||'residential';
+  $c('ep-city').value  = p.city||'';
+  $c('ep-stage').value = p.stage;
+  $c('modal-edit').classList.add('open');
+}
+ 
+function saveEditProject() {
+  const id = $c('ep-id').value;
+  const p  = S.projects.find(x => x.id === id);
+  if (!p) return;
+  p.name   = $c('ep-name').value.trim() || p.name;
+  p.client = $c('ep-client').value.trim();
+  p.type   = $c('ep-type').value;
+  p.city   = $c('ep-city').value.trim();
+  p.stage  = $c('ep-stage').value;
+  save();
+  closeModal('modal-edit');
+  renderPipeline();
+  updateProjSelect();
+  toast('Project updated.');
+}
+ 
+function deleteProject(id) {
+  if (!confirm('Delete this project? Proposal data goes with it. For real this time.')) return;
+  S.projects = S.projects.filter(p => p.id !== id);
+  delete S.proposals[id];
+  if (S.currentPropProject === id) { S.currentPropProject = null; }
+  save();
+  closeModal('modal-edit');
+  renderPipeline();
+  updateProjSelect();
+  if (S.currentView === 'proposal') renderPropBody();
+  toast('Project deleted.');
+}
+ 
+function closeModal(id) { $c(id).classList.remove('open'); }
+ 
+// Close on overlay click
+$a('.overlay').forEach(ov => {
+  ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') $a('.overlay.open').forEach(m => m.classList.remove('open'));
+});
+ 
+// ─── PROPOSAL ─────────────────────────────────────────────
+ 
+function updateProjSelect() {
+  const sel = $c('proj-select');
+  const cur = S.currentPropProject;
+  sel.innerHTML = '<option value="">— Select a project —</option>';
+  S.projects.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = p.name + (p.client ? ' — ' + p.client : '');
+    sel.appendChild(o);
+  });
+  if (cur) sel.value = cur;
+}
+ 
+function loadProposal(pid) {
+  S.currentPropProject = pid || null;
+  if (pid && !S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
+  save();
+  renderPropBody();
+}
+ 
+function renderPropBody() {
+  const body = $c('prop-body');
+  const pid  = S.currentPropProject;
+ 
+  if (!pid) {
+    body.innerHTML = `<div class="placeholder-view">
+      <div class="big-label">Select a project<br>to get started.</div>
+      <div class="small-label">Furniture doesn't specify itself, unfortunately.</div>
+    </div>`;
+    return;
+  }
+ 
+  const proj = S.projects.find(p => p.id === pid);
+  if (!proj) return;
+  const prop = S.proposals[pid];
+ 
+  // Apply client view state to parent
+  const pv = $c('view-proposal');
+  pv.classList.toggle('client-view-active', S.clientView);
+ 
+  let html = `
+    <div class="prop-header">
+      <div>
+        <div class="prop-project-name">${escH(proj.name)}</div>
+        <div class="prop-project-meta">${proj.client ? escH(proj.client) : ''}${proj.city ? ' &nbsp;·&nbsp; '+escH(proj.city) : ''}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="prop-view-badge ${S.clientView?'client-badge':'internal-badge'}">${S.clientView?'Client View':'Internal View'}</div>
+        <div style="font-size:11px;color:var(--text-light);margin-top:6px;font-style:italic;">${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+      </div>
+    </div>`;
+ 
+  if (!prop.spaces.length) {
+    html += `
+      <div style="text-align:center;padding:50px 30px;color:rgba(91,45,34,0.38);border:2px dashed rgba(91,45,34,0.15);border-radius:8px;">
+        <div style="font-family:var(--font-h);font-size:26px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">No spaces yet.</div>
+        <div style="font-style:italic;font-size:13px;margin-bottom:18px;">Add your first space to start building this proposal.</div>
+        <button class="btn btn-primary btn-sm" onclick="addSpace()">+ Add a Space</button>
+      </div>`;
+  } else {
+    prop.spaces.forEach((sp, si) => {
+      html += renderSpace(sp, pid);
+    });
+    html += `<div class="add-space-btn-row" style="margin-top:10px;">
+      <button class="btn btn-ghost btn-sm" onclick="addSpace()">+ Add Another Space</button>
+    </div>`;
+    html += renderTotals(prop, pid);
+  }
+ 
+  body.innerHTML = html;
+}
+ 
+function renderSpace(sp, pid) {
+  const items = sp.items || [];
+  let rows = items.map(item => renderItemRow(item, sp.id, pid)).join('');
+ 
+  return `
+    <div class="space-section" id="sp-${sp.id}">
+      <div class="space-header">
+        <input type="text" class="space-name-input"
+          value="${escH(sp.name)}"
+          placeholder="SPACE NAME (e.g. LIVING ROOM)"
+          onchange="mutSpace('${pid}','${sp.id}','name',this.value)">
+        <button class="space-del-btn" onclick="deleteSpace('${pid}','${sp.id}')">Remove Space</button>
+      </div>
+      <table class="prop-table">
+        <thead>
+          <tr>
+            <th style="width:34%">Invoice Item</th>
+            <th class="r hide-client" style="width:9%">Price Net (N)</th>
+            <th class="r" style="width:10%">Price Per (C)</th>
+            <th class="r" style="width:7%">Qty</th>
+            <th class="r" style="width:10%">Total</th>
+            <th style="width:14%">Status</th>
+            <th style="width:38px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          <tr class="add-item-tr">
+            <td colspan="7">
+              <button class="add-item-btn" onclick="addItem('${pid}','${sp.id}')">+ Add item</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+ 
+function renderItemRow(item, spId, pid) {
+  const net    = parse$(item.priceNet);
+  const client = net > 0 ? net * 1.25 : 0;
+  const qty    = parseFloat(item.qty) || 0;
+  const total  = client * qty;
+  const sopts  = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''}>${s.l}</option>`).join('');
+ 
+  return `
+    <tr id="row-${item.id}" class="${item._open?'expanded-row':''}">
+      <td>
+        <input class="cell-in" type="text" value="${escH(item.name||'')}"
+          placeholder="Item description…"
+          onchange="mutItem('${pid}','${spId}','${item.id}','name',this.value)">
+      </td>
+      <td class="hide-client">
+        <input class="cell-in r" type="text" value="${escH(item.priceNet||'')}"
+          placeholder="—"
+          style="width:88px"
+          onchange="mutItem('${pid}','${spId}','${item.id}','priceNet',this.value)">
+      </td>
+      <td>
+        <div class="cell-ro calc" id="cpc-${item.id}">${client>0?fmt(client):'—'}</div>
+      </td>
+      <td>
+        <input class="cell-in r" type="text" value="${escH(item.qty||'')}"
+          placeholder="1"
+          style="width:56px"
+          onchange="mutItem('${pid}','${spId}','${item.id}','qty',this.value)">
+      </td>
+      <td>
+        <div class="cell-ro" id="ctot-${item.id}">${total>0?fmt(total):'—'}</div>
+      </td>
+      <td>
+        <select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)">${sopts}</select>
+      </td>
+      <td>
+        <div class="row-btns">
+          <button class="row-btn expand-btn${item._open?' open':''}"
+            onclick="toggleNotes('${pid}','${spId}','${item.id}')"
+            title="Toggle notes">▼</button>
+          <button class="row-btn del-btn"
+            onclick="deleteItem('${pid}','${spId}','${item.id}')"
+            title="Remove item">✕</button>
+        </div>
+      </td>
+    </tr>
+    <tr class="notes-row${item._open?' open':''}" id="notes-${item.id}">
+      <td colspan="7">
+        <div class="notes-grid">
+          <div class="nf">
+            <label>Notes &amp; Details</label>
+            <textarea placeholder="Vendor info, specs, sizing, options you're considering…"
+              onchange="mutItem('${pid}','${spId}','${item.id}','notes',this.value)">${escH(item.notes||'')}</textarea>
+          </div>
+          <div class="nf">
+            <label>Link / URL</label>
+            <input type="text" placeholder="https://…" value="${escH(item.link||'')}"
+              onchange="mutItem('${pid}','${spId}','${item.id}','link',this.value)">
+            <label class="sub-label">Vendor</label>
+            <input type="text" placeholder="e.g. Holland &amp; Sherry" value="${escH(item.vendor||'')}"
+              onchange="mutItem('${pid}','${spId}','${item.id}','vendor',this.value)">
+          </div>
+          <div class="nf">
+            <label>C / N Flag</label>
+            <select onchange="mutItem('${pid}','${spId}','${item.id}','flag',this.value)">
+              <option value="" ${!item.flag?'selected':''}>—</option>
+              <option value="N" ${item.flag==='N'?'selected':''}>N — Net / Vendor</option>
+              <option value="C" ${item.flag==='C'?'selected':''}>C — Client Price</option>
+            </select>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+}
+ 
+function renderTotals(prop, pid) {
+  let sub = 0;
+  (prop.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      const net = parse$(item.priceNet);
+      sub += (net>0 ? net*1.25 : 0) * (parseFloat(item.qty)||0);
+    });
+  });
+  const fr  = parse$(prop.freight);
+  const tx  = parse$(prop.tax);
+  const grd = sub + fr + tx;
+ 
+  return `
+    <div class="prop-totals">
+      <table class="totals-tbl">
+        <tr><td>Subtotal</td><td id="t-sub">${fmt(sub)}</td></tr>
+        <tr>
+          <td>Freight</td>
+          <td><input class="ttl-in" type="text" value="${escH(prop.freight||'')}" placeholder="$0.00"
+            onchange="mutMeta('${pid}','freight',this.value)"></td>
+        </tr>
+        <tr>
+          <td>Tax</td>
+          <td><input class="ttl-in" type="text" value="${escH(prop.tax||'')}" placeholder="$0.00"
+            onchange="mutMeta('${pid}','tax',this.value)"></td>
+        </tr>
+        <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(grd)}</td></tr>
+      </table>
+    </div>`;
+}
+ 
+// ─── PROPOSAL MUTATIONS ───────────────────────────────────
+ 
+function addSpace() {
+  const pid = S.currentPropProject;
+  if (!pid) { toast('Select a project first.'); return; }
+  S.proposals[pid].spaces.push({ id:uid(), name:'', items:[] });
+  save(); renderPropBody();
+}
+ 
+function deleteSpace(pid, spId) {
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  prop.spaces = prop.spaces.filter(s => s.id !== spId);
+  save(); renderPropBody();
+}
+ 
+function mutSpace(pid, spId, key, val) {
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  if (sp) { sp[key] = val; save(); }
+}
+ 
+function addItem(pid, spId) {
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  if (!sp) return;
+  const newId = uid();
+  (sp.items = sp.items||[]).push({
+    id:newId, name:'', priceNet:'', qty:'', status:'pending',
+    notes:'', link:'', vendor:'', flag:'', _open:false
+  });
+  save(); renderPropBody();
+  // Focus name of new item
+  setTimeout(() => {
+    const rows = document.querySelectorAll(`#sp-${spId} tbody tr:not(.notes-row):not(.add-item-tr)`);
+    if (rows.length) rows[rows.length-1].querySelector('input')?.focus();
+  }, 60);
+}
+ 
+function deleteItem(pid, spId, iid) {
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  if (!sp) return;
+  sp.items = (sp.items||[]).filter(i => i.id !== iid);
+  save(); renderPropBody();
+}
+ 
+function mutItem(pid, spId, iid, key, val) {
+  const sp   = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === iid);
+  if (!item) return;
+  item[key] = val;
+  save();
+ 
+  // Live-update calculated cells without full re-render
+  if (key === 'priceNet' || key === 'qty') {
+    const net    = parse$(item.priceNet);
+    const client = net > 0 ? net * 1.25 : 0;
+    const qty    = parseFloat(item.qty) || 0;
+    const total  = client * qty;
+    const cpc  = document.getElementById('cpc-'+iid);
+    const ctot = document.getElementById('ctot-'+iid);
+    if (cpc)  cpc.textContent  = client>0 ? fmt(client) : '—';
+    if (ctot) ctot.textContent = total>0  ? fmt(total)  : '—';
+    refreshTotals(pid);
+  }
+}
+ 
+function toggleNotes(pid, spId, iid) {
+  const sp   = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === iid);
+  if (!item) return;
+  item._open = !item._open;
+  save();
+  const panel = document.getElementById('notes-'+iid);
+  const row   = document.getElementById('row-'+iid);
+  const btn   = row?.querySelector('.expand-btn');
+  if (panel) panel.classList.toggle('open', item._open);
+  if (row)   row.classList.toggle('expanded-row', item._open);
+  if (btn)   btn.classList.toggle('open', item._open);
+}
+ 
+function mutMeta(pid, key, val) {
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  prop[key] = val;
+  save();
+  refreshTotals(pid);
+}
+ 
+function refreshTotals(pid) {
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  let sub = 0;
+  (prop.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      const net = parse$(item.priceNet);
+      sub += (net>0 ? net*1.25 : 0) * (parseFloat(item.qty)||0);
+    });
+  });
+  const fr  = parse$(prop.freight);
+  const tx  = parse$(prop.tax);
+  const grd = sub + fr + tx;
+  const tSub = document.getElementById('t-sub');
+  const tGrd = document.getElementById('t-grd');
+  if (tSub) tSub.textContent = fmt(sub);
+  if (tGrd) tGrd.textContent = fmt(grd);
+}
+ 
+// ─── CLIENT VIEW ──────────────────────────────────────────
+ 
+function toggleClientView() {
+  S.clientView = !S.clientView;
+  const sw = $c('toggle-sw');
+  const pv = $c('view-proposal');
+  sw.classList.toggle('on', S.clientView);
+  pv.classList.toggle('client-view-active', S.clientView);
+  save();
+  if (S.currentPropProject) renderPropBody();
+}
+ 
+// ─── SAMPLE DATA ──────────────────────────────────────────
+ 
+// ─── CONTACTS ─────────────────────────────────────────────
+ 
+function setContactTab(tab) {
+  S.currentContactTab = tab;
+  $a('[data-ctab]').forEach(b => b.classList.toggle('active', b.dataset.ctab === tab));
+  save();
+  renderContacts();
+}
+ 
+function renderContacts() {
+  const body  = $c('contacts-body');
+  const query = ($c('contact-search')?.value || '').toLowerCase().trim();
+  const tab   = S.currentContactTab || 'all';
+  let contacts = S.contacts;
+ 
+  if (query) {
+    contacts = contacts.filter(c => {
+      const orgText = [c.name, c.city, c.notes, ...(c.lines||[]).map(b => typeof b==='string'?b:b.name), ...getContactCategories(c)].join(' ').toLowerCase();
+      const peopleText = (c.people||[]).map(p => [p.name, p.role, p.email].join(' ')).join(' ').toLowerCase();
+      return orgText.includes(query) || peopleText.includes(query);
+    });
+  }
+ 
+  if (!contacts.length) {
+    body.innerHTML = `<div class="no-results">${query ? `Nothing matches "${query}." Try a name, brand, or workroom.` : 'No contacts yet. Add your first one.'}</div>`;
+    return;
+  }
+ 
+  if (tab === 'all')      body.innerHTML = renderAllContacts(contacts);
+  if (tab === 'type')     body.innerHTML = renderGroupedByType(contacts);
+  if (tab === 'category') body.innerHTML = renderGroupedByCat(contacts);
+}
+ 
+function renderAllContacts(contacts) {
+  const sorted = [...contacts].sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  return `<div class="contacts-grid">${sorted.map(c => contactCardHtml(c)).join('')}</div>`;
+}
+ 
+function contactCardHtml(c) {
+  const typeLabel = CONTACT_TYPES.find(t => t.id === c.type)?.label || 'Other';
+  const _cats  = getContactCategories(c);
+  const cats  = _cats.slice(0,3).map(cat => `<span class="cat-pill">${escH(cat)}</span>`).join('');
+  const extra = _cats.length > 3 ? `<span class="cat-pill">+${(_cats.length-3)}</span>` : '';
+  const lines = (c.lines||[]).slice(0,5).map(b => {
+    const nm = typeof b === 'string' ? b : b.name;
+    const subCats = (typeof b === 'object' && b.categories && b.categories.length)
+      ? `<span style="font-size:9px;color:var(--text-light);margin-left:3px">(${b.categories.slice(0,2).join(', ')}${b.categories.length>2?'…':''})</span>` : '';
+    return `<span class="brand-pill">${escH(nm)}${subCats}</span>`;
+  }).join('');
+  const people = (c.people||[]).map(p => `
+    <div class="poc-row">
+      <span class="poc-name">${escH(p.name)}</span>
+      ${p.role  ? `<span class="poc-role">${escH(p.role)}</span>` : ''}
+      ${p.email ? `<a class="poc-email" href="mailto:${escH(p.email)}" onclick="event.stopPropagation()">${escH(p.email)}</a>` : ''}
+      ${p.phone ? `<span style="font-size:11px;color:var(--text-mid)">${escH(p.phone)}</span>` : ''}
+      ${p.notes ? `<span style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(p.notes)}</span>` : ''}
+    </div>`).join('');
+ 
+  return `
+    <div class="contact-card" onclick="openEditContactModal('${c.id}')">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div class="contact-name">${escH(c.name||'—')}</div>
+        <span class="type-badge type-${c.type||'other'}">${typeLabel}</span>
+      </div>
+      ${c.city ? `<div style="font-size:11px;color:var(--text-mid);margin-top:1px;font-style:italic">${escH(c.city)}</div>` : ''}
+      ${people ? `<div class="poc-list">${people}</div>` : ''}
+      ${lines ? `<div class="lines-wrap">${lines}</div>` : ''}
+      ${cats||extra ? `<div class="contact-cats" style="margin-top:6px">${cats}${extra}</div>` : ''}
+    </div>`;
+}
+ 
+function renderGroupedByType(contacts) {
+  return CONTACT_TYPES.map(type => {
+    const members = contacts.filter(c => (c.type||'other') === type.id).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+    if (!members.length) return '';
+    return `
+      <div class="group-block">
+        <div class="group-label">${type.label} <span class="group-count">${members.length}</span></div>
+        <div class="contacts-grid">${members.map(c => contactCardHtml(c)).join('')}</div>
+      </div>`;
+  }).join('');
+}
+ 
+function renderGroupedByCat(contacts) {
+  const grouped = {};
+  contacts.forEach(c => {
+    const cats = getContactCategories(c);
+    const effectiveCats = cats.length ? cats : ['Uncategorized'];
+    effectiveCats.forEach(cat => {
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(c);
+    });
+  });
+  const cats = S.categories && S.categories.length ? S.categories : CATEGORIES;
+  const ordered = [...cats, 'Uncategorized'].filter(k => grouped[k]);
+  return ordered.map(key => {
+    const members = grouped[key].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    return `
+      <div class="group-block">
+        <div class="group-label">${escH(key)} <span class="group-count">${members.length}</span></div>
+        <div class="contacts-grid">${members.map(c => contactCardHtml(c)).join('')}</div>
+      </div>`;
+  }).join('');
+}
+ 
+// ─── MANAGE LISTS ─────────────────────────────────────────
+ 
+function openManageLists() {
+  renderManageLists();
+  $c('modal-lists').classList.add('open');
+}
+ 
+function renderManageLists() {
+  const el = $c('ml-cats-list');
+  if (!el) return;
+  const items = S.categories || [];
+  if (!items.length) {
+    el.innerHTML = `<div style="font-size:12px;font-style:italic;color:var(--text-light);padding:6px 0">No categories yet.</div>`;
+    return;
+  }
+  el.innerHTML = [...items].sort((a,b)=>a.localeCompare(b)).map(item => `
+    <div style="display:flex;align-items:center;gap:6px;background:white;border-radius:3px;padding:5px 10px;border:1px solid var(--border)">
+      <span style="flex:1;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${escH(item)}</span>
+      <button onclick="removeListItem('categories','${escH(item)}')"
+        style="background:none;border:none;cursor:pointer;color:rgba(91,45,34,0.35);font-size:13px;line-height:1;padding:2px 4px;border-radius:3px;transition:var(--t)"
+        onmouseover="this.style.color='#b33';this.style.background='rgba(180,50,50,0.08)'"
+        onmouseout="this.style.color='rgba(91,45,34,0.35)';this.style.background='none'">✕</button>
+    </div>`).join('');
+}
+ 
+function addListItem(listKey) {
+  const inputId = 'ml-cat-input';
+  const val = $c(inputId).value.trim();
+  if (!val) return;
+  if (!S[listKey]) S[listKey] = [];
+  if (!S[listKey].includes(val)) { S[listKey].push(val); save(); }
+  $c(inputId).value = '';
+  renderManageLists();
+}
+ 
+function removeListItem(listKey, val) {
+  if (!S[listKey]) return;
+  S[listKey] = S[listKey].filter(x => x !== val);
+  save();
+  renderManageLists();
+  const cmCats = $c('cm-cats');
+  if (cmCats && cmCats.children.length) {
+    const checked = [...cmCats.querySelectorAll('input:checked')].map(i => i.value);
+    cmCats.innerHTML = buildCatCheckboxes(checked);
+  }
+}
+ 
+// ─── CONTACT MODAL ────────────────────────────────────────
+ 
+const _modalLines = [];  // temp lines while modal is open
+ 
+function buildTypeSelector(selected) {
+  return CONTACT_TYPES.map(t => `
+    <button type="button" class="type-sel-btn${(selected||'showroom')===t.id?' active':''}"
+      onclick="selectContactType('${t.id}')">${t.label}</button>`).join('');
+}
+ 
+function syncCatSection() {
+  const type = $c('cm-type')?.value;
+  // Lines-derived: showroom always; vendor only when lines exist
+  const linesDerived = type === 'showroom' || (type === 'vendor' && _modalLines.length > 0);
+  $c('cm-cats').style.display         = linesDerived ? 'none' : '';
+  $c('cm-cats-derived').style.display = linesDerived ? '' : 'none';
+}
+ 
+function selectContactType(typeId) {
+  $c('cm-type').value = typeId;
+  $a('#cm-type-selector .type-sel-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.trim().toLowerCase().replace(' ','_') === typeId ||
+      CONTACT_TYPES.find(t=>t.id===typeId)?.label === b.textContent.trim());
+  });
+  const hasLines = ['showroom','vendor'].includes(typeId);
+  $c('cm-lines-section').style.display = hasLines ? '' : 'none';
+  syncCatSection();
+}
+ 
+// Category resolution:
+//   Showroom            → always derived from lines
+//   Vendor + has lines  → derived from lines
+//   Vendor + no lines   → manual (the vendor IS the line)
+//   Workroom/Trade/Other → always manual
+function getContactCategories(c) {
+  if (c.type === 'showroom' || (c.type === 'vendor' && c.lines && c.lines.length)) {
+    const cats = new Set();
+    (c.lines||[]).forEach(b => (b.categories||[]).forEach(cat => cats.add(cat)));
+    return [...cats].sort();
+  }
+  return (c.categories || []).slice().sort();
+}
+ 
+function buildCatCheckboxes(selected) {
+  const cats = S.categories && S.categories.length ? S.categories : CATEGORIES;
+  return cats.map(cat => `
+    <label class="cat-check">
+      <input type="checkbox" value="${escH(cat)}" ${(selected||[]).includes(cat)?'checked':''}>
+      <span>${escH(cat)}</span>
+    </label>`).join('');
+}
+ 
+function renderModalLines(lines) {
+  const wrap = $c('cm-lines-tags');
+  if (!wrap) return;
+  const cats = S.categories && S.categories.length ? S.categories : CATEGORIES;
+  wrap.innerHTML = (lines||[]).map(b => {
+    const subPills = (b.categories||[]).map(cat => `<span class="brand-sub-pill">${escH(cat)}</span>`).join('');
+    const hasCats  = (b.categories||[]).length > 0;
+    const catChecks = cats.map(cat =>
+      `<label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:var(--font-b);color:var(--text-dark);cursor:pointer;margin:2px 6px 2px 0">
+         <input type="checkbox" value="${escH(cat)}" ${(b.categories||[]).includes(cat)?'checked':''}
+           onchange="setLineCat('${escH(b.name)}','${escH(cat)}',this.checked)" style="accent-color:var(--russet)">
+         ${escH(cat)}
+       </label>`
+    ).join('');
+    return `
+      <div class="brand-entry" data-bname="${escH(b.name)}">
+        <div class="brand-entry-hd">
+          <span class="brand-nm">${escH(b.name)}</span>
+          ${subPills ? `<div class="brand-sub-pills">${subPills}</div>` : ''}
+          <button type="button" class="brand-cats-toggle" onclick="toggleLineCatsPanel('${escH(b.name)}')"
+            title="Set categories for this brand">Categories ▾</button>
+          <button type="button" class="brand-rm-btn" onclick="removeLineTag('${escH(b.name)}')" title="Remove line">✕</button>
+        </div>
+        <div class="brand-cats-panel" id="bcp-${btoa(b.name).replace(/[^a-z0-9]/gi,'_').slice(0,20)}" style="display:none">
+          <div style="font-size:10px;font-family:var(--font-b);color:var(--text-mid);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">What does ${escH(b.name)} carry?</div>
+          <div style="display:flex;flex-wrap:wrap;gap:2px 0">${catChecks}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+ 
+function addLineTag() {
+  const input = $c('cm-line-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!_modalLines.find(b => b.name.toLowerCase() === val.toLowerCase())) {
+    _modalLines.push({ name: val, categories: [] });
+    renderModalLines(_modalLines);
+    syncCatSection();
+  }
+  input.value = '';
+  input.focus();
+}
+ 
+function removeLineTag(name) {
+  const idx = _modalLines.findIndex(b => b.name === name);
+  if (idx > -1) _modalLines.splice(idx, 1);
+  renderModalLines(_modalLines);
+  syncCatSection();
+}
+ 
+function toggleLineCatsPanel(name) {
+  // Find the panel by looking up the brand entry
+  const entry = [...document.querySelectorAll('.brand-entry')].find(el => el.dataset.bname === name);
+  if (!entry) return;
+  const panel = entry.querySelector('.brand-cats-panel');
+  const btn   = entry.querySelector('.brand-cats-toggle');
+  if (!panel) return;
+  const isOpen = panel.style.display !== 'none';
+  panel.style.display = isOpen ? 'none' : '';
+  btn && btn.classList.toggle('open', !isOpen);
+}
+ 
+function setLineCat(brandName, cat, checked) {
+  const brand = _modalLines.find(b => b.name === brandName);
+  if (!brand) return;
+  if (!brand.categories) brand.categories = [];
+  if (checked && !brand.categories.includes(cat)) brand.categories.push(cat);
+  if (!checked) brand.categories = brand.categories.filter(c => c !== cat);
+  // Refresh only the sub-pills for this entry without collapsing the panel
+  const entry = [...document.querySelectorAll('.brand-entry')].find(el => el.dataset.bname === brandName);
+  if (!entry) return;
+  const subWrap = entry.querySelector('.brand-sub-pills');
+  const hd = entry.querySelector('.brand-entry-hd');
+  const newPills = brand.categories.map(c => `<span class="brand-sub-pill">${escH(c)}</span>`).join('');
+  if (subWrap) {
+    subWrap.innerHTML = newPills;
+  } else if (newPills && hd) {
+    const pills = document.createElement('div');
+    pills.className = 'brand-sub-pills';
+    pills.innerHTML = newPills;
+    const toggle = hd.querySelector('.brand-cats-toggle');
+    if (toggle) hd.insertBefore(pills, toggle);
+  }
+}
+ 
+function addPersonField(person) {
+  const list = $c('cm-people-list');
+  const pid  = person?.id || uid();
+  const div  = document.createElement('div');
+  div.className = 'person-entry';
+  div.dataset.pid = pid;
+  div.innerHTML = `
+    <div class="person-entry-hd">
+      <span class="person-entry-lbl">Contact Person</span>
+      <button type="button" class="remove-poc-btn" onclick="this.closest('.person-entry').remove()">Remove</button>
+    </div>
+    <div class="frow">
+      <div class="fg"><label class="fl">Name</label><input type="text" class="fi poc-name" value="${escH(person?.name||'')}" placeholder="Full name"></div>
+      <div class="fg"><label class="fl">Role / Description</label><input type="text" class="fi poc-role" value="${escH(person?.role||'')}" placeholder="e.g. Fabric Rep, Drapery Workroom"></div>
+    </div>
+    <div class="frow">
+      <div class="fg"><label class="fl">Email</label><input type="email" class="fi poc-email" value="${escH(person?.email||'')}" placeholder="email@example.com"></div>
+      <div class="fg"><label class="fl">Phone</label><input type="text" class="fi poc-phone" value="${escH(person?.phone||'')}" placeholder="(555) 000-0000"></div>
+    </div>
+    <div class="fg" style="margin-top:6px">
+      <label class="fl">Notes</label>
+      <textarea class="fi poc-notes" style="resize:vertical;min-height:40px;font-size:12px" placeholder="Lead times, preferences, anything specific to this rep…">${escH(person?.notes||'')}</textarea>
+    </div>`;
+  list.appendChild(div);
+}
+ 
+function openNewContactModal() {
+  $c('contact-modal-title').textContent = 'New Contact';
+  $c('cm-id').value = '';
+  $c('cm-delete-btn').style.display = 'none';
+  ['cm-name','cm-city','cm-website','cm-instagram','cm-notes','cm-line-input'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  $c('cm-type-selector').innerHTML = buildTypeSelector('showroom');
+  $c('cm-cats').innerHTML = buildCatCheckboxes([]);
+  $c('cm-people-list').innerHTML = '';
+  _modalLines.length = 0;
+  renderModalLines([]);
+  selectContactType('showroom');
+  $c('modal-contact').classList.add('open');
+  setTimeout(() => $c('cm-name').focus(), 80);
+}
+ 
+function openEditContactModal(id) {
+  const c = S.contacts.find(x => x.id === id);
+  if (!c) return;
+  $c('contact-modal-title').textContent = 'Edit Contact';
+  $c('cm-id').value     = c.id;
+  $c('cm-delete-btn').style.display = '';
+  $c('cm-name').value   = c.name      || '';
+  $c('cm-city').value   = c.city      || '';
+  $c('cm-website').value= c.website   || '';
+  $c('cm-instagram').value = c.instagram || '';
+  $c('cm-notes').value  = c.notes     || '';
+  $c('cm-type-selector').innerHTML = buildTypeSelector(c.type || 'showroom');
+  $c('cm-cats').innerHTML = buildCatCheckboxes(c.categories||[]);
+  $c('cm-people-list').innerHTML = '';
+  (c.people||[]).forEach(p => addPersonField(p));
+  _modalLines.length = 0;
+  (c.lines||[]).forEach(b => _modalLines.push(typeof b === 'string' ? {name:b, categories:[]} : {...b}));
+  renderModalLines(_modalLines);
+  selectContactType(c.type || 'showroom');
+  $c('modal-contact').classList.add('open');
+}
+ 
+function saveContact() {
+  const id   = $c('cm-id').value;
+  const cats = [...$c('cm-cats').querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
+  const people = [...$c('cm-people-list').querySelectorAll('.person-entry')].map(el => ({
+    id:    el.dataset.pid || uid(),
+    name:  el.querySelector('.poc-name')?.value.trim()   || '',
+    role:  el.querySelector('.poc-role')?.value.trim()   || '',
+    email: el.querySelector('.poc-email')?.value.trim()  || '',
+    phone: el.querySelector('.poc-phone')?.value.trim()  || '',
+    notes: el.querySelector('.poc-notes')?.value.trim()  || '',
+  })).filter(p => p.name || p.email);
+ 
+  const data = {
+    type:       $c('cm-type').value || 'showroom',
+    name:       $c('cm-name').value.trim(),
+    city:       $c('cm-city').value.trim(),
+    website:    $c('cm-website').value.trim(),
+    instagram:  $c('cm-instagram').value.trim(),
+    notes:      $c('cm-notes').value.trim(),
+    categories: cats,
+    lines:      [..._modalLines],
+    people,
+  };
+ 
+  if (!data.name) { $c('cm-name').focus(); return; }
+ 
+  if (id) {
+    const c = S.contacts.find(x => x.id === id);
+    if (c) Object.assign(c, data);
+    toast('Contact updated.');
+  } else {
+    S.contacts.push({ id:uid(), created:new Date().toISOString().slice(0,10), ...data });
+    toast('Contact added.');
+  }
+  save();
+  closeModal('modal-contact');
+  renderContacts();
+}
+ 
+function deleteContact(id) {
+  if (!id || !confirm('Remove this contact? Gone but not forgotten.')) return;
+  S.contacts = S.contacts.filter(c => c.id !== id);
+  save();
+  closeModal('modal-contact');
+  renderContacts();
+  toast('Contact removed.');
+}
+ 
+// ─── LIVE TIMER ───────────────────────────────────────
+ 
+let _timerInterval = null;
+ 
+function formatElapsed(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+ 
+function elapsedHours(ms) {
+  // Round to nearest 0.25hr (15-min increment), minimum 0.25
+  const raw = ms / 3600000;
+  return Math.max(0.25, Math.round(raw * 4) / 4);
+}
+ 
+function startTimer() {
+  const projId = $c('tt-timer-proj')?.value;
+  const person = $c('tt-timer-person')?.value || 'baylor';
+  if (!projId) { toast('Pick a project first.'); return; }
+  S.activeTimer = { projectId: projId, person, startMs: Date.now() };
+  save();
+  _startTimerTick();
+}
+ 
+function _startTimerTick() {
+  if (_timerInterval) clearInterval(_timerInterval);
+  _renderTimerWidget();
+  _timerInterval = setInterval(() => {
+    _renderTimerWidget();
+  }, 1000);
+}
+ 
+function _renderTimerWidget() {
+  const t = S.activeTimer;
+  const display  = $c('tt-display');
+  const idle     = $c('tt-timer-idle');
+  const running  = $c('tt-timer-running');
+  const navPill  = $c('nav-timer-pill');
+ 
+  if (!t) {
+    if (display)  { display.textContent = '00:00:00'; display.classList.add('idle'); }
+    if (idle)     idle.style.display = 'flex';
+    if (running)  running.style.display = 'none';
+    if (navPill)  navPill.style.display = 'none';
+    return;
+  }
+ 
+  const elapsed = Date.now() - t.startMs;
+  const str = formatElapsed(elapsed);
+  const proj = (S.projects||[]).find(p => p.id === t.projectId);
+ 
+  if (display)  { display.textContent = str; display.classList.remove('idle'); }
+  if (idle)     idle.style.display = 'none';
+  if (running)  { running.style.display = 'flex'; }
+  if ($c('tt-timer-proj-label')) $c('tt-timer-proj-label').textContent = proj ? proj.name : '';
+  if (navPill)  { navPill.style.display = ''; navPill.textContent = '⏱ ' + str.replace(/^00:/,''); }
+}
+ 
+function stopTimer() {
+  if (!S.activeTimer) return;
+  const t = S.activeTimer;
+  const elapsed = Date.now() - t.startMs;
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  S.activeTimer = null;
+  save();
+  _renderTimerWidget();
+  // Pre-fill the Log Time modal
+  openNewTimeModal();
+  // Override defaults with timer data
+  const sel = $c('tm-project');
+  if (sel) sel.value = t.projectId;
+  const isCustom = !TEAM.find(tm => tm.id === t.person);
+  $c('tm-person').value = isCustom ? 'other' : t.person;
+  $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
+  if (isCustom) $c('tm-person-custom').value = t.person;
+  const teamRate = TEAM.find(tm => tm.id === t.person)?.rate || 195;
+  $c('tm-rate').value = teamRate;
+  $c('tm-hours').value = elapsedHours(elapsed);
+  updateTimeFee();
+}
+ 
+function cancelTimer() {
+  if (!confirm('Discard this timer? The time won\'t be saved.')) return;
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  S.activeTimer = null;
+  save();
+  _renderTimerWidget();
+  toast('Timer discarded.');
+}
+ 
+function initTimer() {
+  // Populate project dropdowns
+  const sel = $c('tt-timer-proj');
+  if (sel) {
+    sel.innerHTML = '<option value="">— Pick a project —</option>' +
+      (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+    if (S.activeTimer) sel.value = S.activeTimer.projectId;
+  }
+  if (S.activeTimer) _startTimerTick();
+  else _renderTimerWidget();
+}
+ 
+// ─── TIME TRACKER ─────────────────────────────────────
+ 
+let _currentTimeTab  = 'summary';
+let _timeDetailProj  = null;   // projectId currently drilled into
+let _timeDetailFilter = 'all'; // 'all' | 'billed' | 'unbilled'
+ 
+function setTimeTab(tab) {
+  _currentTimeTab = tab;
+  _timeDetailProj = null; // clear any drill-down when switching tabs
+  $a('[data-ttab]').forEach(b => b.classList.toggle('active', b.dataset.ttab === tab));
+  renderTime();
+}
+ 
+function renderTime() {
+  const body = $c('tt-body');
+  if (!body) return;
+ 
+  // Populate project filter + timer project dropdowns
+  const projSel = $c('tt-filter-proj');
+  if (projSel) {
+    const cur = projSel.value;
+    projSel.innerHTML = '<option value="">All Projects</option>' +
+      (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+  const timerProjSel = $c('tt-timer-proj');
+  if (timerProjSel) {
+    const curT = S.activeTimer?.projectId || timerProjSel.value;
+    timerProjSel.innerHTML = '<option value="">— Pick a project —</option>' +
+      (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===curT?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+ 
+  let entries = [...(S.timeEntries||[])];
+  const fProj   = $c('tt-filter-proj')?.value || '';
+  const fPerson = $c('tt-filter-person')?.value || '';
+  const fBilled = $c('tt-filter-billed')?.value || '';
+ 
+  if (fProj)   entries = entries.filter(e => e.projectId === fProj);
+  if (fPerson) entries = entries.filter(e => e.person === fPerson);
+  if (fBilled === 'billed')   entries = entries.filter(e => e.billed);
+  if (fBilled === 'unbilled') entries = entries.filter(e => !e.billed);
+ 
+  if (!entries.length) {
+    body.innerHTML = `<div class="no-results">${fProj||fPerson||fBilled ? 'No entries match those filters.' : 'No time entries yet. Hit + Log Time to start the clock.'}</div>`;
+    return;
+  }
+ 
+  if (_timeDetailProj)                   body.innerHTML = renderTimeDetail(S.timeEntries||[]);
+  else if (_currentTimeTab === 'summary') body.innerHTML = renderTimeSummary(entries);
+  else                                    body.innerHTML = renderTimeLog(entries);
+}
+ 
+function renderTimeSummary(entries) {
+  // Group by project
+  const byProj = {};
+  entries.forEach(e => {
+    if (!byProj[e.projectId]) byProj[e.projectId] = [];
+    byProj[e.projectId].push(e);
+  });
+  const cards = Object.entries(byProj).map(([pid, ents]) => {
+    const proj = (S.projects||[]).find(p => p.id === pid);
+    const name = proj ? proj.name : 'Unknown Project';
+    const client = proj ? proj.client : '';
+    const totalHrs  = ents.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+    const totalFee  = ents.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+    const unbilledFee = ents.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+    const unbilledHrs = ents.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+    return `
+      <div class="tt-proj-card" onclick="showTimeDetail('${pid}')" style="cursor:pointer">
+        <div class="tt-proj-name">${escH(name)}</div>
+        ${client ? `<div class="tt-proj-client">${escH(client)}</div>` : ''}
+        <div class="tt-stat-row">
+          <div class="tt-stat">
+            <div class="tt-stat-val">${totalHrs % 1 === 0 ? totalHrs : totalHrs.toFixed(2)}</div>
+            <div class="tt-stat-lbl">Total Hrs</div>
+          </div>
+          <div class="tt-stat">
+            <div class="tt-stat-val">${fmt(totalFee)}</div>
+            <div class="tt-stat-lbl">Total Fee</div>
+          </div>
+          ${unbilledFee > 0 ? `
+          <div class="tt-stat">
+            <div class="tt-stat-val" style="color:var(--russet)">${fmt(unbilledFee)}</div>
+            <div class="tt-stat-lbl">Unbilled</div>
+          </div>` : ''}
+        </div>
+        ${unbilledHrs > 0 ? `<div class="tt-unbilled-badge">⚑ ${unbilledHrs % 1 === 0 ? unbilledHrs : unbilledHrs.toFixed(2)} hrs unbilled</div>` : '<div style="margin-top:8px;font-size:10px;color:#287a4a;font-family:var(--font-b)">✓ All billed</div>'}
+      </div>`;
+  }).join('');
+  return `<div class="tt-summary-grid">${cards}</div>`;
+}
+ 
+function renderTimeLog(entries) {
+  const sorted = [...entries].sort((a,b) => (b.date||'').localeCompare(a.date||''));
+  const totalFee  = sorted.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+  const totalHrs  = sorted.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+  const rows = sorted.map(e => {
+    const proj = (S.projects||[]).find(p => p.id === e.projectId);
+    const personLabel = TEAM.find(t=>t.id===e.person)?.label || e.person || '—';
+    const fee = (parseFloat(e.hours)||0) * (parseFloat(e.rate)||0);
+    return `
+      <tr class="${e.billed?'is-billed':''}">
+        <td>${e.date || '—'}</td>
+        <td style="font-weight:600">${escH(proj?.name || 'Unknown')}</td>
+        <td>${escH(personLabel)}</td>
+        <td style="text-align:right">${(parseFloat(e.hours)||0) % 1 === 0 ? parseFloat(e.hours) : (parseFloat(e.hours)||0).toFixed(2)}</td>
+        <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
+        <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
+        <td>${e.billed ? '<span class="tt-billed-pill">Billed</span>' : '<span class="tt-unbilled-pill">Unbilled</span>'}</td>
+        <td style="color:var(--text-mid);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
+        <td><button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button></td>
+      </tr>`;
+  }).join('');
+  return `
+    <table class="tt-log-table">
+      <thead><tr>
+        <th>Date</th><th>Project</th><th>Person</th>
+        <th style="text-align:right">Hrs</th><th style="text-align:right">Rate</th>
+        <th style="text-align:right">Fee</th><th>Status</th><th>Notes</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr class="tt-total-row">
+        <td colspan="3">Total</td>
+        <td style="text-align:right">${totalHrs % 1 === 0 ? totalHrs : totalHrs.toFixed(2)}</td>
+        <td></td>
+        <td style="text-align:right">${fmt(totalFee)}</td>
+        <td colspan="3"></td>
+      </tr></tfoot>
+    </table>`;
+}
+ 
+// ── Time Detail Drill-down ─────────────────────────────────────────────
+function showTimeDetail(projectId) {
+  _timeDetailProj   = projectId;
+  _timeDetailFilter = 'all';
+  renderTime();
+}
+ 
+function setTimeDetailFilter(f) {
+  _timeDetailFilter = f;
+  renderTime();
+}
+ 
+function renderTimeDetail(allEntries) {
+  const proj = (S.projects||[]).find(p => p.id === _timeDetailProj);
+  const name = proj?.name || 'Unknown Project';
+  const client = proj?.client || '';
+ 
+  // Filter by project first
+  const projEntries = allEntries.filter(e => e.projectId === _timeDetailProj);
+ 
+  // Apply billed/unbilled filter
+  let entries = projEntries;
+  if (_timeDetailFilter === 'billed')   entries = projEntries.filter(e => e.billed);
+  if (_timeDetailFilter === 'unbilled') entries = projEntries.filter(e => !e.billed);
+ 
+  const fmt = v => '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const fmtHrs = h => (h % 1 === 0 ? h : h.toFixed(2));
+ 
+  // Totals (always from projEntries, not filtered, for the top bar)
+  const totalHrs      = projEntries.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+  const totalFee      = projEntries.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+  const billedHrs     = projEntries.filter(e=>e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+  const billedFee     = projEntries.filter(e=>e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+  const unbilledHrs   = projEntries.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+  const unbilledFee   = projEntries.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+ 
+  // Per-person summary
+  const personCards = TEAM.map(t => {
+    const pEnts = projEntries.filter(e => e.person === t.id);
+    if (!pEnts.length) return '';
+    const pH  = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+    const pBH = pEnts.filter(e=>e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+    const pUH = pEnts.filter(e=>!e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+    const pBF = pEnts.filter(e=>e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
+    const pUF = pEnts.filter(e=>!e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
+    return `
+      <div class="tt-person-card">
+        <div class="tt-person-name">${escH(t.label)}</div>
+        <div class="tt-person-row">
+          <span class="lbl">Total Hours</span>
+          <span class="val">${fmtHrs(pH)} hrs</span>
+        </div>
+        <div class="tt-person-row">
+          <span class="lbl" style="color:#287a4a">Billed</span>
+          <span class="val">${fmtHrs(pBH)} hrs &nbsp;·&nbsp; ${fmt(pBF)}</span>
+        </div>
+        <div class="tt-person-row">
+          <span class="lbl" style="color:var(--russet)">Unbilled</span>
+          <span class="val">${fmtHrs(pUH)} hrs &nbsp;·&nbsp; ${fmt(pUF)}</span>
+        </div>
+      </div>`;
+  }).join('');
+ 
+  // Per-person log sections
+  const logSections = TEAM.map(t => {
+    const pEnts = entries.filter(e => e.person === t.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    if (!pEnts.length) return '';
+    const rows = pEnts.map(e => {
+      const fee = (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0);
+      return `
+        <tr class="${e.billed?'is-billed':''}">
+          <td>${e.date||'—'}</td>
+          <td style="text-align:right">${fmtHrs(parseFloat(e.hours)||0)}</td>
+          <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
+          <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
+          <td>${e.billed?'<span class="tt-billed-pill">Billed</span>':'<span class="tt-unbilled-pill">Unbilled</span>'}</td>
+          <td style="color:var(--text-mid);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
+          <td><button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button></td>
+        </tr>`;
+    }).join('');
+    const secHrs = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+    const secFee = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
+    return `
+      <div class="tt-section-head">${escH(t.label)}</div>
+      <table class="tt-log-table" style="margin-bottom:24px">
+        <thead><tr>
+          <th>Date</th>
+          <th style="text-align:right">Hrs</th>
+          <th style="text-align:right">Rate</th>
+          <th style="text-align:right">Fee</th>
+          <th>Status</th><th>Notes</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr class="tt-total-row">
+          <td>Subtotal</td>
+          <td style="text-align:right">${fmtHrs(secHrs)}</td>
+          <td></td>
+          <td style="text-align:right">${fmt(secFee)}</td>
+          <td colspan="3"></td>
+        </tr></tfoot>
+      </table>`;
+  }).join('');
+ 
+  const filterBtn = (val, label) => `<button class="tt-filter-btn${_timeDetailFilter===val?' active':''}" onclick="setTimeDetailFilter('${val}')">${label}</button>`;
+ 
+  return `
+    <div style="margin-bottom:20px">
+      <button class="tt-detail-back" onclick="showTimeDetail(null)">← All Projects</button>
+    </div>
+    <div style="margin-bottom:4px">
+      <span style="font-family:var(--font-h);font-size:22px;color:var(--pecan);font-weight:700">${escH(name)}</span>
+      ${client ? `<span style="font-family:var(--font-b);font-size:13px;color:var(--text-mid);margin-left:10px">${escH(client)}</span>` : ''}
+    </div>
+ 
+    <div class="tt-proj-total-bar">
+      <div class="tt-stat">
+        <div class="tt-stat-val">${fmtHrs(totalHrs)}</div>
+        <div class="tt-stat-lbl">Total Hours</div>
+      </div>
+      <div class="tt-stat">
+        <div class="tt-stat-val">${fmt(totalFee)}</div>
+        <div class="tt-stat-lbl">Total Fee</div>
+      </div>
+      <div class="tt-stat">
+        <div class="tt-stat-val" style="color:#287a4a">${fmtHrs(billedHrs)} hrs</div>
+        <div class="tt-stat-lbl">Billed (${fmt(billedFee)})</div>
+      </div>
+      <div class="tt-stat">
+        <div class="tt-stat-val" style="color:var(--russet)">${fmtHrs(unbilledHrs)} hrs</div>
+        <div class="tt-stat-lbl">Unbilled (${fmt(unbilledFee)})</div>
+      </div>
+    </div>
+ 
+    <div class="tt-person-strip">${personCards || '<em style="color:var(--text-mid);font-size:13px">No entries yet.</em>'}</div>
+ 
+    <div style="display:flex;align-items:center;gap:8px;margin:24px 0 12px">
+      <span style="font-family:var(--font-h);font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid)">Show:</span>
+      ${filterBtn('all','All')}
+      ${filterBtn('billed','Billed Only')}
+      ${filterBtn('unbilled','Unbilled Only')}
+    </div>
+ 
+    ${logSections || '<p style="color:var(--text-mid);font-size:13px;font-family:var(--font-b)">No entries match this filter.</p>'}`;
+}
+ 
+function openNewTimeModal() {
+  $c('tm-title').textContent = 'Log Time';
+  $c('tm-id').value = '';
+  $c('tm-delete-btn').style.display = 'none';
+  // Populate project select
+  const sel = $c('tm-project');
+  sel.innerHTML = '<option value="">— Select project —</option>' +
+    (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  // Defaults
+  $c('tm-date').value = new Date().toISOString().slice(0,10);
+  $c('tm-person').value = 'baylor';
+  $c('tm-person-custom-wrap').style.display = 'none';
+  $c('tm-person-custom').value = '';
+  $c('tm-rate').value = '195';
+  $c('tm-hours').value = '';
+  $c('tm-notes').value = '';
+  $c('tm-billed').checked = false;
+  $c('tm-fee-val').textContent = '$0.00';
+  $c('modal-time').classList.add('open');
+  setTimeout(() => $c('tm-project').focus(), 80);
+}
+ 
+function openEditTimeModal(id) {
+  const e = (S.timeEntries||[]).find(x => x.id === id);
+  if (!e) return;
+  $c('tm-title').textContent = 'Edit Entry';
+  $c('tm-id').value = e.id;
+  $c('tm-delete-btn').style.display = '';
+  const sel = $c('tm-project');
+  sel.innerHTML = '<option value="">— Select project —</option>' +
+    (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===e.projectId?'selected':''}>${escH(p.name)}</option>`).join('');
+  $c('tm-date').value = e.date || new Date().toISOString().slice(0,10);
+  const isCustom = !TEAM.find(t=>t.id===e.person);
+  $c('tm-person').value = isCustom ? 'other' : e.person;
+  $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
+  $c('tm-person-custom').value = isCustom ? e.person : '';
+  $c('tm-rate').value = e.rate || '';
+  $c('tm-hours').value = e.hours || '';
+  $c('tm-notes').value = e.notes || '';
+  $c('tm-billed').checked = !!e.billed;
+  updateTimeFee();
+  $c('modal-time').classList.add('open');
+}
+ 
+function tmPersonChange() {
+  const val = $c('tm-person').value;
+  const isCustom = val === 'other';
+  $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
+  if (!isCustom) {
+    const t = TEAM.find(t=>t.id===val);
+    if (t) $c('tm-rate').value = t.rate;
+  }
+  updateTimeFee();
+}
+ 
+function tmProjectChange() {
+  // nothing extra needed yet — reserved for future project-rate overrides
+}
+ 
+function updateTimeFee() {
+  const h = parseFloat($c('tm-hours')?.value) || 0;
+  const r = parseFloat($c('tm-rate')?.value) || 0;
+  const el = $c('tm-fee-val');
+  if (el) el.textContent = fmt(h * r);
+}
+ 
+function saveTimeEntry() {
+  const id       = $c('tm-id').value;
+  const projId   = $c('tm-project').value;
+  const personRaw = $c('tm-person').value;
+  const person   = personRaw === 'other' ? ($c('tm-person-custom').value.trim() || 'Other') : personRaw;
+  const rate     = parseFloat($c('tm-rate').value) || 0;
+  const hours    = parseFloat($c('tm-hours').value) || 0;
+  const date     = $c('tm-date').value;
+  const notes    = $c('tm-notes').value.trim();
+  const billed   = $c('tm-billed').checked;
+ 
+  if (!projId) { $c('tm-project').focus(); return; }
+  if (!hours)  { $c('tm-hours').focus(); return; }
+ 
+  const data = { projectId:projId, person, rate, hours, date, notes, billed };
+ 
+  if (!S.timeEntries) S.timeEntries = [];
+  if (id) {
+    const idx = S.timeEntries.findIndex(e => e.id === id);
+    if (idx > -1) Object.assign(S.timeEntries[idx], data);
+    toast('Entry updated.');
+  } else {
+    S.timeEntries.push({ id:uid(), ...data });
+    toast('Time logged.');
+  }
+  save();
+  closeModal('modal-time');
+  renderTime();
+}
+ 
+function deleteCurrentTimeEntry() {
+  const id = document.getElementById('tm-id')?.value;
+  deleteTimeEntry(id);
+}
+ 
+function deleteTimeEntry(id) {
+  if (!id || !confirm('Delete this time entry?')) return;
+  S.timeEntries = (S.timeEntries||[]).filter(e => e.id !== id);
+  save();
+  closeModal('modal-time');
+  renderTime();
+  toast('Entry deleted.');
+}
+ 
+function addSampleData() {
+  const proj = [
+    { id:uid(), name:'5914 Coliseum',           client:'November Project',    type:'residential', city:'New Orleans, LA',  stage:'active',    created:'2025-11-01' },
+    { id:uid(), name:'Bar Nero / Mea Culpa',     client:'Restaurant Group',    type:'commercial',  city:'Jackson, MS',      stage:'proposal',  created:'2026-02-01' },
+    { id:uid(), name:'Mandy Alexander Residence',client:'Mandy Alexander',     type:'residential', city:'Baton Rouge, LA',  stage:'continued', created:'2025-09-15' },
+    { id:uid(), name:'E. Blount Drapery',        client:'E. Blount',           type:'residential', city:'Jackson, MS',      stage:'active',    created:'2026-01-10' },
+    { id:uid(), name:'Sonia Thompson Furniture', client:'Sonia Thompson',      type:'residential', city:'Atlanta, GA',      stage:'proposal',  created:'2026-03-01' },
+  ];
+ 
+  proj.forEach(p => { S.projects.push(p); S.proposals[p.id] = { spaces:[], freight:'', tax:'' }; });
+ 
+  // Seed proposal for Bar Nero
+  const bn = proj[1].id;
+  S.proposals[bn] = {
+    spaces:[
+      {
+        id:uid(), name:'Bar Nero',
+        items:[
+          { id:uid(), name:'Custom Banquette Upholstery',     priceNet:'2400', qty:'1', status:'waiting_quote',  notes:'Waiting on COM yardage req from workroom.',      link:'', vendor:'Sonia Thompson Studio', flag:'N', _open:false },
+          { id:uid(), name:'Bar Stools — Restoration Hardware',priceNet:'385',  qty:'8', status:'client_approval',notes:'Client has two colorways under consideration.',   link:'', vendor:'Restoration Hardware',  flag:'N', _open:false },
+          { id:uid(), name:'Custom Drapery — Back Bar',       priceNet:'',     qty:'', status:'waiting_qty',    notes:'Waiting on final window measurements from GC.',   link:'', vendor:'',                     flag:'',  _open:false },
+        ]
+      },
+      {
+        id:uid(), name:'Mea Culpa',
+        items:[
+          { id:uid(), name:'Velvet Club Chairs (pair)',        priceNet:'1200', qty:'3', status:'approved',       notes:'Kravet Belshire Velvet — Bordeaux confirmed.',    link:'https://kravet.com', vendor:'Kravet', flag:'N', _open:false },
+        ]
+      }
+    ],
+    freight:'450',
+    tax:'',
+  };
+ 
+  S.contacts = [
+    {
+      id:uid(), type:'showroom', name:'Paul+', city:'New Orleans, LA',
+      website:'paulplus.com', instagram:'@paulplus',
+      categories:[],
+      lines:[
+        { name:'Malabar Fabrics',  categories:['Fabric & Upholstery'] },
+        { name:'Kravet',           categories:['Fabric & Upholstery','Window Treatments','Furniture'] },
+        { name:'Lee Jofa',         categories:['Fabric & Upholstery','Window Treatments'] },
+        { name:'Schumacher',       categories:['Fabric & Upholstery','Wall Treatments'] },
+        { name:'Visual Comfort',   categories:['Lighting'] },
+      ],
+      notes:'Trade account active. Net 30.',
+      people:[
+        { id:uid(), name:'Jill Brookover', role:'Sales Rep — Fabric & Upholstery', email:'jill@paulplus.com',   phone:'(504) 555-0101', notes:'Best reached by email. Slow to respond on Mondays.' },
+        { id:uid(), name:'Marcus Webb',    role:'Sales Rep — Lighting',            email:'marcus@paulplus.com', phone:'(504) 555-0202', notes:'' },
+      ], created:'2025-01-01'
+    },
+    {
+      id:uid(), type:'workroom', name:'Douglass Workroom', city:'Jackson, MS',
+      website:'', instagram:'',
+      categories:['Window Treatments','Fabric & Upholstery'],
+      lines:[],
+      notes:'Reliable. 4–6 week lead on custom drapery.',
+      people:[
+        { id:uid(), name:'Donna Arceneaux', role:'Curtain & Drapery', email:'donna@douglass.com', phone:'(601) 555-0303', notes:'Confirm lining choice upfront — she will assume unlined if not specified.' },
+        { id:uid(), name:'Ray Douglass',    role:'Upholstery',         email:'ray@douglass.com',  phone:'(601) 555-0304', notes:'' },
+      ], created:'2025-01-01'
+    },
+    {
+      id:uid(), type:'showroom', name:'IDC New Orleans', city:'Metairie, LA',
+      website:'idcnola.com', instagram:'@idcnola',
+      categories:[],
+      lines:[
+        { name:'Walker Zanger',    categories:['Tile'] },
+        { name:'Ann Sacks',        categories:['Tile','Flooring'] },
+        { name:'Waterworks',       categories:['Plumbing','Hardware'] },
+        { name:'Phillip Jeffries', categories:['Wall Treatments'] },
+      ],
+      notes:'Ask for trade pricing — usually 30–40% off.',
+      people:[
+        { id:uid(), name:'Tom Haggerty', role:'Tile & Flooring', email:'thaggerty@idcnola.com', phone:'(504) 555-0404', notes:'' },
+      ], created:'2025-01-01'
+    },
+    {
+      id:uid(), type:'vendor', name:'Benjamin Moore', city:'',
+      website:'benjaminmoore.com', instagram:'',
+      categories:[],
+      lines:[
+        { name:'Benjamin Moore', categories:['Paint'] },
+        { name:'Aura',           categories:['Paint'] },
+        { name:'Regal Select',   categories:['Paint'] },
+      ],
+      notes:'',
+      people:[
+        { id:uid(), name:'Renee Fontenot', role:'Color Consultant', email:'rfontenot@benjaminmoore.com', phone:'(225) 555-0505', notes:'' },
+      ], created:'2025-01-01'
+    },
+    {
+      id:uid(), type:'trade_service', name:'Ferguson Bath & Kitchen', city:'New Orleans, LA',
+      website:'ferguson.com', instagram:'',
+      categories:['Plumbing','Hardware'],
+      lines:[
+        { name:'Kohler',     categories:['Plumbing'] },
+        { name:'Brizo',      categories:['Plumbing'] },
+        { name:'Waterworks', categories:['Plumbing','Hardware'] },
+        { name:'Rohl',       categories:['Plumbing'] },
+      ],
+      notes:'Trade account set up. Net 30.',
+      people:[
+        { id:uid(), name:'Chris Landry', role:'Plumbing Specialist', email:'clandry@ferguson.com', phone:'(504) 555-0606', notes:'' },
+      ], created:'2025-01-01'
+    },
+  ];
+ 
+  S.categories = [...CATEGORIES];
+ 
+  save();
+}
+ 
+// ─── INIT ─────────────────────────────────────────────────
+ 
+function init() {
+  load();
+ 
+  if (S.clientView) {
+    $c('toggle-sw').classList.add('on');
+    $c('view-proposal').classList.add('client-view-active');
+  }
+ 
+  if (!S.projects.length) addSampleData();
+ 
+  renderPipeline();
+  updateProjSelect();
+ 
+  // Restore contacts tab
+  if (S.currentContactTab) {
+    $a('[data-ctab]').forEach(b => b.classList.toggle('active', b.dataset.ctab === S.currentContactTab));
+  }
+ 
+  if (S.currentView && S.currentView !== 'pipeline') {
+    showView(S.currentView);
+    if (S.currentView === 'proposal' && S.currentPropProject) {
+      $c('proj-select').value = S.currentPropProject;
+      renderPropBody();
+    }
+  }
+ 
+  // Always init timer (resumes if one was running before page reload)
+  initTimer();
+}
+ 
+init();
+</script>
+</body>
+</html>
