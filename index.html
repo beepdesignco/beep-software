@@ -1641,6 +1641,12 @@ tr:hover .row-btns { opacity:1; }
       <button class="btn btn-primary btn-sm" onclick="addQtyUnit()">Add</button>
     </div>
 
+    <div class="modal-section-hd" style="margin-top:22px">Status Colors</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
+      Click a color swatch to change the color for each proposal status.
+    </div>
+    <div id="as-status-colors" style="display:flex;flex-direction:column;gap:6px"></div>
+
     <div class="modal-footer" style="margin-top:18px">
       <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
       <div style="flex:1"></div>
@@ -1750,6 +1756,17 @@ const STATUSES = [
   { v:'ordered',            l:'Ordered' },
   { v:'received',           l:'Received' },
 ];
+
+const DEFAULT_STATUS_COLORS = {
+  pending:           '#8a8a8a',
+  waiting_quote:     '#c47a20',
+  waiting_selection: '#c47a20',
+  waiting_qty:       '#c47a20',
+  client_approval:   '#b33d3d',
+  approved:          '#2d7a4a',
+  ordered:           '#2d5a8a',
+  received:          '#1a6e3a',
+};
  
 const EMPTY_MSGS = {
   lead:        'No leads. Either slow season or blissful ignorance.',
@@ -1815,6 +1832,7 @@ let S = {
   _returnView: null,
   _dataVersion: 2,
   qtyUnits: [],
+  statusColors: {},
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -1837,6 +1855,7 @@ function load() {
     });
     if (!S.categories || !S.categories.length) S.categories = [...CATEGORIES];
     if (!S.qtyUnits || !S.qtyUnits.length) S.qtyUnits = [...DEFAULT_QTY_UNITS];
+    if (!S.statusColors || !Object.keys(S.statusColors).length) S.statusColors = {...DEFAULT_STATUS_COLORS};
     // Migrate old 'brands' field → 'lines'
     S.contacts.forEach(c => {
       if (c.brands !== undefined && c.lines === undefined) {
@@ -1970,6 +1989,10 @@ function calcReadyMadeClient(item, pid) {
   return total;
 }
  
+function getStatusColor(statusVal) {
+  return (S.statusColors && S.statusColors[statusVal]) || DEFAULT_STATUS_COLORS[statusVal] || 'var(--text-mid)';
+}
+
 function toast(msg) {
   const c = $c('toasts');
   const t = document.createElement('div');
@@ -2300,10 +2323,10 @@ function renderSpace(sp, pid) {
             <th style="width:4%"></th>
             <th style="width:30%">Item</th>
             <th class="r hide-client" style="width:10%">Net</th>
-            <th class="r" style="width:10%">Client</th>
+            <th class="r" style="width:10%">Price</th>
             <th class="r" style="width:6%">Qty</th>
             <th class="r" style="width:10%">Total</th>
-            <th style="width:14%">Status</th>
+            <th class="hide-client" style="width:14%">Status</th>
             <th style="width:38px"></th>
           </tr>
         </thead>
@@ -2343,7 +2366,7 @@ function renderItemRow(item, spId, pid) {
   const client = getItemClient(item, pid);
   const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
   const total = client * qty;
-  const sopts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''}>${s.l}</option>`).join('');
+  const sopts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${s.l}</option>`).join('');
   const markupNote = item.billCostOnly ? '<span class="markup-tag">cost only</span>' :
     (item.adjustMarkup != null && item.adjustMarkup !== '' ? `<span class="markup-tag">${item.adjustMarkup}%</span>` : '');
 
@@ -2418,8 +2441,8 @@ function renderItemRow(item, spId, pid) {
       <td><div class="cell-ro calc">${client>0?fmt(client):'—'}</div></td>
       <td><div class="cell-ro">${item.type==='constructed'?'—':(qty ? qty + (item.qtyUnit ? ' '+item.qtyUnit : '') : '—')}</div></td>
       <td><div class="cell-ro">${total>0?fmt(total):'—'}</div></td>
-      <td onclick="event.stopPropagation()">
-        <select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)">${sopts}</select>
+      <td class="hide-client" onclick="event.stopPropagation()">
+        <select class="status-sel" onchange="mutItem('${pid}','${spId}','${item.id}','status',this.value)" style="color:${getStatusColor(item.status)}">${sopts}</select>
       </td>
       <td onclick="event.stopPropagation()">
         <div class="row-btns" style="opacity:1">
@@ -3011,6 +3034,7 @@ function removeListItem(listKey, val) {
 
 function openAppSettings() {
   renderQtyUnitsList();
+  renderStatusColorSettings();
   $c('modal-app-settings').classList.add('open');
 }
 
@@ -3044,6 +3068,37 @@ function removeQtyUnit(val) {
   S.qtyUnits = (S.qtyUnits || []).filter(u => u !== val);
   save();
   renderQtyUnitsList();
+}
+
+function renderStatusColorSettings() {
+  const el = $c('as-status-colors');
+  if (!el) return;
+  el.innerHTML = STATUSES.map(s => {
+    const color = getStatusColor(s.v);
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:5px 0">
+      <input type="color" value="${color}" style="width:28px;height:28px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
+        onchange="updateStatusColor('${s.v}',this.value)">
+      <span style="font-family:var(--font-b);font-size:12px;color:${color};font-weight:700;min-width:160px">${s.l}</span>
+      <button onclick="resetStatusColor('${s.v}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">reset</button>
+    </div>`;
+  }).join('');
+}
+
+function updateStatusColor(statusVal, color) {
+  if (!S.statusColors) S.statusColors = {};
+  S.statusColors[statusVal] = color;
+  save();
+  renderStatusColorSettings();
+  if (S.currentPropProject) renderPropBody();
+}
+
+function resetStatusColor(statusVal) {
+  if (!S.statusColors) S.statusColors = {};
+  S.statusColors[statusVal] = DEFAULT_STATUS_COLORS[statusVal] || '#8a8a8a';
+  save();
+  renderStatusColorSettings();
+  if (S.currentPropProject) renderPropBody();
 }
 
 function qtyUnitOptions(selected) {
