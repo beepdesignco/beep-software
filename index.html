@@ -2546,8 +2546,11 @@ function handleFileUpload(pid, spId, itemId, compId, inputEl) {
   if (!target.files) target.files = [];
 
   [...files].forEach(file => {
-    const allowed = ['application/pdf','image/png','image/jpeg','image/jpg'];
-    if (!allowed.includes(file.type)) { toast('Only PDF, PNG, and JPG files are supported.'); return; }
+    const allowedTypes = ['application/pdf','image/png','image/jpeg','image/jpg'];
+    const allowedExts = ['.pdf','.png','.jpg','.jpeg','.dwg'];
+    const ext = '.'+file.name.split('.').pop().toLowerCase();
+    const allowed = allowedTypes.includes(file.type) || allowedExts.includes(ext);
+    if (!allowed) { toast('Supported: PDF, PNG, JPG, DWG'); return; }
     if (file.size > 5 * 1024 * 1024) { toast('File too large (max 5MB).'); return; }
 
     const reader = new FileReader();
@@ -2660,7 +2663,7 @@ function renderFilesSection(pid, spId, itemId, compId, files) {
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${fileList || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No files.</span>'}</div>
   <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0">
     <span>+ Upload</span>
-    <input type="file" accept=".pdf,.png,.jpg,.jpeg" multiple style="display:none" onchange="handleFileUpload('${pid}','${spId}','${itemId}','${compId||''}',this)">
+    <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg" multiple style="display:none" onchange="handleFileUpload('${pid}','${spId}','${itemId}','${compId||''}',this)">
   </label>`;
 }
 
@@ -3072,12 +3075,132 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   </div>`;
 }
 
-function renderPDDocuments(proj, pid) {
+function handleProjectFileUpload(pid, inputEl) {
+  const files = inputEl.files;
+  if (!files || !files.length) return;
+  const proj = getProject(pid);
+  if (!proj) return;
+  if (!proj.files) proj.files = [];
+
+  [...files].forEach(file => {
+    const allowedTypes = ['application/pdf','image/png','image/jpeg','image/jpg'];
+    const allowedExts = ['.pdf','.png','.jpg','.jpeg','.dwg'];
+    const ext = '.'+file.name.split('.').pop().toLowerCase();
+    if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) { toast('Supported: PDF, PNG, JPG, DWG'); return; }
+    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); return; }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      proj.files.push({ id: uid(), name: file.name, type: file.type || ext, size: file.size, data: e.target.result, uploaded: new Date().toISOString() });
+      save();
+      renderProjectDetail();
+    };
+    reader.readAsDataURL(file);
+  });
+  inputEl.value = '';
+}
+
+function removeProjectFile(pid, fileId) {
+  if (!confirm('Remove this file?')) return;
+  const proj = getProject(pid);
+  if (!proj || !proj.files) return;
+  proj.files = proj.files.filter(f => f.id !== fileId);
+  save();
+  renderProjectDetail();
+}
+
+function renderFileCard(f, removeOnclick) {
+  const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
+  const sizeStr = f.size < 1024 ? f.size+'B' : f.size < 1048576 ? (f.size/1024).toFixed(0)+'KB' : (f.size/1048576).toFixed(1)+'MB';
+  const dateStr = f.uploaded ? new Date(f.uploaded).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+  const canView = !f.name.endsWith('.dwg');
   return `
-  <div style="text-align:center;padding:60px 30px;color:rgba(91,45,34,0.35)">
-    <div style="font-family:var(--font-h);font-size:32px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;opacity:0.3;margin-bottom:8px">Documents</div>
-    <div style="font-style:italic;font-size:13px">Document management is coming soon. Upload areas will be available on individual items and at the project level.</div>
+  <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;transition:var(--t)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+    <span style="font-size:20px">${icon}</span>
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.name)}</div>
+      <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${sizeStr}${dateStr?' · '+dateStr:''}</div>
+    </div>
+    <button onclick="event.stopPropagation();${removeOnclick}" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px;padding:4px">✕</button>
   </div>`;
+}
+
+function renderPDDocuments(proj, pid) {
+  const prop = S.proposals[pid];
+
+  // Project-level documents
+  const projFiles = proj.files || [];
+  let html = `
+  <div style="margin-bottom:28px">
+    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:6px 0 8px;border-bottom:2px solid var(--pecan);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
+      <span>Project Documents</span>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);font-weight:400;text-transform:none;letter-spacing:0">
+        + Upload
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg" multiple style="display:none" onchange="handleProjectFileUpload('${pid}',this)">
+      </label>
+    </div>
+    ${projFiles.length ? `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">
+      ${projFiles.map(f => renderFileCard(f, `removeProjectFile('${pid}','${f.id}')`)).join('')}
+    </div>` : '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No project-level documents yet. Upload contracts, floor plans, site photos, or any other project files.</div>'}
+  </div>`;
+
+  // Item-level documents grouped by space
+  if (prop && prop.spaces) {
+    let hasItemFiles = false;
+    prop.spaces.forEach(sp => {
+      const itemsWithFiles = (sp.items||[]).filter(item => {
+        const itemFiles = (item.files||[]).length;
+        const compFiles = (item.components||[]).reduce((s,c) => s + (c.files||[]).length, 0);
+        return itemFiles + compFiles > 0;
+      });
+      if (!itemsWithFiles.length) return;
+      hasItemFiles = true;
+
+      html += `
+      <div style="margin-bottom:22px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);padding:4px 0 6px;border-bottom:1.5px solid var(--border);margin-bottom:10px">${escH(sp.name||'Unnamed Space')}</div>`;
+
+      itemsWithFiles.forEach(item => {
+        const allFiles = [];
+        (item.files||[]).forEach(f => allFiles.push({...f, source: item.name}));
+        (item.components||[]).forEach(c => {
+          (c.files||[]).forEach(f => allFiles.push({...f, source: item.name + ' → ' + c.name}));
+        });
+
+        html += `
+        <div style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            ${itemTypeBadge(item.type)}
+            <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name)}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">
+            ${allFiles.map(f => {
+              const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
+              const sizeStr = f.size < 1024 ? f.size+'B' : f.size < 1048576 ? (f.size/1024).toFixed(0)+'KB' : (f.size/1048576).toFixed(1)+'MB';
+              const canView = !f.name.endsWith('.dwg');
+              return `
+              <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+                <span style="font-size:18px">${icon}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-family:var(--font-b);font-size:11px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.name)}</div>
+                  <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${escH(f.source)} · ${sizeStr}</div>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      });
+
+      html += '</div>';
+    });
+
+    if (!hasItemFiles && !projFiles.length) {
+      html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No item-level documents yet. Upload files on individual items in the Project Mgmt tab.</div>';
+    }
+  }
+
+  return html;
 }
 
 function renderPDSettings(proj, pid) {
