@@ -1169,10 +1169,9 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-label">Time Tracker</span>
         <span class="nav-timer-pill" id="nav-timer-pill" style="display:none">⏱ 0:00</span>
       </div>
-      <div class="nav-item" style="opacity:0.38;cursor:default">
+      <div class="nav-item" onclick="showView('invoices')" data-view="invoices">
         <span class="nav-icon">◎</span>
-        <span class="nav-label">Billing</span>
-        <span class="nav-soon">soon</span>
+        <span class="nav-label">Invoices</span>
       </div>
       <div class="nav-item" style="opacity:0.38;cursor:default">
         <span class="nav-icon">◫</span>
@@ -1220,7 +1219,7 @@ tr:hover .row-btns { opacity:1; }
           <div class="page-sub" id="pd-subtitle"></div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-secondary btn-sm" onclick="openEditModal(S._detailProjectId)">Edit Project</button>
+          <button class="btn btn-secondary btn-sm" onclick="openProjectSettings(S._detailProjectId)">Edit Project</button>
         </div>
       </div>
       <!-- Project tabs -->
@@ -1228,6 +1227,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab active" data-pdtab="overview" onclick="setProjDetailTab('overview')" style="margin-bottom:-1px">Overview</button>
         <button class="view-tab" data-pdtab="proposal" onclick="setProjDetailTab('proposal')" style="margin-bottom:-1px">Proposal</button>
         <button class="view-tab" data-pdtab="management" onclick="setProjDetailTab('management')" style="margin-bottom:-1px">Project Mgmt</button>
+        <button class="view-tab" data-pdtab="addressbook" onclick="setProjDetailTab('addressbook')" style="margin-bottom:-1px">Address Book</button>
         <button class="view-tab" data-pdtab="documents" onclick="setProjDetailTab('documents')" style="margin-bottom:-1px">Documents</button>
         <button class="view-tab" data-pdtab="settings" onclick="setProjDetailTab('settings')" style="margin-bottom:-1px">Settings</button>
       </div>
@@ -1367,7 +1367,55 @@ tr:hover .row-btns { opacity:1; }
         <div class="no-results">No time entries yet. Hit + Log Time to start the clock.</div>
       </div>
     </div>
- 
+
+    <!-- ─────────── INVOICES VIEW ─────────── -->
+    <div class="view" id="view-invoices">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Invoices</div>
+          <div class="page-sub">Create, send, and track invoices</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="fi" id="inv-filter-project" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px;width:200px">
+            <option value="">All Projects</option>
+          </select>
+          <select class="fi" id="inv-filter-status" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px">
+            <option value="">All Statuses</option>
+            <option value="draft">Draft</option>
+            <option value="sent">Sent</option>
+            <option value="partial">Partially Paid</option>
+            <option value="paid">Paid</option>
+            <option value="overdue">Overdue</option>
+          </select>
+          <select class="fi" id="inv-filter-type" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px">
+            <option value="">All Types</option>
+            <option value="phased">Phased</option>
+            <option value="monthly">Monthly Charges</option>
+            <option value="standalone">Standalone</option>
+            <option value="design_fee">Design Fee</option>
+          </select>
+          <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>
+        </div>
+      </div>
+      <div id="invoices-body" style="padding:0 30px 40px"></div>
+    </div>
+
+    <!-- ─────────── INVOICE BUILDER VIEW ─────────── -->
+    <div class="view" id="view-invoice-builder">
+      <div class="page-header" style="border-bottom:none;padding-bottom:0">
+        <div>
+          <button class="btn btn-ghost btn-sm" onclick="showView('invoices')" style="margin-bottom:6px;padding-left:0">← Back to Invoices</button>
+          <div class="page-title" id="invb-title">Invoice</div>
+          <div class="page-sub" id="invb-subtitle"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
+          <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>
+        </div>
+      </div>
+      <div id="invb-body" style="padding:22px 30px 40px"><!-- rendered by JS --></div>
+    </div>
+
   </main>
 </div>
  
@@ -1383,7 +1431,7 @@ tr:hover .row-btns { opacity:1; }
     <div class="frow">
       <div class="fg">
         <label class="fl">Client</label>
-        <select class="fi fsel" id="np-client"><!-- populated by JS --></select>
+        <select class="fi fsel" id="np-client" onchange="handleClientDropdown(this)"><!-- populated by JS --></select>
       </div>
       <div class="fg">
         <label class="fl">Project Type</label>
@@ -1393,20 +1441,58 @@ tr:hover .row-btns { opacity:1; }
         </select>
       </div>
     </div>
-    <div class="frow">
+    <div class="fg">
+      <label class="fl">Starting Stage</label>
+      <select class="fi fsel" id="np-stage">
+        <option value="lead" selected>Lead</option>
+        <option value="proposal">Proposal Phase</option>
+        <option value="active">Active Project</option>
+        <option value="continued">Continued Relationship</option>
+        <option value="mini_session">Mini Session</option>
+      </select>
+    </div>
+
+    <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Project Address</div>
       <div class="fg">
-        <label class="fl">City / Location</label>
-        <input type="text" class="fi" id="np-city" placeholder="e.g. New Orleans, LA">
+        <label class="fl">Street Address</label>
+        <input type="text" class="fi" id="np-street" placeholder="e.g. 5914 Coliseum St">
       </div>
-      <div class="fg">
-        <label class="fl">Starting Stage</label>
-        <select class="fi fsel" id="np-stage">
-          <option value="lead" selected>Lead</option>
-          <option value="proposal">Proposal Phase</option>
-          <option value="active">Active Project</option>
-          <option value="continued">Continued Relationship</option>
-          <option value="mini_session">Mini Session</option>
-        </select>
+      <div class="frow">
+        <div class="fg" style="flex:2">
+          <label class="fl">City / State</label>
+          <input type="text" class="fi" id="np-city" placeholder="e.g. New Orleans, LA">
+        </div>
+        <div class="fg" style="flex:1">
+          <label class="fl">Zip Code</label>
+          <input type="text" class="fi" id="np-zip" placeholder="70115">
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Project Settings</div>
+      <div class="frow">
+        <div class="fg">
+          <label class="fl">Default Markup %</label>
+          <input type="number" class="fi" id="np-markup" min="0" step="1" placeholder="25" value="25">
+        </div>
+        <div class="fg">
+          <label class="fl">State (for tax)</label>
+          <input type="text" class="fi" id="np-state" placeholder="e.g. Louisiana">
+        </div>
+      </div>
+      <div class="frow">
+        <div class="fg">
+          <label class="fl">Tax Rate %</label>
+          <input type="number" class="fi" id="np-taxrate" min="0" step="0.01" placeholder="0" value="0">
+        </div>
+        <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <input type="checkbox" id="np-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+            Tax freight in this state
+          </label>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1429,7 +1515,7 @@ tr:hover .row-btns { opacity:1; }
     <div class="frow">
       <div class="fg">
         <label class="fl">Client</label>
-        <select class="fi fsel" id="ep-client"><!-- populated by JS --></select>
+        <select class="fi fsel" id="ep-client" onchange="handleClientDropdown(this)"><!-- populated by JS --></select>
       </div>
       <div class="fg">
         <label class="fl">Project Type</label>
@@ -1439,20 +1525,32 @@ tr:hover .row-btns { opacity:1; }
         </select>
       </div>
     </div>
-    <div class="frow">
+    <div class="fg">
+      <label class="fl">Stage</label>
+      <select class="fi fsel" id="ep-stage">
+        <option value="lead">Lead</option>
+        <option value="proposal">Proposal Phase</option>
+        <option value="active">Active Project</option>
+        <option value="continued">Continued Relationship</option>
+        <option value="mini_session">Mini Session</option>
+      </select>
+    </div>
+
+    <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Project Address</div>
       <div class="fg">
-        <label class="fl">City / Location</label>
-        <input type="text" class="fi" id="ep-city">
+        <label class="fl">Street Address</label>
+        <input type="text" class="fi" id="ep-street">
       </div>
-      <div class="fg">
-        <label class="fl">Stage</label>
-        <select class="fi fsel" id="ep-stage">
-          <option value="lead">Lead</option>
-          <option value="proposal">Proposal Phase</option>
-          <option value="active">Active Project</option>
-          <option value="continued">Continued Relationship</option>
-          <option value="mini_session">Mini Session</option>
-        </select>
+      <div class="frow">
+        <div class="fg" style="flex:2">
+          <label class="fl">City / State</label>
+          <input type="text" class="fi" id="ep-city">
+        </div>
+        <div class="fg" style="flex:1">
+          <label class="fl">Zip Code</label>
+          <input type="text" class="fi" id="ep-zip">
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1467,34 +1565,84 @@ tr:hover .row-btns { opacity:1; }
 
 <!-- ═════════════════ PROJECT SETTINGS MODAL ═════════════════ -->
 <div class="overlay" id="modal-proj-settings">
-  <div class="modal" style="width:440px">
+  <div class="modal" style="width:500px">
     <button class="modal-x" onclick="closeModal('modal-proj-settings')">✕</button>
     <div class="modal-title">Project Settings</div>
     <input type="hidden" id="ps-id">
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic" id="ps-proj-label"></div>
-    <div class="frow">
-      <div class="fg">
-        <label class="fl">Default Markup %</label>
-        <input type="number" class="fi" id="ps-markup" min="0" step="1" placeholder="25">
-      </div>
-      <div class="fg">
-        <label class="fl">State</label>
-        <input type="text" class="fi" id="ps-state" placeholder="e.g. Louisiana">
-      </div>
+
+    <div class="fg">
+      <label class="fl">Project Name</label>
+      <input type="text" class="fi" id="ps-name">
     </div>
     <div class="frow">
       <div class="fg">
-        <label class="fl">Tax Rate %</label>
-        <input type="number" class="fi" id="ps-taxrate" min="0" step="0.01" placeholder="0">
+        <label class="fl">Client</label>
+        <select class="fi fsel" id="ps-client" onchange="handleClientDropdown(this)"><!-- populated by JS --></select>
       </div>
-      <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-          <input type="checkbox" id="ps-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
-          Tax freight in this state
-        </label>
+      <div class="fg">
+        <label class="fl">Project Type</label>
+        <select class="fi fsel" id="ps-type">
+          <option value="residential">Residential</option>
+          <option value="commercial">Commercial</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Stage</label>
+      <select class="fi fsel" id="ps-stage">
+        <option value="lead">Lead</option>
+        <option value="proposal">Proposal Phase</option>
+        <option value="active">Active Project</option>
+        <option value="continued">Continued Relationship</option>
+        <option value="mini_session">Mini Session</option>
+      </select>
+    </div>
+
+    <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Project Address</div>
+      <div class="fg">
+        <label class="fl">Street Address</label>
+        <input type="text" class="fi" id="ps-street">
+      </div>
+      <div class="frow">
+        <div class="fg" style="flex:2">
+          <label class="fl">City / State</label>
+          <input type="text" class="fi" id="ps-city">
+        </div>
+        <div class="fg" style="flex:1">
+          <label class="fl">Zip Code</label>
+          <input type="text" class="fi" id="ps-zip">
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Billing &amp; Tax</div>
+      <div class="frow">
+        <div class="fg">
+          <label class="fl">Default Markup %</label>
+          <input type="number" class="fi" id="ps-markup" min="0" step="1" placeholder="25">
+        </div>
+        <div class="fg">
+          <label class="fl">State (for tax)</label>
+          <input type="text" class="fi" id="ps-state" placeholder="e.g. Louisiana">
+        </div>
+      </div>
+      <div class="frow">
+        <div class="fg">
+          <label class="fl">Tax Rate %</label>
+          <input type="number" class="fi" id="ps-taxrate" min="0" step="0.01" placeholder="0">
+        </div>
+        <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <input type="checkbox" id="ps-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+            Tax freight in this state
+          </label>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" onclick="deleteProject($c('ps-id').value)">Delete Project</button>
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-proj-settings')">Cancel</button>
       <button class="btn btn-primary" onclick="saveProjectSettings()">Save Settings</button>
@@ -1655,6 +1803,10 @@ tr:hover .row-btns { opacity:1; }
     <div class="fg">
       <label class="fl">Notes</label>
       <textarea class="fi" id="cl-notes" style="resize:vertical;min-height:52px" placeholder="Preferences, referral source, anything useful…"></textarea>
+    </div>
+    <div id="cl-projects-section" style="display:none;margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Projects</div>
+      <div id="cl-projects-list"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="cl-delete-btn" style="display:none" onclick="deleteClient($c('cl-id').value)">Delete</button>
@@ -1896,7 +2048,206 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
-<!-- ═════════════════ TOASTS ═════════════════ -->
+<!-- ═════════════════ ESTIMATE WIZARD MODAL ═════════════════ -->
+<div class="overlay" id="modal-estimate">
+  <div class="modal" style="width:620px">
+    <button class="modal-x" onclick="closeModal('modal-estimate')">✕</button>
+    <div class="modal-title">Save Proposal as Estimate</div>
+    <div class="frow">
+      <div class="fg" style="flex:2">
+        <label class="fl">Estimate Name</label>
+        <input type="text" class="fi" id="est-name" placeholder="e.g. Initial Estimate — Round 1">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Date</label>
+        <input type="date" class="fi" id="est-date">
+      </div>
+    </div>
+
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Estimation Lines</div>
+      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:12px">These are added on top of the current proposal totals.</div>
+
+      <!-- Freight -->
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);cursor:pointer">
+            <input type="checkbox" id="est-freight-on" checked style="accent-color:var(--russet);width:14px;height:14px" onchange="recalcEstimate()"> Freight Estimate
+          </label>
+          <div style="display:flex;align-items:center;gap:10px">
+            <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="est-freight-tax" style="accent-color:var(--russet);width:12px;height:12px" onchange="recalcEstimate()"> Taxable</label>
+            <span id="est-freight-total" style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--pecan)">$0.00</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:10px">
+          <div class="fg" style="max-width:120px">
+            <label class="fl">% of Subtotal</label>
+            <input type="number" class="fi" id="est-freight-pct" value="10" min="0" step="0.5" onchange="recalcEstimate()" style="font-size:12px">
+          </div>
+          <div>
+            <button class="btn btn-ghost btn-sm" onclick="openExclusionPicker('freight')" style="font-size:10px;margin-bottom:12px">Select Exclusions <span id="est-freight-excl-count" style="color:var(--text-light)"></span></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hours -->
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);cursor:pointer">
+            <input type="checkbox" id="est-hours-on" checked style="accent-color:var(--russet);width:14px;height:14px" onchange="recalcEstimate()"> Hours Estimate
+          </label>
+          <div style="display:flex;align-items:center;gap:10px">
+            <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="est-hours-tax" style="accent-color:var(--russet);width:12px;height:12px" onchange="recalcEstimate()"> Taxable</label>
+            <span id="est-hours-total" style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--pecan)">$0.00</span>
+          </div>
+        </div>
+        <div id="est-hours-rows"></div>
+      </div>
+
+      <!-- Receiving -->
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);cursor:pointer">
+            <input type="checkbox" id="est-recv-on" checked style="accent-color:var(--russet);width:14px;height:14px" onchange="recalcEstimate()"> Receiving Estimate
+          </label>
+          <div style="display:flex;align-items:center;gap:10px">
+            <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="est-recv-tax" style="accent-color:var(--russet);width:12px;height:12px" onchange="recalcEstimate()"> Taxable</label>
+            <span id="est-recv-total" style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--pecan)">$0.00</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:10px">
+          <div class="fg" style="max-width:120px">
+            <label class="fl">Per-Item Fee</label>
+            <input type="number" class="fi" id="est-recv-fee" value="50" min="0" step="5" onchange="recalcEstimate()" style="font-size:12px">
+          </div>
+          <div>
+            <button class="btn btn-ghost btn-sm" onclick="openExclusionPicker('recv')" style="font-size:10px;margin-bottom:12px">Select Exclusions <span id="est-recv-excl-count" style="color:var(--text-light)"></span></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Storage -->
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <label style="display:flex;align-items:center;gap:6px;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);cursor:pointer">
+            <input type="checkbox" id="est-storage-on" style="accent-color:var(--russet);width:14px;height:14px" onchange="recalcEstimate()"> Storage Estimate
+          </label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="est-storage-tax" style="accent-color:var(--russet);width:12px;height:12px" onchange="recalcEstimate()"> Taxable</label>
+            <span style="font-size:11px;font-family:var(--font-b);color:var(--text-mid)">$</span>
+            <input type="number" class="fi" id="est-storage-amt" value="0" min="0" step="25" onchange="recalcEstimate()" style="width:100px;font-size:12px;padding:5px 8px">
+          </div>
+        </div>
+      </div>
+
+      <!-- Tariffs -->
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <label style="display:flex;align-items:center;gap:6px;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);cursor:pointer">
+            <input type="checkbox" id="est-tariff-on" style="accent-color:var(--russet);width:14px;height:14px" onchange="recalcEstimate()"> Tariff Estimate
+          </label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="est-tariff-tax" style="accent-color:var(--russet);width:12px;height:12px" onchange="recalcEstimate()"> Taxable</label>
+            <span style="font-size:11px;font-family:var(--font-b);color:var(--text-mid)">$</span>
+            <input type="number" class="fi" id="est-tariff-amt" value="0" min="0" step="25" onchange="recalcEstimate()" style="width:100px;font-size:12px;padding:5px 8px">
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom Lines -->
+      <div style="margin-top:12px">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-mid);margin-bottom:6px">Additional Lines</div>
+        <div id="est-custom-lines"></div>
+        <button class="btn btn-ghost btn-sm" onclick="addEstCustomLine()" style="margin-top:4px">+ Add Line</button>
+      </div>
+    </div>
+
+    <!-- Summary -->
+    <div style="margin-top:16px;padding-top:14px;border-top:2px solid var(--pecan)">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-family:var(--font-h);font-weight:800;font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany)">Estimate Total</span>
+        <span id="est-grand-total" style="font-family:var(--font-h);font-weight:800;font-size:20px;color:var(--pecan)">$0.00</span>
+      </div>
+      <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b);margin-top:2px">Proposal total + estimation lines</div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-estimate')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEstimate()">Save Estimate</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ INVOICE SETUP MODAL (Step 1) ═════════════════ -->
+<div class="overlay" id="modal-invoice">
+  <div class="modal" style="width:480px">
+    <button class="modal-x" onclick="closeModal('modal-invoice')">✕</button>
+    <div class="modal-title" id="inv-modal-title">New Invoice</div>
+    <input type="hidden" id="inv-id">
+
+    <div class="frow">
+      <div class="fg" style="max-width:140px">
+        <label class="fl">Invoice #</label>
+        <input type="text" class="fi" id="inv-number" readonly style="background:rgba(91,45,34,0.04)">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Invoice Type</label>
+        <select class="fi fsel" id="inv-type">
+          <option value="phased">Phased Invoice</option>
+          <option value="monthly">Monthly Charges</option>
+          <option value="standalone">Standalone</option>
+          <option value="design_fee">Design Fee</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Project</label>
+        <select class="fi fsel" id="inv-project" onchange="onInvProjectChange()"><!-- populated by JS --></select>
+      </div>
+      <div class="fg">
+        <label class="fl">Client</label>
+        <select class="fi fsel" id="inv-client"><!-- populated by JS --></select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Sent Date</label>
+        <input type="date" class="fi" id="inv-sent-date">
+      </div>
+      <div class="fg">
+        <label class="fl">Due Date</label>
+        <input type="date" class="fi" id="inv-due-date">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Phase / Label</label>
+      <input type="text" class="fi" id="inv-phase" placeholder="e.g. Phase 1, January 2026">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-invoice')">Discard</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="saveInvoice('draft')">Save Draft</button>
+      <button class="btn btn-primary" onclick="createAndOpenInvoice()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ EXCLUSION PICKER ═════════════════ -->
+<div class="overlay" id="modal-exclusions" style="z-index:110">
+  <div class="modal" style="width:520px">
+    <button class="modal-x" onclick="closeExclusionPicker()">✕</button>
+    <div class="modal-title" id="excl-title">Select Exclusions</div>
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:12px">Uncheck items to exclude them from this calculation.</div>
+    <div id="excl-list" style="max-height:400px;overflow-y:auto"></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeExclusionPicker()">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══���═════════════ TOASTS ═════════════════ -->
 <div class="toast-wrap" id="toasts"></div>
  
 <!-- ═══════════════════════════════════════════════════════════
@@ -1945,6 +2296,7 @@ const SHIPPING_STATUSES = [
 const DEFAULT_TASK_STATUSES = ['In Progress','Purgatory','Completed'];
 
 function isShippingComp(c) { return c.componentType === 'shipping'; }
+function isExcludedFromGrouping(c) { return c.componentType === 'shipping' || c.componentType === 'receiving'; }
 function getShippingStatusColor(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).color || '#c47a20'; }
 function getShippingStatusLabel(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).l || 'Needs Payment'; }
 
@@ -1969,6 +2321,7 @@ const EMPTY_MSGS = {
 };
 
 const COMPONENT_TYPES = [
+  { id:'base',         label:'Base' },
   { id:'material',     label:'Material' },
   { id:'labor',        label:'Labor' },
   { id:'hardware',     label:'Hardware' },
@@ -2015,6 +2368,7 @@ let S = {
   clients: [],
   contacts: [],
   timeEntries: [],
+  invoices: [],
   activeTimer: null,   // { projectId, person, startMs }
   categories: [],
   currentView: 'projects',
@@ -2258,6 +2612,8 @@ function showView(v) {
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'time') renderTime();
+  if (v === 'invoices') renderInvoices();
+  if (v === 'invoice-builder') { /* rendered by openInvoiceBuilder */ }
   save();
 }
 
@@ -2291,8 +2647,50 @@ function renderProjectDetail() {
   if (_projDetailTab === 'overview')    body.innerHTML = renderPDOverview(proj, pid);
   if (_projDetailTab === 'proposal')    body.innerHTML = renderPDProposal(proj, pid);
   if (_projDetailTab === 'management')  body.innerHTML = renderPDManagement(proj, pid);
+  if (_projDetailTab === 'addressbook') body.innerHTML = renderPDAddressBook(proj, pid);
   if (_projDetailTab === 'documents')   body.innerHTML = renderPDDocuments(proj, pid);
   if (_projDetailTab === 'settings')    body.innerHTML = renderPDSettings(proj, pid);
+
+  // Set up drag-and-drop for Quick References
+  if (_projDetailTab === 'overview') initQRDragDrop(pid);
+}
+
+function initQRDragDrop(pid) {
+  const list = $c('qr-list');
+  if (!list) return;
+  let dragEl = null;
+  list.querySelectorAll('.qr-card').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      dragEl = card;
+      card.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+      card.style.opacity = '1';
+      dragEl = null;
+      list.querySelectorAll('.qr-card').forEach(c => c.style.borderTop = '');
+    });
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      card.style.borderTop = '2px solid var(--russet)';
+    });
+    card.addEventListener('dragleave', () => {
+      card.style.borderTop = '';
+    });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.style.borderTop = '';
+      if (dragEl && dragEl !== card) {
+        list.insertBefore(dragEl, card);
+        // Save new order
+        const order = [...list.querySelectorAll('.qr-card')].map(c => c.dataset.qrkey);
+        const ab = getAddressBook(pid);
+        ab.quickRefOrder = order;
+        save();
+      }
+    });
+  });
 }
 
 function renderPDOverview(proj, pid) {
@@ -2310,24 +2708,6 @@ function renderPDOverview(proj, pid) {
     });
   });
 
-  // Build project address book from contacts tagged on items
-  const taggedContacts = new Set();
-  (prop?.spaces||[]).forEach(sp => {
-    (sp.items||[]).forEach(item => {
-      if (item.contact) {
-        const found = (S.contacts||[]).find(c => c.name && c.name.toLowerCase() === item.contact.toLowerCase());
-        if (found) taggedContacts.add(found.id);
-      }
-      (item.components||[]).forEach(comp => {
-        if (comp.contact) {
-          const found = (S.contacts||[]).find(c => c.name && c.name.toLowerCase() === comp.contact.toLowerCase());
-          if (found) taggedContacts.add(found.id);
-        }
-      });
-    });
-  });
-  const addressBook = [...taggedContacts].map(id => (S.contacts||[]).find(c=>c.id===id)).filter(Boolean);
-
   let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">';
 
   // Left column: client info + stats
@@ -2343,7 +2723,7 @@ function renderPDOverview(proj, pid) {
       ${client.address ? '<div style="font-size:11px;color:var(--text-light);margin-top:3px;font-style:italic">'+escH(client.address)+'</div>' : ''}
     </div>`;
   } else {
-    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:18px;color:var(--text-light);font-style:italic;font-size:13px">No client linked. <button class="btn btn-ghost btn-sm" onclick="openEditModal('${pid}')">Edit project</button></div>`;
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:18px;color:var(--text-light);font-style:italic;font-size:13px">No client linked. <button class="btn btn-ghost btn-sm" onclick="openProjectSettings('${pid}')">Edit project</button></div>`;
   }
 
   // Quick stats
@@ -2363,25 +2743,101 @@ function renderPDOverview(proj, pid) {
   }
   html += '</div>';
 
-  // Right column: project address book
+  // Right column: Quick References
   html += '<div>';
-  html += '<div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Project Address Book</div>';
-  if (addressBook.length) {
-    html += addressBook.map(c => {
-      const typeLabel = CONTACT_TYPES.find(t => t.id === c.type)?.label || '';
-      const poc = (c.people||[])[0];
-      return `
-      <div style="background:white;border-radius:var(--r);padding:12px 14px;border:1px solid var(--border);margin-bottom:8px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name)}</div>
-          ${typeLabel ? '<span class="type-badge type-'+c.type+'">'+typeLabel+'</span>' : ''}
-        </div>
-        ${poc ? '<div style="font-size:11px;color:var(--text-mid);margin-top:3px">'+escH(poc.name)+(poc.email?' \u00b7 <span style="color:var(--russet)">'+escH(poc.email)+'</span>':'')+'</div>' : ''}
-        ${c.city ? '<div style="font-size:10px;color:var(--text-light);margin-top:2px;font-style:italic">'+escH(c.city)+'</div>' : ''}
-      </div>`;
-    }).join('');
+  html += '<div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Quick References</div>';
+
+  const ab = getAddressBook(pid);
+  const qrCardStyle = 'background:white;border-radius:var(--r);padding:12px 14px;border:1px solid var(--border);margin-bottom:8px;cursor:grab';
+  const qrLabel = 'font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);margin-bottom:6px';
+  const qrName = 'font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em';
+  const qrDetail = 'font-size:11px;color:var(--text-mid);margin-top:2px';
+
+  // Build quick ref items
+  const qrItems = [];
+  // Project Address
+  if (proj.street || proj.city) {
+    qrItems.push({ key:'projAddr', html:`
+      <div style="${qrLabel}">Project Address</div>
+      <div style="${qrName}">${escH(proj.street||'')}${proj.street&&proj.city?', ':''}${escH(proj.city||'')}${proj.zip?' '+escH(proj.zip):''}</div>
+      ${(ab.projectAddress||{}).gateCode ? '<div style="'+qrDetail+'">Gate: '+escH(ab.projectAddress.gateCode)+'</div>' : ''}
+      ${(ab.projectAddress||{}).entryInstructions ? '<div style="'+qrDetail+'">'+escH(ab.projectAddress.entryInstructions)+'</div>' : ''}
+    `});
+  }
+  // Receiver
+  const qrRecv = ab.receiver || {};
+  if (qrRecv.name || qrRecv.address) {
+    qrItems.push({ key:'receiver', html:`
+      <div style="${qrLabel}">Receiver</div>
+      <div style="${qrName}">${escH(qrRecv.name||'')}</div>
+      ${qrRecv.address ? '<div style="'+qrDetail+'">'+escH(qrRecv.address)+'</div>' : ''}
+      ${qrRecv.sidemark ? '<div style="'+qrDetail+'">Sidemark: '+escH(qrRecv.sidemark)+'</div>' : ''}
+      ${qrRecv.phone ? '<div style="'+qrDetail+'">'+escH(qrRecv.phone)+'</div>' : ''}
+      ${qrRecv.trackingLink ? '<div style="margin-top:3px"><a href="'+escH(qrRecv.trackingLink)+'" target="_blank" style="font-size:10px;color:var(--russet);text-decoration:none">Tracking Page \u2197</a></div>' : ''}
+      ${(qrRecv.contacts||[]).length ? '<div style="'+qrDetail+'">'+(qrRecv.contacts||[]).map(c=>escH(c.name||'')+(c.title?' ('+escH(c.title)+')':'')).filter(Boolean).join(', ')+'</div>' : ''}
+    `});
+  }
+  // Contractor
+  const qrContr = ab.contractor || {};
+  if (qrContr.businessName || qrContr.phone) {
+    qrItems.push({ key:'contractor', html:`
+      <div style="${qrLabel}">Contractor</div>
+      <div style="${qrName}">${escH(qrContr.businessName||'')}</div>
+      ${qrContr.phone ? '<div style="'+qrDetail+'">'+escH(qrContr.phone)+'</div>' : ''}
+      ${qrContr.email ? '<div style="'+qrDetail+'">'+escH(qrContr.email)+'</div>' : ''}
+      ${(qrContr.contacts||[]).length ? '<div style="'+qrDetail+'">'+(qrContr.contacts||[]).map(c=>escH(c.name||'')+(c.title?' ('+escH(c.title)+')':'')).filter(Boolean).join(', ')+'</div>' : ''}
+    `});
+  }
+  // Architect
+  const qrArch = ab.architect || {};
+  if (qrArch.name) {
+    qrItems.push({ key:'architect', html:`
+      <div style="${qrLabel}">Architect</div>
+      <div style="${qrName}">${escH(qrArch.name)}</div>
+      ${qrArch.phone ? '<div style="'+qrDetail+'">'+escH(qrArch.phone)+'</div>' : ''}
+      ${qrArch.email ? '<div style="'+qrDetail+'">'+escH(qrArch.email)+'</div>' : ''}
+      ${qrArch.contactPerson ? '<div style="'+qrDetail+'">'+escH(qrArch.contactPerson)+'</div>' : ''}
+    `});
+  }
+  // Landscape Architect
+  const qrLarch = ab.landscapeArchitect || {};
+  if (qrLarch.name) {
+    qrItems.push({ key:'landscapeArch', html:`
+      <div style="${qrLabel}">Landscape Architect</div>
+      <div style="${qrName}">${escH(qrLarch.name)}</div>
+      ${qrLarch.phone ? '<div style="'+qrDetail+'">'+escH(qrLarch.phone)+'</div>' : ''}
+      ${qrLarch.email ? '<div style="'+qrDetail+'">'+escH(qrLarch.email)+'</div>' : ''}
+      ${qrLarch.contactPerson ? '<div style="'+qrDetail+'">'+escH(qrLarch.contactPerson)+'</div>' : ''}
+    `});
+  }
+  // Starred contacts
+  (ab.linkedContacts||[]).forEach((lc, i) => {
+    if (!lc.starred || !lc.contactId) return;
+    const ct = (S.contacts||[]).find(c => c.id === lc.contactId);
+    if (!ct) return;
+    const poc = (ct.people||[])[0];
+    qrItems.push({ key:'star_'+i, html:`
+      <div style="${qrLabel}">${escH(lc.projectRole||ct.type||'Contact')} \u2605</div>
+      <div style="${qrName}">${escH(ct.name)}</div>
+      ${poc ? '<div style="'+qrDetail+'">'+escH(poc.name)+(poc.phone?' \u00b7 '+escH(poc.phone):'')+(poc.email?' \u00b7 <span style="color:var(--russet)">'+escH(poc.email)+'</span>':'')+'</div>' : ''}
+      ${ct.city ? '<div style="'+qrDetail+';font-style:italic">'+escH(ct.city)+'</div>' : ''}
+    `});
+  });
+
+  // Apply saved order
+  const savedOrder = ab.quickRefOrder || [];
+  const ordered = [];
+  savedOrder.forEach(k => { const item = qrItems.find(q => q.key === k); if (item) ordered.push(item); });
+  qrItems.forEach(q => { if (!ordered.includes(q)) ordered.push(q); });
+
+  if (ordered.length) {
+    html += `<div id="qr-list" data-pid="${pid}">`;
+    html += ordered.map(q => `
+      <div class="qr-card" draggable="true" data-qrkey="${q.key}" style="${qrCardStyle}">${q.html}</div>
+    `).join('');
+    html += '</div>';
   } else {
-    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:14px 0">No contacts tagged on items yet. They\'ll appear here automatically.</div>';
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:14px 0">Add info in the Address Book tab to see it here.</div>';
   }
   html += '</div>';
 
@@ -2398,6 +2854,7 @@ function renderPDProposal(proj, pid) {
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="addSpace()">+ Add Space</button>
     <button class="btn btn-dark btn-sm" onclick="window.print()">\u2193 Print / Export</button>
+    <button class="btn btn-secondary btn-sm" onclick="openEstimateWizard()">Save as Estimate</button>
     <div class="view-tabs" style="margin-left:auto;margin-right:8px">
       <button class="view-tab${_propFilter==='all'?' active':''}" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
       <button class="view-tab${_propFilter==='allowances'?' active':''}" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
@@ -2439,6 +2896,7 @@ function renderPDProposal(proj, pid) {
     html += '<div style="margin-top:10px"><button class="btn btn-ghost btn-sm" onclick="addSpace()">+ Add Another Space</button></div>';
     html += renderTotals(prop, pid);
   }
+  html += renderEstimatesSection(pid);
   return html;
 }
 
@@ -2467,7 +2925,25 @@ function savePMField(pid, spId, itemId, key, val) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
   item[key] = val;
+  if (key === 'status' && item.groupComponents) {
+    (item.components||[]).forEach(c => {
+      if (!isExcludedFromGrouping(c)) c.status = val;
+    });
+  }
   save();
+}
+
+function toggleGroupComponents(pid, spId, itemId) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  item.groupComponents = !item.groupComponents;
+  if (item.groupComponents) {
+    (item.components||[]).forEach(c => {
+      if (!isExcludedFromGrouping(c)) c.status = item.status || 'proposed';
+    });
+  }
+  save();
+  renderProjectDetail();
 }
 
 function saveCompField(pid, spId, itemId, compId, key, val) {
@@ -2476,6 +2952,10 @@ function saveCompField(pid, spId, itemId, compId, key, val) {
   const comp = (item.components||[]).find(c => c.id === compId);
   if (!comp) return;
   comp[key] = val;
+  // Sync base component qty with item qty
+  if (key === 'qty' && comp.componentType === 'base') {
+    item.qty = val;
+  }
   save();
 }
 
@@ -2842,6 +3322,7 @@ function renderPMItemCard(item, sp, pid) {
       </div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
+        ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
         ${item.dueDate ? `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Due: ${escH(item.dueDate)}</div>` : ''}
       </div>
     </div>
@@ -2861,20 +3342,25 @@ function renderPMItemCard(item, sp, pid) {
     ${item.type === 'constructed' && (item.components||[]).length ? (() => {
       const nonShip = (item.components||[]).filter(c => !isShippingComp(c));
       const shipComps = (item.components||[]).filter(c => isShippingComp(c));
+      const isGrouped = item.groupComponents;
       let compHtml = '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">';
+      if (isGrouped) {
+        compHtml += `<div style="display:flex;align-items:center;gap:6px;padding:4px 0 4px 18px;font-size:10px;font-family:var(--font-b);color:var(--text-light);font-style:italic">Tracking as single item</div>`;
+      }
       compHtml += nonShip.map(c => {
         const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
         const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
+        const cGrouped = isGrouped && !isExcludedFromGrouping(c);
         const cStatusColor = getStatusColor(c.status||'proposed');
         const cStatusLabel = STATUSES.find(s => s.v === (c.status||'proposed'))?.l || 'Proposed';
         const cMatch = compMatchesFilter(c);
         const dimStyle = !cMatch ? 'opacity:0.35;filter:grayscale(1);' : '';
         return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 18px;font-size:11px;${dimStyle}transition:opacity 0.2s">
-          <span class="status-dot" style="background:${cStatusColor};width:6px;height:6px"></span>
-          <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}</span>
+          <span class="status-dot" style="background:${cGrouped ? statusColor : cStatusColor};width:6px;height:6px"></span>
+          <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}${(parseFloat(c.qty)||1)>1||c.qtyUnit?` <span style="color:var(--text-light);font-size:9px">×${parseFloat(c.qty)||1}${c.qtyUnit?' '+escH(c.qtyUnit):''}</span>`:''}</span>
           ${cTypeLabel ? `<span class="comp-type-label" style="font-size:8px">${cTypeLabel}</span>` : ''}
           ${c.contact ? `<span style="color:var(--text-light);font-size:10px">${escH(c.contact)}</span>` : ''}
-          <span style="font-size:10px;font-family:var(--font-b);color:${cStatusColor};white-space:nowrap">${cStatusLabel}</span>
+          ${!cGrouped ? `<span style="font-size:10px;font-family:var(--font-b);color:${cStatusColor};white-space:nowrap">${cStatusLabel}</span>` : ''}
           <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):''}</span>
         </div>`;
       }).join('');
@@ -3300,6 +3786,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
       const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
       const cIsShip = isShippingComp(c);
+      const cGrouped = item.groupComponents && !isExcludedFromGrouping(c);
       const cStatusList = cIsShip ? SHIPPING_STATUSES : STATUSES;
       const cDefault = cIsShip ? 'needs_payment' : 'proposed';
       const cStatusOpts = cStatusList.map(s => `<option value="${s.v}" ${(c.status||cDefault)===s.v?'selected':''}>${s.l}</option>`).join('');
@@ -3317,6 +3804,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
           <div style="display:flex;align-items:center;gap:6px">
             <span class="status-dot" style="background:${cStatusColor};width:7px;height:7px"></span>
             <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name||'—')}</span>
+            ${(parseFloat(c.qty)||1)>1||c.qtyUnit?`<span style="font-size:10px;color:var(--text-mid);font-family:var(--font-b);margin-left:4px">×${parseFloat(c.qty)||1}${c.qtyUnit?' '+escH(c.qtyUnit):''}</span>`:''}
             ${cTypeLabel ? `<span class="comp-type-label" style="margin-left:4px">${cTypeLabel}</span>` : ''}
             ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
           </div>
@@ -3325,8 +3813,8 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
 
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
           <div>
-            <label class="fl">Status</label>
-            <select class="fi fsel" style="font-size:11px;padding:5px 7px" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','status',this.value)">${cStatusOpts}</select>
+            <label class="fl">Status${cGrouped ? ' <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0">(synced)</span>' : ''}</label>
+            <select class="fi fsel" style="font-size:11px;padding:5px 7px${cGrouped?';opacity:0.5':''}" ${cGrouped?'disabled':''} onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','status',this.value)">${cStatusOpts}</select>
           </div>
           <div>
             <label class="fl">Due Date</label>
@@ -3422,6 +3910,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--font-h);font-weight:800;font-size:22px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
+        ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
         <button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')" style="margin-top:4px">Edit Item</button>
       </div>
     </div>
@@ -3442,6 +3931,13 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
               return `<button onclick="toggleStatusFlag('${pid}','${spId}','${itemId}','${f.v}')" style="font-size:10px;font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${f.color}${active?'':'40'};background:${active?f.color+'18':'transparent'};color:${active?f.color:'var(--text-light)'}">${f.l}</button>`;
             }).join('')}
           </div>
+          ${item.type === 'constructed' && (item.components||[]).some(c => !isExcludedFromGrouping(c)) ? `
+          <label style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid var(--border);cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
+            <input type="checkbox" ${item.groupComponents?'checked':''} onchange="toggleGroupComponents('${pid}','${spId}','${itemId}')" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+            Track components as single item
+          </label>
+          ${item.groupComponents ? '<div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px;padding-left:22px">Component statuses auto-update with item status</div>' : ''}
+          ` : ''}
         </div>` : ''}
 
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
@@ -3670,6 +4166,7 @@ function saveDocProperties() {
   file.folders = [...$c('dp-folders').querySelectorAll('input:checked')].map(cb => cb.value);
 
   save();
+
   closeModal('modal-doc-props');
   renderProjectDetail();
   toast('File updated.');
@@ -3849,6 +4346,392 @@ function renderPDDocuments(proj, pid) {
 }
 
 
+// ─── PROJECT ADDRESS BOOK ─────────────────────────────────
+
+function getAddressBook(pid) {
+  const prop = S.proposals[pid];
+  if (!prop) return {};
+  if (!prop.addressBook) prop.addressBook = {};
+  return prop.addressBook;
+}
+
+function saveABField(pid, section, key, val) {
+  const ab = getAddressBook(pid);
+  if (!ab[section]) ab[section] = {};
+  ab[section][key] = val;
+  save();
+}
+
+function addABSectionContact(pid, section) {
+  const ab = getAddressBook(pid);
+  if (!ab[section]) ab[section] = {};
+  if (!ab[section].contacts) ab[section].contacts = [];
+  ab[section].contacts.push({ name:'', phone:'', title:'', notes:'' });
+  save();
+  renderProjectDetail();
+}
+
+function removeABSectionContact(pid, section, idx) {
+  const ab = getAddressBook(pid);
+  if (ab[section]?.contacts) ab[section].contacts.splice(idx, 1);
+  save();
+  renderProjectDetail();
+}
+
+function saveABSectionContact(pid, section, idx, key, val) {
+  const ab = getAddressBook(pid);
+  const c = ab[section]?.contacts?.[idx];
+  if (c) { c[key] = val; save(); }
+}
+
+// Backwards compat wrappers
+function addABContractorContact(pid) { addABSectionContact(pid, 'contractor'); }
+function removeABContractorContact(pid, idx) { removeABSectionContact(pid, 'contractor', idx); }
+function saveABContractorContact(pid, idx, key, val) { saveABSectionContact(pid, 'contractor', idx, key, val); }
+
+function addABLinkedContact(pid) {
+  const ab = getAddressBook(pid);
+  if (!ab.linkedContacts) ab.linkedContacts = [];
+  ab.linkedContacts.push({ contactId:'', projectRole:'' });
+  save();
+  renderProjectDetail();
+}
+
+function removeABLinkedContact(pid, idx) {
+  const ab = getAddressBook(pid);
+  if (ab.linkedContacts) ab.linkedContacts.splice(idx, 1);
+  save();
+  renderProjectDetail();
+}
+
+function saveABLinkedContact(pid, idx, key, val) {
+  const ab = getAddressBook(pid);
+  const lc = ab.linkedContacts?.[idx];
+  if (lc) { lc[key] = val; save(); }
+}
+
+function toggleABStar(pid, idx) {
+  const ab = getAddressBook(pid);
+  const lc = ab.linkedContacts?.[idx];
+  if (lc) { lc.starred = !lc.starred; save(); renderProjectDetail(); }
+}
+
+function handleABContactDropdown(pid, idx, selectEl) {
+  if (selectEl.value === '__new__') {
+    selectEl.value = '';
+    openNewContactModal(newId => {
+      saveABLinkedContact(pid, idx, 'contactId', newId);
+      renderProjectDetail();
+    });
+  } else {
+    saveABLinkedContact(pid, idx, 'contactId', selectEl.value);
+    renderProjectDetail();
+  }
+}
+
+function toggleABSection(pid, section) {
+  const ab = getAddressBook(pid);
+  const key = '_show_' + section;
+  ab[key] = !ab[key];
+  save();
+  renderProjectDetail();
+}
+
+function renderABPocAndNotes(pid, section, data) {
+  const contacts = data.contacts || [];
+  let h = `
+  <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+    <div style="font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-mid);margin-bottom:8px">Points of Contact</div>
+    ${contacts.map((c, i) => `
+    <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-mid)">Contact ${i+1}</span>
+        <button onclick="removeABSectionContact('${pid}','${section}',${i})" style="font-size:9px;font-family:var(--font-b);color:var(--text-light);background:none;border:none;cursor:pointer;text-decoration:underline">Remove</button>
+      </div>
+      <div class="frow">
+        <div class="fg"><label class="fl">Name</label>
+          <input type="text" class="fi" value="${escH(c.name||'')}" onchange="saveABSectionContact('${pid}','${section}',${i},'name',this.value.trim())" placeholder="Full name" style="font-size:12px">
+        </div>
+        <div class="fg"><label class="fl">Job Title</label>
+          <input type="text" class="fi" value="${escH(c.title||'')}" onchange="saveABSectionContact('${pid}','${section}',${i},'title',this.value.trim())" placeholder="e.g. Project Manager" style="font-size:12px">
+        </div>
+      </div>
+      <div class="frow">
+        <div class="fg"><label class="fl">Phone</label>
+          <input type="text" class="fi" value="${escH(c.phone||'')}" onchange="saveABSectionContact('${pid}','${section}',${i},'phone',this.value.trim())" placeholder="(555) 000-0000" style="font-size:12px">
+        </div>
+        <div class="fg"><label class="fl">Notes</label>
+          <input type="text" class="fi" value="${escH(c.notes||'')}" onchange="saveABSectionContact('${pid}','${section}',${i},'notes',this.value.trim())" placeholder="Schedule, preferences…" style="font-size:12px">
+        </div>
+      </div>
+    </div>`).join('')}
+    <button class="btn btn-ghost btn-sm" onclick="addABSectionContact('${pid}','${section}')" style="margin-top:4px">+ Add Contact Person</button>
+  </div>
+  <div style="margin-top:12px">
+    <label class="fl">Internal Notes</label>
+    <textarea class="fi" style="resize:vertical;min-height:48px;font-size:12px" placeholder="Internal notes for this section…" onchange="saveABField('${pid}','${section}','notes',this.value.trim())">${escH(data.notes||'')}</textarea>
+  </div>`;
+  return h;
+}
+
+function renderPDAddressBook(proj, pid) {
+  const ab = getAddressBook(pid);
+  const pa = ab.projectAddress || {};
+  const recv = ab.receiver || {};
+  const contr = ab.contractor || {};
+  const linked = ab.linkedContacts || [];
+
+  const sectionStyle = 'background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px';
+  const sectionHd = 'font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between';
+  const expandBtn = (section) => `<button onclick="toggleABSection('${pid}','${section}')" style="font-size:9px;font-family:var(--font-b);color:var(--text-light);background:none;border:1px solid var(--border);border-radius:10px;padding:2px 10px;cursor:pointer">${ab['_show_'+section] ? 'Collapse' : 'Expand'}</button>`;
+  const collapsedStyle = 'font-size:11px;font-family:var(--font-b);color:var(--text-mid);padding-top:4px';
+  const dimCollapsedStyle = 'font-size:11px;font-family:var(--font-b);color:var(--text-light);opacity:0.5;padding-top:4px;font-style:italic';
+  function hasAnyData(data) {
+    return Object.entries(data||{}).some(([k,v]) => !k.startsWith('_') && k !== 'contacts' && k !== 'notes' && v) || (data?.contacts||[]).some(c => c.name);
+  }
+  function collapsedSummary(data) {
+    const hasData = hasAnyData(data);
+    const style = hasData ? collapsedStyle : dimCollapsedStyle;
+    if (!hasData) return '<div style="'+style+'">No information entered</div>';
+    const parts = [];
+    const name = data.name || data.businessName || '';
+    if (name) parts.push('<span style="color:var(--text-dark);font-weight:600">'+escH(name)+'</span>');
+    if (data.address) parts.push(escH(data.address));
+    if (data.phone) parts.push(escH(data.phone));
+    const pocs = (data.contacts||[]).filter(c => c.name);
+    if (pocs.length === 1) parts.push('+1 Point of contact: '+escH(pocs[0].name));
+    else if (pocs.length > 1) parts.push('+'+pocs.length+' Points of contact: '+pocs.map(c=>escH(c.name)).join(', '));
+    return '<div style="'+style+'">'+parts.join(' &middot; ')+'</div>';
+  }
+
+  let html = '<div style="max-width:640px">';
+
+  // ── PROJECT ADDRESS (always at top) ──
+  html += `<div style="${sectionStyle}">
+    <div style="${sectionHd}">Project Address ${expandBtn('projAddr')}</div>`;
+  if (ab._show_projAddr) {
+    html += `
+    <div class="fg">
+      <label class="fl">Street Address</label>
+      <input type="text" class="fi" value="${escH(proj.street||'')}" onchange="const p=S.projects.find(x=>x.id==='${pid}');if(p){p.street=this.value.trim();save()}" placeholder="Street address">
+    </div>
+    <div class="frow">
+      <div class="fg" style="flex:2">
+        <label class="fl">City / State</label>
+        <input type="text" class="fi" value="${escH(proj.city||'')}" onchange="const p=S.projects.find(x=>x.id==='${pid}');if(p){p.city=this.value.trim();save()}" placeholder="City, State">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Zip Code</label>
+        <input type="text" class="fi" value="${escH(proj.zip||'')}" onchange="const p=S.projects.find(x=>x.id==='${pid}');if(p){p.zip=this.value.trim();save()}" placeholder="Zip">
+      </div>
+    </div>
+    <details style="margin-top:8px">
+      <summary style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);cursor:pointer;padding:4px 0;user-select:none">Gate Code, Entry Instructions & Mailing Address</summary>
+      <div style="padding-top:8px">
+        <div class="frow">
+          <div class="fg">
+            <label class="fl">Gate Code</label>
+            <input type="text" class="fi" value="${escH(pa.gateCode||'')}" onchange="saveABField('${pid}','projectAddress','gateCode',this.value.trim())" placeholder="e.g. #1234">
+          </div>
+          <div class="fg">
+            <label class="fl">Entry Instructions</label>
+            <input type="text" class="fi" value="${escH(pa.entryInstructions||'')}" onchange="saveABField('${pid}','projectAddress','entryInstructions',this.value.trim())" placeholder="e.g. Use side gate">
+          </div>
+        </div>
+        <div class="fg">
+          <label class="fl">Mailing Address <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0">(if different from project address)</span></label>
+          <input type="text" class="fi" value="${escH(pa.mailingAddress||'')}" onchange="saveABField('${pid}','projectAddress','mailingAddress',this.value.trim())" placeholder="Full mailing address">
+        </div>
+      </div>
+    </details>`;
+  } else {
+    const addrParts = [proj.street, proj.city, proj.zip].filter(Boolean);
+    if (addrParts.length) html += '<div style="'+collapsedStyle+'"><span style="color:var(--text-dark);font-weight:600">'+escH(addrParts.join(', '))+'</span>'+(pa.gateCode?' · Gate: '+escH(pa.gateCode):'')+'</div>';
+  }
+  html += '</div>';
+
+  // ── PROJECT RECEIVER ──
+  html += `<div style="${sectionStyle}">
+    <div style="${sectionHd}">Project Receiver ${expandBtn('receiver')}</div>`;
+  if (ab._show_receiver) {
+    html += `
+    <div class="fg">
+      <label class="fl">Receiver Name</label>
+      <input type="text" class="fi" value="${escH(recv.name||'')}" onchange="saveABField('${pid}','receiver','name',this.value.trim())" placeholder="Receiving company name">
+    </div>
+    <div class="fg">
+      <label class="fl">Receiver Address</label>
+      <input type="text" class="fi" value="${escH(recv.address||'')}" onchange="saveABField('${pid}','receiver','address',this.value.trim())" placeholder="Full address">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Preferred Sidemark</label>
+        <input type="text" class="fi" value="${escH(recv.sidemark||'')}" onchange="saveABField('${pid}','receiver','sidemark',this.value.trim())" placeholder="e.g. Smith / BEEP Interiors">
+      </div>
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" value="${escH(recv.phone||'')}" onchange="saveABField('${pid}','receiver','phone',this.value.trim())" placeholder="(555) 000-0000">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Tracking Page Link</label>
+      <input type="text" class="fi" value="${escH(recv.trackingLink||'')}" onchange="saveABField('${pid}','receiver','trackingLink',this.value.trim())" placeholder="https://…">
+    </div>
+    ${recv.trackingLink ? `<a href="${escH(recv.trackingLink)}" target="_blank" style="font-size:11px;color:var(--russet);text-decoration:none;display:inline-block;margin-top:2px">Open tracking page ↗</a>` : ''}
+    ${renderABPocAndNotes(pid, 'receiver', recv)}`;
+  } else {
+    html += collapsedSummary(recv);
+  }
+  html += '</div>';
+
+  // ── CONTRACTOR INFORMATION ──
+  html += `<div style="${sectionStyle}">
+    <div style="${sectionHd}">Contractor Information ${expandBtn('contractor')}</div>`;
+  if (ab._show_contractor) {
+    html += `
+    <div class="fg">
+      <label class="fl">Business Name</label>
+      <input type="text" class="fi" value="${escH(contr.businessName||'')}" onchange="saveABField('${pid}','contractor','businessName',this.value.trim())" placeholder="Contractor company name">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" value="${escH(contr.phone||'')}" onchange="saveABField('${pid}','contractor','phone',this.value.trim())" placeholder="(555) 000-0000">
+      </div>
+      <div class="fg">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" value="${escH(contr.email||'')}" onchange="saveABField('${pid}','contractor','email',this.value.trim())" placeholder="email@example.com">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Address</label>
+      <input type="text" class="fi" value="${escH(contr.address||'')}" onchange="saveABField('${pid}','contractor','address',this.value.trim())" placeholder="Business address">
+    </div>
+
+    ${renderABPocAndNotes(pid, 'contractor', contr)}`;
+  } else {
+    html += collapsedSummary(contr);
+  }
+  html += '</div>';
+
+  // ── ARCHITECT ──
+  const arch = ab.architect || {};
+  html += `<div style="${sectionStyle}">
+    <div style="${sectionHd}">Architect ${expandBtn('architect')}</div>`;
+  if (ab._show_architect) {
+    html += `
+    <div class="fg">
+      <label class="fl">Firm / Name</label>
+      <input type="text" class="fi" value="${escH(arch.name||'')}" onchange="saveABField('${pid}','architect','name',this.value.trim())" placeholder="Architecture firm or individual">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" value="${escH(arch.phone||'')}" onchange="saveABField('${pid}','architect','phone',this.value.trim())" placeholder="(555) 000-0000">
+      </div>
+      <div class="fg">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" value="${escH(arch.email||'')}" onchange="saveABField('${pid}','architect','email',this.value.trim())" placeholder="email@example.com">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Address</label>
+      <input type="text" class="fi" value="${escH(arch.address||'')}" onchange="saveABField('${pid}','architect','address',this.value.trim())" placeholder="Office address">
+    </div>
+    <div class="fg">
+      <label class="fl">Contact Person</label>
+      <input type="text" class="fi" value="${escH(arch.contactPerson||'')}" onchange="saveABField('${pid}','architect','contactPerson',this.value.trim())" placeholder="Primary contact name & role">
+    </div>
+    ${renderABPocAndNotes(pid, 'architect', arch)}`;
+  } else {
+    html += collapsedSummary(arch);
+  }
+  html += '</div>';
+
+  // ── LANDSCAPE ARCHITECT ──
+  const larch = ab.landscapeArchitect || {};
+  html += `<div style="${sectionStyle}">
+    <div style="${sectionHd}">Landscape Architect ${expandBtn('landscapeArch')}</div>`;
+  if (ab._show_landscapeArch) {
+    html += `
+    <div class="fg">
+      <label class="fl">Firm / Name</label>
+      <input type="text" class="fi" value="${escH(larch.name||'')}" onchange="saveABField('${pid}','landscapeArchitect','name',this.value.trim())" placeholder="Landscape architecture firm or individual">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" value="${escH(larch.phone||'')}" onchange="saveABField('${pid}','landscapeArchitect','phone',this.value.trim())" placeholder="(555) 000-0000">
+      </div>
+      <div class="fg">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" value="${escH(larch.email||'')}" onchange="saveABField('${pid}','landscapeArchitect','email',this.value.trim())" placeholder="email@example.com">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Address</label>
+      <input type="text" class="fi" value="${escH(larch.address||'')}" onchange="saveABField('${pid}','landscapeArchitect','address',this.value.trim())" placeholder="Office address">
+    </div>
+    <div class="fg">
+      <label class="fl">Contact Person</label>
+      <input type="text" class="fi" value="${escH(larch.contactPerson||'')}" onchange="saveABField('${pid}','landscapeArchitect','contactPerson',this.value.trim())" placeholder="Primary contact name & role">
+    </div>
+    ${renderABPocAndNotes(pid, 'landscapeArchitect', larch)}`;
+  } else {
+    html += collapsedSummary(larch);
+  }
+  html += '</div>';
+
+  // ── LINKED CONTACTS (from Contacts area) ──
+  const availableContacts = (S.contacts||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+
+  html += `<div style="${sectionStyle}">
+    <div style="${sectionHd}">Project Contacts</div>
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:12px">
+      Link contacts from your contact book and label their role for this project.
+    </div>
+    ${linked.map((lc, i) => {
+      const contact = availableContacts.find(c => c.id === lc.contactId);
+      const contactOpts = '<option value="">— Select contact —</option>' +
+        availableContacts.map(c => `<option value="${c.id}" ${c.id===lc.contactId?'selected':''}>${escH(c.name)}${c.city?' · '+escH(c.city):''}</option>`).join('') +
+        '<option value="__new__">+ Add New Contact</option>';
+      return `
+      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <button onclick="toggleABStar('${pid}',${i})" style="font-size:14px;background:none;border:none;cursor:pointer;padding:0;line-height:1" title="${lc.starred ? 'Remove from Quick References' : 'Add to Quick References'}">${lc.starred ? '\u2605' : '\u2606'}</button>
+            <span style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-mid)">${contact ? escH(contact.name) : 'Select a contact'}</span>
+          </div>
+          <button onclick="removeABLinkedContact('${pid}',${i})" style="font-size:9px;font-family:var(--font-b);color:var(--text-light);background:none;border:none;cursor:pointer;text-decoration:underline">Remove</button>
+        </div>
+        <div class="frow">
+          <div class="fg" style="flex:2">
+            <label class="fl">Contact</label>
+            <select class="fi fsel" style="font-size:12px" onchange="handleABContactDropdown('${pid}',${i},this)">${contactOpts}</select>
+          </div>
+          <div class="fg" style="flex:1">
+            <label class="fl">Role on This Project</label>
+            <input type="text" class="fi" value="${escH(lc.projectRole||'')}" onchange="saveABLinkedContact('${pid}',${i},'projectRole',this.value.trim())" placeholder="e.g. Upholsterer" style="font-size:12px">
+          </div>
+        </div>
+        ${contact ? `
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--text-mid);font-family:var(--font-b)">
+          ${contact.city ? '<span>'+escH(contact.city)+'</span> · ' : ''}${contact.website ? '<a href="'+(contact.website.startsWith('http')?'':'https://')+escH(contact.website)+'" target="_blank" style="color:var(--russet);text-decoration:none">Website ↗</a> · ' : ''}${(contact.people||[]).length ? '<span>'+contact.people.length+' contact'+(contact.people.length!==1?'s':'')+'</span>' : ''}
+          <button class="btn btn-ghost btn-sm" onclick="openEditContactModal('${contact.id}')" style="font-size:10px;padding:2px 8px;margin-left:4px">View Full Contact</button>
+        </div>` : ''}
+        <div class="fg" style="margin-top:8px">
+          <label class="fl">Internal Note</label>
+          <textarea class="fi" style="resize:vertical;min-height:36px;font-size:11px" placeholder="Project-specific notes about this contact…" onchange="saveABLinkedContact('${pid}',${i},'notes',this.value.trim())">${escH(lc.notes||'')}</textarea>
+        </div>
+      </div>`;
+    }).join('')}
+    <button class="btn btn-ghost btn-sm" onclick="addABLinkedContact('${pid}')" style="margin-top:4px">+ Add Contact</button>
+  </div>`;
+
+  html += '</div>';
+  return html;
+}
+
 function renderPDSettings(proj, pid) {
   return `
   <div style="max-width:500px">
@@ -3979,10 +4862,16 @@ function openNewProjModal(returnView, stagePreset) {
   _stagePreset = stagePreset || null;
   S._returnView = returnView || null;
   $c('np-name').value = '';
+  $c('np-street').value = '';
   $c('np-city').value = '';
+  $c('np-zip').value = '';
   $c('np-client').innerHTML = clientSelectOptions('');
   $c('np-type').value  = 'residential';
-  $c('np-stage').value = stagePreset || 'master_design';
+  $c('np-stage').value = stagePreset || 'lead';
+  $c('np-markup').value = 25;
+  $c('np-state').value = '';
+  $c('np-taxrate').value = 0;
+  $c('np-taxfreight').checked = false;
   $c('modal-new').classList.add('open');
   setTimeout(() => $c('np-name').focus(), 80);
 }
@@ -3994,20 +4883,23 @@ function createProject() {
   const p = {
     id:      uid(),
     name,
-    clientId: $c('np-client').value,
+    clientId: $c('np-client').value === '__new__' ? '' : $c('np-client').value,
     type:    $c('np-type').value,
+    street:  $c('np-street').value.trim(),
     city:    $c('np-city').value.trim(),
+    zip:     $c('np-zip').value.trim(),
     stage:   $c('np-stage').value,
     created: new Date().toISOString().slice(0,10),
-    markupPct: 25,
-    state: '',
-    taxRate: 0,
-    taxFreight: false,
+    markupPct: parseFloat($c('np-markup').value) || 25,
+    state: $c('np-state').value.trim(),
+    taxRate: parseFloat($c('np-taxrate').value) || 0,
+    taxFreight: $c('np-taxfreight').checked,
   };
  
   S.projects.push(p);
   S.proposals[p.id] = { spaces:[], freight:'', tax:'' };
   save();
+
   closeModal('modal-new');
   renderProjects();
   updateProjSelect();
@@ -4027,7 +4919,9 @@ function openEditModal(pid) {
   $c('ep-name').value  = p.name;
   $c('ep-client').innerHTML = clientSelectOptions(p.clientId||'');
   $c('ep-type').value  = p.type||'residential';
+  $c('ep-street').value = p.street||'';
   $c('ep-city').value  = p.city||'';
+  $c('ep-zip').value   = p.zip||'';
   $c('ep-stage').value = p.stage;
   $c('modal-edit').classList.add('open');
 }
@@ -4037,11 +4931,14 @@ function saveEditProject() {
   const p  = S.projects.find(x => x.id === id);
   if (!p) return;
   p.name   = $c('ep-name').value.trim() || p.name;
-  p.clientId = $c('ep-client').value;
+  p.clientId = $c('ep-client').value === '__new__' ? p.clientId : $c('ep-client').value;
   p.type   = $c('ep-type').value;
+  p.street = $c('ep-street').value.trim();
   p.city   = $c('ep-city').value.trim();
+  p.zip    = $c('ep-zip').value.trim();
   p.stage  = $c('ep-stage').value;
   save();
+
   closeModal('modal-edit');
   renderProjects();
   if (S.currentView === 'project-detail') renderProjectDetail();
@@ -4055,14 +4952,31 @@ function deleteProject(id) {
   delete S.proposals[id];
   if (S.currentPropProject === id) { S.currentPropProject = null; }
   save();
+
+  closeModal('modal-proj-settings');
   closeModal('modal-edit');
   renderProjects();
   updateProjSelect();
+  if (S.currentView === 'project-detail') showView('projects');
   if (S.currentView === 'proposal') renderPropBody();
   toast('Project deleted.');
 }
  
-function closeModal(id) { $c(id).classList.remove('open'); }
+// ─── UNSAVED-CHANGES GUARD ───────────────────────────────
+
+// Modals that save on every change — safe to dismiss freely
+const _freeDismissModals = new Set(['modal-lists', 'modal-app-settings']);
+
+// Called by overlay click / Escape — blocked for form modals
+function softCloseModal(id) {
+  if (_freeDismissModals.has(id)) { $c(id).classList.remove('open'); return; }
+  // Form modals: ignore — must use Save / Cancel / X buttons
+}
+
+// Called by X button, Cancel button, and after successful saves
+function closeModal(id) {
+  $c(id).classList.remove('open');
+}
 
 // ─── PROJECT SETTINGS ─────────────────────────────────────
 
@@ -4070,7 +4984,13 @@ function openProjectSettings(pid) {
   const p = S.projects.find(x => x.id === pid);
   if (!p) return;
   $c('ps-id').value = pid;
-  $c('ps-proj-label').textContent = p.name + (getClientName(p.clientId) ? ' — ' + getClientName(p.clientId) : '');
+  $c('ps-name').value = p.name || '';
+  $c('ps-client').innerHTML = clientSelectOptions(p.clientId||'');
+  $c('ps-type').value = p.type || 'residential';
+  $c('ps-stage').value = p.stage || 'lead';
+  $c('ps-street').value = p.street || '';
+  $c('ps-city').value = p.city || '';
+  $c('ps-zip').value = p.zip || '';
   $c('ps-markup').value = p.markupPct != null ? p.markupPct : 25;
   $c('ps-state').value = p.state || '';
   $c('ps-taxrate').value = p.taxRate || 0;
@@ -4082,22 +5002,33 @@ function saveProjectSettings() {
   const pid = $c('ps-id').value;
   const p = S.projects.find(x => x.id === pid);
   if (!p) return;
+  p.name = $c('ps-name').value.trim() || p.name;
+  p.clientId = $c('ps-client').value === '__new__' ? p.clientId : $c('ps-client').value;
+  p.type = $c('ps-type').value;
+  p.stage = $c('ps-stage').value;
+  p.street = $c('ps-street').value.trim();
+  p.city = $c('ps-city').value.trim();
+  p.zip = $c('ps-zip').value.trim();
   p.markupPct = parseFloat($c('ps-markup').value) || 25;
   p.state = $c('ps-state').value.trim();
   p.taxRate = parseFloat($c('ps-taxrate').value) || 0;
   p.taxFreight = $c('ps-taxfreight').checked;
   save();
+
   closeModal('modal-proj-settings');
+  renderProjects();
+  updateProjSelect();
+  if (S.currentView === 'project-detail') renderProjectDetail();
   if (S.currentPropProject === pid) renderPropBody();
   toast('Project settings saved.');
 }
  
-// Close on overlay click
+// Close on overlay click / Escape — blocked for form modals
 $a('.overlay').forEach(ov => {
-  ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
+  ov.addEventListener('click', e => { if (e.target === ov) softCloseModal(ov.id); });
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { $a('.overlay.open').forEach(m => m.classList.remove('open')); hideDocContextMenu(); }
+  if (e.key === 'Escape') { $a('.overlay.open').forEach(m => softCloseModal(m.id)); hideDocContextMenu(); }
 });
 document.addEventListener('click', e => {
   const menu = $c('doc-context-menu');
@@ -4246,7 +5177,7 @@ function renderItemRow(item, spId, pid) {
   const net = getItemNet(item);
   const client = getItemClient(item, pid);
   const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
-  const total = client * qty;
+  const total = item.type === 'constructed' ? client : client * qty;
   const sopts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${s.l}</option>`).join('');
   const markupNote = item.billCostOnly ? '<span class="markup-tag">cost only</span>' :
     (item.adjustMarkup != null && item.adjustMarkup !== '' ? `<span class="markup-tag">${item.adjustMarkup}%</span>` : '');
@@ -4327,7 +5258,7 @@ function renderItemRow(item, spId, pid) {
       </td>
       <td class="hide-client"><div class="cell-ro">${net>0?fmt(net):'—'}</div></td>
       <td><div class="cell-ro calc">${client>0?fmt(client):'—'}</div></td>
-      <td><div class="cell-ro">${item.type==='constructed'?'—':(qty ? qty + (item.qtyUnit ? ' '+item.qtyUnit : '') : '—')}</div></td>
+      <td><div class="cell-ro">${item.type==='constructed'?(qty > 1 ? qty + ' <span style="font-size:10px;color:var(--text-light)">(total)</span>' : (qty === 1 ? '1' : '—')):(qty ? qty + (item.qtyUnit ? ' '+item.qtyUnit : '') : '—')}</div></td>
       <td><div class="cell-ro">${total>0?fmt(total):'—'}</div></td>
       <td class="hide-client" onclick="event.stopPropagation()">
         ${isAllowance ? '<span style="font-family:var(--font-b);font-size:11px;color:var(--text-light);padding:9px 6px;display:block">Allowance</span>' :
@@ -4416,9 +5347,9 @@ function calcProposalTotals(prop, pid) {
             }
           }
         });
-        freight += itemFreight * qty;
-        subtotal += itemNonFreight * qty;
-        taxableAmount += itemTaxable * qty;
+        freight += itemFreight;
+        subtotal += itemNonFreight;
+        taxableAmount += itemTaxable;
       } else {
         const client = getItemClient(item, pid);
         const lineTotal = client * qty;
@@ -4458,6 +5389,522 @@ function renderTotals(prop, pid) {
       </table>
     </div>
     `;
+}
+
+// ─── ESTIMATES ────────────────────────────────────────────
+
+let _estCustomLines = [];
+let _estFreightExclude = new Set();
+let _estRecvExclude = new Set();
+
+function getAllProposalItems(pid) {
+  const prop = S.proposals[pid];
+  if (!prop) return [];
+  const items = [];
+  (prop.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      items.push({ ...item, spaceName: sp.name });
+    });
+  });
+  return items;
+}
+
+function openEstimateWizard() {
+  _editingEstimateId = null;
+  const pid = S.currentPropProject || S._detailProjectId;
+  if (!pid) { toast('No project selected.'); return; }
+  const prop = S.proposals[pid];
+  if (!prop || !prop.spaces.length) { toast('Add items to the proposal first.'); return; }
+
+  $c('est-name').value = '';
+  $c('est-date').value = new Date().toISOString().slice(0,10);
+  $c('est-freight-pct').value = 10;
+  $c('est-freight-on').checked = true;
+  $c('est-hours-on').checked = true;
+  $c('est-recv-on').checked = true;
+  $c('est-recv-fee').value = 50;
+  $c('est-storage-on').checked = false;
+  $c('est-storage-amt').value = 0;
+  $c('est-tariff-on').checked = false;
+  $c('est-tariff-amt').value = 0;
+  _estCustomLines = [];
+  _estFreightExclude = new Set();
+  _estRecvExclude = new Set();
+
+  updateExclCounts();
+
+  // Hours rows
+  $c('est-hours-rows').innerHTML = TEAM.map(t => `
+    <div class="frow" style="margin-bottom:4px">
+      <div class="fg" style="flex:1">
+        <label class="fl">${escH(t.label)} ($${t.rate}/hr)</label>
+      </div>
+      <div class="fg" style="max-width:100px">
+        <input type="number" class="fi est-hours-input" data-rate="${t.rate}" data-member="${t.id}" value="0" min="0" step="0.5" onchange="recalcEstimate()" style="font-size:12px;padding:5px 8px">
+      </div>
+    </div>
+  `).join('');
+
+  renderEstCustomLines();
+  recalcEstimate();
+  $c('modal-estimate').classList.add('open');
+  setTimeout(() => $c('est-name').focus(), 80);
+}
+
+let _exclPickerType = null;
+
+function openExclusionPicker(type) {
+  _exclPickerType = type;
+  const pid = S.currentPropProject || S._detailProjectId;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  const excludeSet = type === 'freight' ? _estFreightExclude : _estRecvExclude;
+
+  $c('excl-title').textContent = type === 'freight' ? 'Freight — Select Exclusions' : 'Receiving — Select Exclusions';
+
+  let html = '';
+  (prop.spaces||[]).forEach(sp => {
+    const items = sp.items||[];
+    if (!items.length) return;
+    html += `<div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:4px">${escH(sp.name||'Unnamed Space')}</div>`;
+    items.forEach(item => {
+      const checked = !excludeSet.has(item.id);
+      const qty = parseFloat(item.qty)||1;
+      const qtyLabel = qty > 1 ? ' ×'+qty+(item.qtyUnit?' '+escH(item.qtyUnit):'') : (item.qtyUnit?' — '+escH(item.qtyUnit):'');
+      html += `<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;cursor:pointer;border-radius:var(--rs);transition:var(--t)" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
+        <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleEstExclude('${type}','${item.id}',this.checked)" style="accent-color:var(--russet);width:14px;height:14px;flex-shrink:0">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
+        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);white-space:nowrap">${qtyLabel}</span>
+      </label>`;
+    });
+  });
+
+  $c('excl-list').innerHTML = html;
+  $c('modal-exclusions').classList.add('open');
+}
+
+function closeExclusionPicker() {
+  $c('modal-exclusions').classList.remove('open');
+  updateExclCounts();
+  recalcEstimate();
+}
+
+function updateExclCounts() {
+  const fc = _estFreightExclude.size;
+  const rc = _estRecvExclude.size;
+  $c('est-freight-excl-count').textContent = fc > 0 ? '('+fc+' excluded)' : '';
+  $c('est-recv-excl-count').textContent = rc > 0 ? '('+rc+' excluded)' : '';
+}
+
+function toggleEstExclude(type, itemId, checked) {
+  const set = type === 'freight' ? _estFreightExclude : _estRecvExclude;
+  if (checked) set.delete(itemId); else set.add(itemId);
+  recalcEstimate();
+  updateExclCounts();
+}
+
+function addEstCustomLine() {
+  _estCustomLines.push({ name:'', qty:1, price:0 });
+  renderEstCustomLines();
+}
+
+function removeEstCustomLine(idx) {
+  _estCustomLines.splice(idx, 1);
+  renderEstCustomLines();
+  recalcEstimate();
+}
+
+function renderEstCustomLines() {
+  $c('est-custom-lines').innerHTML = _estCustomLines.map((l, i) => `
+    <div class="frow" style="margin-bottom:4px;align-items:flex-end">
+      <div class="fg" style="flex:2">
+        <input type="text" class="fi" value="${escH(l.name||'')}" placeholder="Line name" onchange="_estCustomLines[${i}].name=this.value;recalcEstimate()" style="font-size:12px;padding:5px 8px">
+      </div>
+      <div class="fg" style="max-width:70px">
+        <input type="number" class="fi" value="${l.qty||1}" min="1" onchange="_estCustomLines[${i}].qty=parseFloat(this.value)||1;recalcEstimate()" style="font-size:12px;padding:5px 8px;text-align:center">
+      </div>
+      <div class="fg" style="max-width:100px">
+        <input type="number" class="fi" value="${l.price||0}" min="0" step="1" onchange="_estCustomLines[${i}].price=parseFloat(this.value)||0;recalcEstimate()" style="font-size:12px;padding:5px 8px">
+      </div>
+      <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:10px;white-space:nowrap"><input type="checkbox" ${l.taxable?'checked':''} onchange="_estCustomLines[${i}].taxable=this.checked;recalcEstimate()" style="accent-color:var(--russet);width:11px;height:11px"> Tax</label>
+      <button onclick="removeEstCustomLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:6px">✕</button>
+    </div>
+  `).join('');
+}
+
+function recalcEstimate() {
+  const pid = S.currentPropProject || S._detailProjectId;
+  if (!pid) return;
+  const prop = S.proposals[pid];
+  const proj = S.projects.find(p => p.id === pid);
+  const taxRate = (proj?.taxRate || 0) / 100;
+  const t = calcProposalTotals(prop, pid);
+  let estLinesTotal = 0;
+  let estLinesTax = 0;
+
+  // Freight
+  if ($c('est-freight-on').checked) {
+    const pct = parseFloat($c('est-freight-pct').value) || 0;
+    let inclSub = 0;
+    (prop.spaces||[]).forEach(sp => {
+      (sp.items||[]).forEach(item => {
+        if (_estFreightExclude.has(item.id)) return;
+        inclSub += item.type === 'constructed' ? getItemClient(item, pid) : getItemClient(item, pid) * (parseFloat(item.qty)||1);
+      });
+    });
+    const freightEst = inclSub * (pct / 100);
+    $c('est-freight-total').textContent = fmt(freightEst);
+    estLinesTotal += freightEst;
+    if ($c('est-freight-tax').checked) estLinesTax += freightEst * taxRate;
+  } else {
+    $c('est-freight-total').textContent = '—';
+  }
+
+  // Hours
+  if ($c('est-hours-on').checked) {
+    let hoursTotal = 0;
+    $a('.est-hours-input').forEach(inp => {
+      hoursTotal += (parseFloat(inp.value)||0) * (parseFloat(inp.dataset.rate)||0);
+    });
+    $c('est-hours-total').textContent = fmt(hoursTotal);
+    estLinesTotal += hoursTotal;
+    if ($c('est-hours-tax').checked) estLinesTax += hoursTotal * taxRate;
+  } else {
+    $c('est-hours-total').textContent = '—';
+  }
+
+  // Receiving
+  if ($c('est-recv-on').checked) {
+    const fee = parseFloat($c('est-recv-fee').value) || 0;
+    let itemCount = 0;
+    (prop.spaces||[]).forEach(sp => {
+      (sp.items||[]).forEach(item => {
+        if (_estRecvExclude.has(item.id)) return;
+        itemCount += parseFloat(item.qty) || 1;
+      });
+    });
+    const recvEst = fee * itemCount;
+    $c('est-recv-total').textContent = fmt(recvEst) + ` (${itemCount} items)`;
+    estLinesTotal += recvEst;
+    if ($c('est-recv-tax').checked) estLinesTax += recvEst * taxRate;
+  } else {
+    $c('est-recv-total').textContent = '—';
+  }
+
+  // Storage
+  if ($c('est-storage-on').checked) {
+    const amt = parseFloat($c('est-storage-amt').value) || 0;
+    estLinesTotal += amt;
+    if ($c('est-storage-tax').checked) estLinesTax += amt * taxRate;
+  }
+
+  // Tariffs
+  if ($c('est-tariff-on').checked) {
+    const amt = parseFloat($c('est-tariff-amt').value) || 0;
+    estLinesTotal += amt;
+    if ($c('est-tariff-tax').checked) estLinesTax += amt * taxRate;
+  }
+
+  // Custom lines
+  _estCustomLines.forEach(l => {
+    const lineAmt = (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
+    estLinesTotal += lineAmt;
+    if (l.taxable) estLinesTax += lineAmt * taxRate;
+  });
+
+  const grandTotal = t.total + estLinesTotal + estLinesTax;
+  $c('est-grand-total').textContent = fmt(grandTotal);
+}
+
+function saveEstimate() {
+  const pid = S.currentPropProject || S._detailProjectId;
+  if (!pid) return;
+  const name = $c('est-name').value.trim() || 'Untitled Estimate';
+  const date = $c('est-date').value || new Date().toISOString().slice(0,10);
+  const prop = S.proposals[pid];
+  const t = calcProposalTotals(prop, pid);
+
+  // Gather estimation lines
+  const proj = S.projects.find(p => p.id === pid);
+  const taxRate = (proj?.taxRate || 0) / 100;
+  const lines = [];
+  let estLinesTax = 0;
+
+  if ($c('est-freight-on').checked) {
+    const pct = parseFloat($c('est-freight-pct').value)||0;
+    const amt = parseFloat($c('est-freight-total').textContent.replace(/[^0-9.-]/g,''))||0;
+    const taxable = $c('est-freight-tax').checked;
+    lines.push({ label:'Freight Estimate ('+pct+'% of subtotal)', amount:amt, taxable });
+    if (taxable) estLinesTax += amt * taxRate;
+  }
+  if ($c('est-hours-on').checked) {
+    const taxable = $c('est-hours-tax').checked;
+    $a('.est-hours-input').forEach(inp => {
+      const hrs = parseFloat(inp.value)||0;
+      const rate = parseFloat(inp.dataset.rate)||0;
+      if (hrs > 0) {
+        const member = TEAM.find(t => t.id === inp.dataset.member);
+        const amt = hrs*rate;
+        lines.push({ label:(member?member.label:'Team')+' — '+hrs+' hrs @ $'+rate+'/hr', amount:amt, taxable });
+        if (taxable) estLinesTax += amt * taxRate;
+      }
+    });
+  }
+  if ($c('est-recv-on').checked) {
+    const amt = parseFloat($c('est-recv-total').textContent.replace(/[^0-9.-]/g,''))||0;
+    const taxable = $c('est-recv-tax').checked;
+    lines.push({ label:'Receiving Estimate', amount:amt, taxable });
+    if (taxable) estLinesTax += amt * taxRate;
+  }
+  if ($c('est-storage-on').checked) {
+    const amt = parseFloat($c('est-storage-amt').value)||0;
+    const taxable = $c('est-storage-tax').checked;
+    if (amt > 0) { lines.push({ label:'Storage Estimate', amount:amt, taxable }); if (taxable) estLinesTax += amt * taxRate; }
+  }
+  if ($c('est-tariff-on').checked) {
+    const amt = parseFloat($c('est-tariff-amt').value)||0;
+    const taxable = $c('est-tariff-tax').checked;
+    if (amt > 0) { lines.push({ label:'Tariff Estimate', amount:amt, taxable }); if (taxable) estLinesTax += amt * taxRate; }
+  }
+  _estCustomLines.forEach(l => {
+    if (l.name && (l.price||l.qty)) {
+      const amt = (parseFloat(l.qty)||1)*(parseFloat(l.price)||0);
+      lines.push({ label:l.name + (l.qty>1?' ×'+l.qty:''), amount:amt, taxable:!!l.taxable });
+      if (l.taxable) estLinesTax += amt * taxRate;
+    }
+  });
+
+  // Snapshot the proposal
+  const snapshot = {
+    id: uid(),
+    name,
+    date,
+    savedAt: new Date().toISOString(),
+    proposalTotals: { ...t },
+    estimationLines: lines,
+    estimationTax: estLinesTax,
+    estimateTotal: parseFloat($c('est-grand-total').textContent.replace(/[^0-9.-]/g,''))||0,
+    spaces: JSON.parse(JSON.stringify(prop.spaces)),
+  };
+
+  if (!prop.estimates) prop.estimates = [];
+  if (_editingEstimateId) {
+    const idx = prop.estimates.findIndex(e => e.id === _editingEstimateId);
+    if (idx > -1) { snapshot.id = _editingEstimateId; prop.estimates[idx] = snapshot; }
+    _editingEstimateId = null;
+    toast('Estimate updated: ' + name);
+  } else {
+    prop.estimates.push(snapshot);
+    toast('Estimate saved: ' + name);
+  }
+  save();
+  closeModal('modal-estimate');
+  renderProjectDetail();
+}
+
+let _editingEstimateId = null;
+
+function editEstimate(pid, estId) {
+  const prop = S.proposals[pid];
+  const est = prop?.estimates?.find(e => e.id === estId);
+  if (!est) return;
+  _editingEstimateId = estId;
+
+  // Open the wizard
+  $c('est-name').value = est.name || '';
+  $c('est-date').value = est.date || '';
+
+  // Reset all sections
+  $c('est-freight-on').checked = false;
+  $c('est-freight-tax').checked = false;
+  $c('est-freight-pct').value = 10;
+  $c('est-hours-on').checked = false;
+  $c('est-hours-tax').checked = false;
+  $c('est-recv-on').checked = false;
+  $c('est-recv-tax').checked = false;
+  $c('est-recv-fee').value = 50;
+  $c('est-storage-on').checked = false;
+  $c('est-storage-tax').checked = false;
+  $c('est-storage-amt').value = 0;
+  $c('est-tariff-on').checked = false;
+  $c('est-tariff-tax').checked = false;
+  $c('est-tariff-amt').value = 0;
+  _estFreightExclude = new Set();
+  _estRecvExclude = new Set();
+  _estCustomLines = [];
+
+  // Rebuild hours rows first
+  $c('est-hours-rows').innerHTML = TEAM.map(t => `
+    <div class="frow" style="margin-bottom:4px">
+      <div class="fg" style="flex:1">
+        <label class="fl">${escH(t.label)} ($${t.rate}/hr)</label>
+      </div>
+      <div class="fg" style="max-width:100px">
+        <input type="number" class="fi est-hours-input" data-rate="${t.rate}" data-member="${t.id}" value="0" min="0" step="0.5" onchange="recalcEstimate()" style="font-size:12px;padding:5px 8px">
+      </div>
+    </div>
+  `).join('');
+
+  // Re-populate from saved lines
+  est.estimationLines.forEach(l => {
+    const label = l.label || '';
+    if (label.startsWith('Freight Estimate')) {
+      $c('est-freight-on').checked = true;
+      $c('est-freight-tax').checked = !!l.taxable;
+      const pctMatch = label.match(/\((\d+\.?\d*)%/);
+      if (pctMatch) $c('est-freight-pct').value = pctMatch[1];
+    } else if (label.includes('hrs @')) {
+      $c('est-hours-on').checked = true;
+      $c('est-hours-tax').checked = !!l.taxable;
+      const hrsMatch = label.match(/— (\d+\.?\d*) hrs @ \$(\d+)/);
+      const memberMatch = label.match(/^(.+?) —/);
+      if (hrsMatch && memberMatch) {
+        const memberName = memberMatch[1];
+        $a('.est-hours-input').forEach(inp => {
+          const tm = TEAM.find(t => t.id === inp.dataset.member);
+          if (tm && tm.label === memberName) inp.value = hrsMatch[1];
+        });
+      }
+    } else if (label === 'Receiving Estimate') {
+      $c('est-recv-on').checked = true;
+      $c('est-recv-tax').checked = !!l.taxable;
+    } else if (label === 'Storage Estimate') {
+      $c('est-storage-on').checked = true;
+      $c('est-storage-tax').checked = !!l.taxable;
+      $c('est-storage-amt').value = l.amount || 0;
+    } else if (label === 'Tariff Estimate') {
+      $c('est-tariff-on').checked = true;
+      $c('est-tariff-tax').checked = !!l.taxable;
+      $c('est-tariff-amt').value = l.amount || 0;
+    } else {
+      // Custom line
+      const qtyMatch = label.match(/×(\d+)$/);
+      const name = qtyMatch ? label.replace(/ ×\d+$/, '') : label;
+      const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
+      _estCustomLines.push({ name, qty, price: qty > 1 ? l.amount / qty : l.amount, taxable: !!l.taxable });
+    }
+  });
+
+  renderEstCustomLines();
+  updateExclCounts();
+  recalcEstimate();
+  $c('modal-estimate').classList.add('open');
+}
+
+function deleteEstimate(pid, estId) {
+  if (!confirm('Delete this estimate?')) return;
+  const prop = S.proposals[pid];
+  if (prop?.estimates) prop.estimates = prop.estimates.filter(e => e.id !== estId);
+  save();
+  renderProjectDetail();
+  toast('Estimate deleted.');
+}
+
+function printEstimate(pid, estId) {
+  const prop = S.proposals[pid];
+  const est = prop?.estimates?.find(e => e.id === estId);
+  if (!est) return;
+  const proj = S.projects.find(p => p.id === pid);
+
+  const w = window.open('','_blank','width=900,height=700');
+  let h = `<!DOCTYPE html><html><head><title>${escH(est.name)}</title>
+  <style>
+    body{font-family:sans-serif;padding:40px;color:#333;max-width:800px;margin:0 auto}
+    h1{font-size:22px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;color:#3f151c}
+    h2{font-size:14px;color:#888;font-weight:400;margin-top:0}
+    table{width:100%;border-collapse:collapse;margin-top:20px;font-size:13px}
+    th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eee}
+    th{background:#f8f5f2;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:0.08em;color:#888}
+    .amt{text-align:right;font-weight:600}
+    .total-row td{border-top:2px solid #3f151c;font-weight:800;font-size:15px;color:#3f151c;padding-top:12px}
+    .est-line td{background:#faf7f5;font-style:italic}
+    .section{font-weight:700;background:#f0ebe6;text-transform:uppercase;font-size:11px;letter-spacing:0.06em;color:#5b2d22}
+  </style></head><body>
+  <h1>${escH(est.name)}</h1>
+  <h2>${escH(proj?.name||'')} · ${escH(getClientName(proj?.clientId)||'')} · ${escH(est.date)}</h2>
+  <table><thead><tr><th>Item</th><th>Space</th><th style="text-align:right">Amount</th></tr></thead><tbody>`;
+
+  est.spaces.forEach(sp => {
+    h += `<tr class="section"><td colspan="3">${escH(sp.name||'Unnamed Space')}</td></tr>`;
+    (sp.items||[]).forEach(item => {
+      const client = getItemClient(item, pid);
+      const qty = parseFloat(item.qty)||1;
+      const total = item.type==='constructed' ? client : client * qty;
+      h += `<tr><td>${escH(item.name)}</td><td>${escH(sp.name||'')}</td><td class="amt">${fmt(total)}</td></tr>`;
+    });
+  });
+
+  h += `<tr><td colspan="2" style="font-weight:700">Proposal Subtotal</td><td class="amt">${fmt(est.proposalTotals.subtotal)}</td></tr>`;
+  if (est.proposalTotals.freight>0) h += `<tr><td colspan="2">Freight (from proposal)</td><td class="amt">${fmt(est.proposalTotals.freight)}</td></tr>`;
+  h += `<tr><td colspan="2">Tax</td><td class="amt">${fmt(est.proposalTotals.tax)}</td></tr>`;
+  h += `<tr><td colspan="2" style="font-weight:700">Proposal Total</td><td class="amt" style="font-weight:700">${fmt(est.proposalTotals.total)}</td></tr>`;
+
+  if (est.estimationLines.length) {
+    h += `<tr class="section"><td colspan="3">Estimation Lines</td></tr>`;
+    est.estimationLines.forEach(l => {
+      h += `<tr class="est-line"><td colspan="2">${escH(l.label)}${l.taxable?' <span style="font-size:10px;color:#999">(taxable)</span>':''}</td><td class="amt">${fmt(l.amount)}</td></tr>`;
+    });
+    if (est.estimationTax > 0) {
+      h += `<tr class="est-line"><td colspan="2">Estimation Tax</td><td class="amt">${fmt(est.estimationTax)}</td></tr>`;
+    }
+  }
+
+  h += `<tr class="total-row"><td colspan="2">Estimate Total</td><td class="amt">${fmt(est.estimateTotal)}</td></tr>`;
+  h += `</tbody></table></body></html>`;
+
+  w.document.write(h);
+  w.document.close();
+  setTimeout(() => w.print(), 300);
+}
+
+function renderEstimatesSection(pid) {
+  const prop = S.proposals[pid];
+  const estimates = prop?.estimates || [];
+  if (!estimates.length) return '';
+
+  let html = `
+  <div style="margin-top:30px;padding-top:20px;border-top:2px solid var(--border)">
+    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:14px">Saved Estimates</div>`;
+
+  estimates.slice().reverse().forEach(est => {
+    const linesTotal = est.estimationLines.reduce((s,l) => s+l.amount, 0);
+    html += `
+    <details style="background:white;border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px">
+      <summary style="padding:14px 18px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(est.name)}</span>
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(est.date)}</span>
+        </div>
+        <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${fmt(est.estimateTotal)}</span>
+      </summary>
+      <div style="padding:0 18px 16px;border-top:1px solid var(--border)">
+        <table style="width:100%;font-size:12px;font-family:var(--font-b);border-collapse:collapse;margin-top:12px">
+          <tr><td style="padding:4px 0;color:var(--text-mid)">Proposal Subtotal</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.subtotal)}</td></tr>
+          ${est.proposalTotals.freight>0?`<tr><td style="padding:4px 0;color:var(--text-mid)">Freight</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.freight)}</td></tr>`:''}
+          <tr><td style="padding:4px 0;color:var(--text-mid)">Tax</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.tax)}</td></tr>
+          <tr style="font-weight:600"><td style="padding:6px 0;border-top:1px solid var(--border)">Proposal Total</td><td style="text-align:right;padding:6px 0;border-top:1px solid var(--border)">${fmt(est.proposalTotals.total)}</td></tr>
+        </table>
+        ${est.estimationLines.length ? `
+        <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:12px 0 6px">Estimation Lines</div>
+        <table style="width:100%;font-size:12px;font-family:var(--font-b);border-collapse:collapse">
+          ${est.estimationLines.map(l => `<tr><td style="padding:3px 0;color:var(--text-dark)">${escH(l.label)}${l.taxable?' <span style="font-size:9px;color:var(--text-light)">(taxable)</span>':''}</td><td style="text-align:right;padding:3px 0;color:var(--pecan)">${fmt(l.amount)}</td></tr>`).join('')}
+          <tr style="font-weight:600"><td style="padding:6px 0;border-top:1px solid var(--border)">Estimation Subtotal</td><td style="text-align:right;padding:6px 0;border-top:1px solid var(--border)">${fmt(linesTotal)}</td></tr>
+          ${est.estimationTax > 0 ? `<tr><td style="padding:3px 0;color:var(--text-mid)">Estimation Tax</td><td style="text-align:right;padding:3px 0">${fmt(est.estimationTax)}</td></tr>` : ''}
+        </table>` : ''}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:10px;border-top:2px solid var(--pecan)">
+          <span style="font-family:var(--font-h);font-weight:800;font-size:15px;text-transform:uppercase;color:var(--mahogany)">Estimate Total: ${fmt(est.estimateTotal)}</span>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick="printEstimate('${pid}','${est.id}')" style="font-size:10px">Print / PDF</button>
+            <button class="btn btn-secondary btn-sm" onclick="editEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Delete</button>
+          </div>
+        </div>
+      </div>
+    </details>`;
+  });
+
+  html += '</div>';
+  return html;
 }
 
 // ─── PROPOSAL MUTATIONS ───────────────────────────────────
@@ -4572,6 +6019,7 @@ function addModalComponent(comp) {
     id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1, qtyUnit: '',
     allowance: false, billCostOnly: false, adjustMarkup: null, note: ''
   });
+
   renderModalComponents();
 }
 
@@ -4645,6 +6093,7 @@ function onCompTypeChange(idx, val) {
 
 function removeModalComponent(idx) {
   _modalComponents.splice(idx, 1);
+
   renderModalComponents();
 }
 
@@ -4671,6 +6120,7 @@ function readModalComponentsFromDOM() {
 
 function addModalCharge(ch) {
   _modalCharges.push(ch || { id: uid(), name: '', category: '', amount: '', billCostOnly: false, adjustMarkup: null });
+
   renderModalCharges();
 }
 
@@ -4700,6 +6150,7 @@ function renderModalCharges() {
 function removeModalCharge(idx) {
   readModalChargesFromDOM();
   _modalCharges.splice(idx, 1);
+
   renderModalCharges();
 }
 
@@ -4805,7 +6256,9 @@ function saveItem() {
   const qtyUnit = $c('ai-qty-unit')?.value || '';
   let item;
   if (type === 'constructed') {
-    item = { ...base, components: _modalComponents.filter(c => c.name || c.netCost) };
+    const comps = _modalComponents.filter(c => c.name || c.netCost);
+    const baseComp = comps.find(c => c.componentType === 'base');
+    item = { ...base, qty: baseComp ? (baseComp.qty || '1') : '1', components: comps };
   } else if (type === 'readymade') {
     item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
       qty: $c('ai-qty').value || '1', qtyUnit, link: '', additionalCharges: _modalCharges.filter(ch => ch.name || ch.amount) };
@@ -4831,6 +6284,7 @@ function saveItem() {
   }
 
   save();
+
   closeModal('modal-add-item');
   if (S.currentView === 'project-detail') renderProjectDetail();
   else renderPropBody();
@@ -4844,6 +6298,7 @@ function deleteItemFromModal() {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (sp) sp.items = (sp.items || []).filter(i => i.id !== itemId);
   save();
+
   closeModal('modal-add-item');
   if (S.currentView === 'project-detail') renderProjectDetail();
   else renderPropBody();
@@ -5064,13 +6519,27 @@ function renderClients() {
   }).join('')}</div>`;
 }
 
-function openNewClientModal() {
+let _clientSaveCallback = null;
+
+function openNewClientModal(callback) {
+  _clientSaveCallback = callback || null;
   $c('cl-modal-title').textContent = 'New Client';
   $c('cl-id').value = '';
   $c('cl-delete-btn').style.display = 'none';
   ['cl-name','cl-email','cl-phone','cl-address','cl-notes'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  $c('cl-projects-section').style.display = 'none';
   $c('modal-client').classList.add('open');
   setTimeout(() => $c('cl-name').focus(), 80);
+}
+
+function handleClientDropdown(selectEl) {
+  if (selectEl.value === '__new__') {
+    selectEl.value = '';
+    openNewClientModal(newId => {
+      selectEl.innerHTML = clientSelectOptions(newId);
+      selectEl.value = newId;
+    });
+  }
 }
 
 function openEditClientModal(id) {
@@ -5084,6 +6553,27 @@ function openEditClientModal(id) {
   $c('cl-phone').value = c.phone || '';
   $c('cl-address').value = c.address || '';
   $c('cl-notes').value = c.notes || '';
+
+  // Show tagged projects
+  const clientProjects = (S.projects||[]).filter(p => p.clientId === id);
+  const section = $c('cl-projects-section');
+  if (clientProjects.length) {
+    const stageEmoji = {};
+    STAGES.forEach(s => stageEmoji[s.id] = s.emoji);
+    $c('cl-projects-list').innerHTML = clientProjects.map(p => {
+      const stage = STAGES.find(s => s.id === p.stage);
+      return `<div onclick="closeModal('modal-client');openProjectDetail('${p.id}')" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:var(--rs);cursor:pointer;transition:var(--t);border:1px solid var(--border);margin-bottom:4px;background:white" onmouseenter="this.style.background='rgba(91,45,34,0.04)'" onmouseleave="this.style.background='white'">
+        <span style="font-size:12px">${stage ? stage.emoji : '·'}</span>
+        <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em;flex:1">${escH(p.name)}</span>
+        ${p.city ? `<span style="font-size:10px;color:var(--text-light)">${escH(p.city)}</span>` : ''}
+        ${stage ? `<span style="font-size:9px;font-family:var(--font-b);color:var(--text-mid)">${stage.label}</span>` : ''}
+      </div>`;
+    }).join('');
+    section.style.display = '';
+  } else {
+    section.style.display = 'none';
+  }
+
   $c('modal-client').classList.add('open');
 }
 
@@ -5099,18 +6589,25 @@ function saveClient() {
     notes: $c('cl-notes').value.trim(),
   };
   if (!S.clients) S.clients = [];
+  let newId = null;
   if (id) {
     const c = S.clients.find(x => x.id === id);
     if (c) Object.assign(c, data);
     toast('Client updated.');
   } else {
-    S.clients.push({ id: uid(), created: new Date().toISOString().slice(0,10), ...data });
+    newId = uid();
+    S.clients.push({ id: newId, created: new Date().toISOString().slice(0,10), ...data });
     toast('Client added.');
   }
   save();
+
   closeModal('modal-client');
   renderClients();
   renderProjects();
+  if (newId && _clientSaveCallback) {
+    _clientSaveCallback(newId);
+    _clientSaveCallback = null;
+  }
 }
 
 function deleteClient(id) {
@@ -5118,6 +6615,7 @@ function deleteClient(id) {
   S.clients = (S.clients||[]).filter(c => c.id !== id);
   (S.projects||[]).forEach(p => { if (p.clientId === id) p.clientId = ''; });
   save();
+
   closeModal('modal-client');
   renderClients();
   renderProjects();
@@ -5128,7 +6626,8 @@ function clientSelectOptions(selectedId) {
   return '<option value="">— No client —</option>' +
     (S.clients||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(c =>
       `<option value="${c.id}" ${c.id===selectedId?'selected':''}>${escH(c.name)}</option>`
-    ).join('');
+    ).join('') +
+    '<option value="__new__">+ Add New Client</option>';
 }
 
 // ─── APP SETTINGS ─────────────────────────────────────────
@@ -5380,6 +6879,7 @@ function setLineCat(brandName, cat, checked) {
 }
  
 function addPersonField(person) {
+
   const list = $c('cm-people-list');
   const pid  = person?.id || uid();
   const div  = document.createElement('div');
@@ -5405,7 +6905,10 @@ function addPersonField(person) {
   list.appendChild(div);
 }
  
-function openNewContactModal() {
+let _contactSaveCallback = null;
+
+function openNewContactModal(callback) {
+  _contactSaveCallback = callback || null;
   $c('contact-modal-title').textContent = 'New Contact';
   $c('cm-id').value = '';
   $c('cm-delete-btn').style.display = 'none';
@@ -5468,23 +6971,31 @@ function saveContact() {
  
   if (!data.name) { $c('cm-name').focus(); return; }
  
+  let newId = null;
   if (id) {
     const c = S.contacts.find(x => x.id === id);
     if (c) Object.assign(c, data);
     toast('Contact updated.');
   } else {
-    S.contacts.push({ id:uid(), created:new Date().toISOString().slice(0,10), ...data });
+    newId = uid();
+    S.contacts.push({ id:newId, created:new Date().toISOString().slice(0,10), ...data });
     toast('Contact added.');
   }
   save();
+
   closeModal('modal-contact');
   renderContacts();
+  if (newId && _contactSaveCallback) {
+    _contactSaveCallback(newId);
+    _contactSaveCallback = null;
+  }
 }
- 
+
 function deleteContact(id) {
   if (!id || !confirm('Remove this contact? Gone but not forgotten.')) return;
   S.contacts = S.contacts.filter(c => c.id !== id);
   save();
+
   closeModal('modal-contact');
   renderContacts();
   toast('Contact removed.');
@@ -5595,6 +7106,552 @@ function initTimer() {
   else _renderTimerWidget();
 }
  
+// ─── INVOICES ─────────────────────────────────────────
+
+let _invLineItems = [];
+let _invFiles = [];
+let _invSelectedProposalItems = new Set();
+
+function getNextInvoiceNumber() {
+  const all = S.invoices || [];
+  let max = 99;
+  all.forEach(inv => {
+    const m = (inv.number||'').match(/BE-(\d+)/);
+    if (m) max = Math.max(max, parseInt(m[1]));
+  });
+  return 'BE-' + (max + 1);
+}
+
+function openNewInvoiceModal() {
+  $c('inv-modal-title').textContent = 'New Invoice';
+  $c('inv-id').value = '';
+  $c('inv-number').value = getNextInvoiceNumber();
+  $c('inv-type').value = 'phased';
+  $c('inv-sent-date').value = '';
+  $c('inv-due-date').value = '';
+  $c('inv-phase').value = '';
+  _invLineItems = [];
+  _invFiles = [];
+  _invSelectedProposalItems = new Set();
+
+  $c('inv-project').innerHTML = '<option value="">— Select project —</option>' +
+    S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  $c('inv-client').innerHTML = '<option value="">— No client —</option>' +
+    (S.clients||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(c =>
+      `<option value="${c.id}">${escH(c.name)}</option>`).join('');
+
+  $c('modal-invoice').classList.add('open');
+}
+
+function onInvTypeChange() {
+  // Used by builder view
+  const picker = $c('inv-proposal-picker');
+  if (picker) picker.style.display = ($c('inv-type')?.value === 'phased') ? '' : 'none';
+}
+
+function onInvProjectChange() {
+  const pid = $c('inv-project').value;
+  // Auto-select client from project
+  const proj = S.projects.find(p => p.id === pid);
+  if (proj?.clientId) $c('inv-client').value = proj.clientId;
+
+  // Auto-check freight taxable from project settings
+  if (proj?.taxFreight) $c('inv-freight-taxable').checked = true;
+
+  // Populate proposal items picker
+  const prop = S.proposals[pid];
+  const container = $c('inv-proposal-items');
+  if (!prop || !prop.spaces?.length) {
+    container.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No proposal items for this project.</div>';
+    return;
+  }
+
+  let html = '';
+  prop.spaces.forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      const client = getItemClient(item, pid);
+      const qty = parseFloat(item.qty)||1;
+      const total = item.type === 'constructed' ? client : client * qty;
+      const checked = _invSelectedProposalItems.has(item.id);
+      const alreadyInvoiced = item.status === 'invoiced';
+      html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs);transition:var(--t)${alreadyInvoiced?';opacity:0.5':''}" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
+        <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${pid}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
+        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
+        ${alreadyInvoiced ? '<span style="font-size:9px;color:var(--russet);font-family:var(--font-b)">invoiced</span>' : ''}
+        <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
+      </label>`;
+    });
+  });
+  container.innerHTML = html;
+}
+
+function toggleInvProposalItem(pid, spId, itemId, checked) {
+  if (checked) {
+    _invSelectedProposalItems.add(itemId);
+    // Add as a line item
+    const prop = S.proposals[pid];
+    const sp = prop?.spaces.find(s => s.id === spId);
+    const item = sp?.items?.find(i => i.id === itemId);
+    if (item) {
+      const client = getItemClient(item, pid);
+      const qty = parseFloat(item.qty)||1;
+      _invLineItems.push({
+        id: uid(),
+        proposalItemId: itemId,
+        spaceId: spId,
+        name: item.name,
+        qty: item.type === 'constructed' ? 1 : qty,
+        price: item.type === 'constructed' ? client : client / qty,
+        taxable: !item.taxExempt,
+        trackInPM: false,
+      });
+    }
+  } else {
+    _invSelectedProposalItems.delete(itemId);
+    _invLineItems = _invLineItems.filter(l => l.proposalItemId !== itemId);
+  }
+  renderInvLineItems();
+  recalcInvoice();
+}
+
+function toggleAllInvItems() {
+  const pid = $c('inv-project').value;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  const allItems = [];
+  prop.spaces.forEach(sp => (sp.items||[]).forEach(item => allItems.push({item, sp})));
+
+  if (_invSelectedProposalItems.size === allItems.length) {
+    // Deselect all
+    _invSelectedProposalItems.clear();
+    _invLineItems = _invLineItems.filter(l => !l.proposalItemId);
+  } else {
+    // Select all
+    allItems.forEach(({item, sp}) => {
+      if (!_invSelectedProposalItems.has(item.id)) {
+        toggleInvProposalItem(pid, sp.id, item.id, true);
+      }
+    });
+  }
+  onInvProjectChange();
+  renderInvLineItems();
+  recalcInvoice();
+}
+
+function addInvManualLine() {
+  _invLineItems.push({ id:uid(), name:'', qty:1, price:0, taxable:true, trackInPM:false, manual:true });
+  renderInvLineItems();
+}
+
+function removeInvLine(idx) {
+  const line = _invLineItems[idx];
+  if (line?.proposalItemId) _invSelectedProposalItems.delete(line.proposalItemId);
+  _invLineItems.splice(idx, 1);
+  onInvProjectChange();
+  renderInvLineItems();
+  recalcInvoice();
+}
+
+function renderInvLineItems() {
+  $c('inv-line-items').innerHTML = _invLineItems.map((l, i) => {
+    const isProposal = !!l.proposalItemId;
+    return `
+    <div style="display:flex;align-items:flex-end;gap:6px;margin-bottom:4px;padding:6px 8px;background:${isProposal?'rgba(91,45,34,0.02)':'transparent'};border-radius:var(--rs)">
+      <div class="fg" style="flex:2">
+        ${i===0?'<label class="fl">Name</label>':''}
+        <input type="text" class="fi" value="${escH(l.name||'')}" onchange="_invLineItems[${i}].name=this.value" style="font-size:12px;padding:5px 8px">
+      </div>
+      <div class="fg" style="max-width:65px">
+        ${i===0?'<label class="fl">Qty</label>':''}
+        <input type="number" class="fi" value="${l.qty||1}" min="0.25" step="0.25" onchange="_invLineItems[${i}].qty=parseFloat(this.value)||1;recalcInvoice()" style="font-size:12px;padding:5px 8px;text-align:center">
+      </div>
+      <div class="fg" style="max-width:100px">
+        ${i===0?'<label class="fl">Price</label>':''}
+        <input type="text" class="fi" value="${l.price||''}" onchange="_invLineItems[${i}].price=parse$(this.value);recalcInvoice()" style="font-size:12px;padding:5px 8px">
+      </div>
+      <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
+        <input type="checkbox" ${l.taxable?'checked':''} onchange="_invLineItems[${i}].taxable=this.checked;recalcInvoice()" style="accent-color:var(--russet);width:11px;height:11px"> Tax
+      </label>
+      ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
+        <input type="checkbox" ${l.trackInPM?'checked':''} onchange="_invLineItems[${i}].trackInPM=this.checked" style="accent-color:var(--russet);width:11px;height:11px"> Track
+      </label>` : ''}
+      <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${i===0?'10':'4'}px 2px">✕</button>
+    </div>`;
+  }).join('') || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No line items yet.</div>';
+}
+
+function recalcInvoice() {
+  const pid = $c('inv-project').value;
+  const proj = S.projects.find(p => p.id === pid);
+  const taxRate = (proj?.taxRate || 0) / 100;
+
+  // Subtotal
+  let subtotal = 0;
+  let taxableAmt = 0;
+  _invLineItems.forEach(l => {
+    const lineTotal = (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
+    subtotal += lineTotal;
+    if (l.taxable) taxableAmt += lineTotal;
+  });
+
+  // Freight
+  const freight = parse$($c('inv-freight').value);
+  if ($c('inv-freight-taxable').checked) taxableAmt += freight;
+
+  // Discount
+  const discType = $c('inv-disc-type').value;
+  const discVal = parseFloat($c('inv-disc-value').value) || 0;
+  let discount = 0;
+  if (discType === 'pct') discount = (subtotal + freight) * (discVal / 100);
+  else if (discType === 'flat') discount = discVal;
+
+  // Tax
+  const tax = (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate;
+  const afterDiscount = subtotal + freight - discount;
+
+  // CC Fee
+  const ccPct = parseFloat($c('inv-cc-fee').value) || 0;
+  const ccFee = ccPct > 0 ? (afterDiscount + (tax > 0 ? tax : 0)) * (ccPct / 100) : 0;
+
+  const total = afterDiscount + tax + ccFee;
+
+  $c('inv-subtotal').textContent = fmt(subtotal);
+  $c('inv-freight-total').textContent = freight > 0 ? fmt(freight) : '$0.00';
+  $c('inv-disc-total').textContent = discount > 0 ? '-' + fmt(discount) : '—';
+  $c('inv-tax-label').textContent = proj?.taxRate ? `Tax (${proj.taxRate}%)` : 'Tax';
+  $c('inv-tax-total').textContent = fmt(tax > 0 ? tax : 0);
+  $c('inv-cc-total').textContent = ccFee > 0 ? fmt(ccFee) : '—';
+  $c('inv-grand-total').textContent = fmt(total);
+}
+
+function handleInvFileUpload(input) {
+  [...input.files].forEach(f => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      _invFiles.push({ id:uid(), name:f.name, size:f.size, data:e.target.result });
+      renderInvFiles();
+    };
+    reader.readAsDataURL(f);
+  });
+  input.value = '';
+}
+
+function renderInvFiles() {
+  $c('inv-files').innerHTML = _invFiles.map((f, i) => `
+    <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:3px 8px;font-size:11px;font-family:var(--font-b);margin-right:4px;margin-bottom:4px">
+      ${escH(f.name)} <button onclick="_invFiles.splice(${i},1);renderInvFiles()" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
+    </span>
+  `).join('');
+}
+
+// Save from Step 1 modal (draft — no line items required)
+function saveInvoice(status) {
+  const invoice = buildInvoiceFromModal();
+  invoice.status = status;
+  if (!S.invoices) S.invoices = [];
+  const existIdx = S.invoices.findIndex(i => i.id === invoice.id);
+  if (existIdx > -1) { invoice.payments = S.invoices[existIdx].payments||[]; invoice.created = S.invoices[existIdx].created; S.invoices[existIdx] = invoice; }
+  else S.invoices.push(invoice);
+  save();
+  closeModal('modal-invoice');
+  showView('invoices');
+  toast('Invoice ' + invoice.number + ' saved as draft.');
+}
+
+function buildInvoiceFromModal() {
+  return {
+    id: $c('inv-id').value || uid(),
+    number: $c('inv-number').value,
+    type: $c('inv-type').value,
+    projectId: $c('inv-project').value,
+    clientId: $c('inv-client').value,
+    status: 'draft',
+    phase: $c('inv-phase').value.trim(),
+    sentDate: $c('inv-sent-date').value,
+    dueDate: $c('inv-due-date').value,
+    lineItems: [],
+    freight: 0, freightTaxable: false,
+    discountType: '', discountValue: 0, discount: 0,
+    ccFeePct: 0, ccFee: 0,
+    taxRate: 0, subtotal: 0, tax: 0, total: 0,
+    notes: '', files: [], payments: [],
+    created: new Date().toISOString(),
+  };
+}
+
+function createAndOpenInvoice() {
+  const invoice = buildInvoiceFromModal();
+  invoice.status = 'draft';
+  const proj = S.projects.find(p => p.id === invoice.projectId);
+  if (proj?.taxFreight) invoice.freightTaxable = true;
+  invoice.taxRate = proj?.taxRate || 0;
+  if (!S.invoices) S.invoices = [];
+  S.invoices.push(invoice);
+  save();
+  closeModal('modal-invoice');
+  openInvoiceBuilder(invoice.id);
+}
+
+let _currentInvoiceId = null;
+
+function openInvoiceBuilder(invId) {
+  _currentInvoiceId = invId;
+  const inv = (S.invoices||[]).find(i => i.id === invId);
+  if (!inv) return;
+  _invLineItems = JSON.parse(JSON.stringify(inv.lineItems||[]));
+  _invFiles = [...(inv.files||[])];
+  _invSelectedProposalItems = new Set(_invLineItems.filter(l=>l.proposalItemId).map(l=>l.proposalItemId));
+  showView('invoice-builder');
+  renderInvoiceBuilder();
+}
+
+function renderInvoiceBuilder() {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const proj = S.projects.find(p => p.id === inv.projectId);
+  const client = (S.clients||[]).find(c => c.id === inv.clientId);
+  const prop = S.proposals[inv.projectId];
+  const taxRate = (proj?.taxRate || 0) / 100;
+  const typeLabels = { phased:'Phased', monthly:'Monthly Charges', standalone:'Standalone', design_fee:'Design Fee' };
+
+  $c('invb-title').textContent = inv.number + ' — ' + (typeLabels[inv.type]||inv.type);
+  $c('invb-subtitle').textContent = [proj?.name, client?.name, inv.phase].filter(Boolean).join(' · ');
+
+  let html = '<div style="display:grid;grid-template-columns:1fr 340px;gap:24px;align-items:start">';
+
+  // ── Left: line items ──
+  html += '<div>';
+
+  // Proposal items picker (phased only)
+  if (inv.type === 'phased' && prop?.spaces?.length) {
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Select Proposal Items</div>
+        <button class="btn btn-ghost btn-sm" onclick="toggleAllInvItems()" style="font-size:10px">Select All / None</button>
+      </div>
+      <div id="inv-proposal-items" style="max-height:250px;overflow-y:auto">`;
+    prop.spaces.forEach(sp => {
+      (sp.items||[]).forEach(item => {
+        const clientPrice = getItemClient(item, inv.projectId);
+        const qty = parseFloat(item.qty)||1;
+        const total = item.type === 'constructed' ? clientPrice : clientPrice * qty;
+        const checked = _invSelectedProposalItems.has(item.id);
+        const alreadyInvoiced = item.status === 'invoiced';
+        html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
+          ${alreadyInvoiced ? '<span style="font-size:9px;color:var(--russet);font-family:var(--font-b)">invoiced</span>' : ''}
+          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
+        </label>`;
+      });
+    });
+    html += '</div></div>';
+  }
+
+  // Line items
+  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Line Items</div>
+    <div id="inv-line-items"></div>
+    <button class="btn btn-ghost btn-sm" onclick="addInvManualLine()" style="margin-top:6px">+ Add Line Item</button>
+  </div>`;
+
+  // Freight
+  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+    <div class="frow" style="align-items:flex-end">
+      <div class="fg" style="flex:1">
+        <label class="fl">Freight</label>
+        <input type="text" class="fi" id="inv-freight" value="${inv.freight||''}" placeholder="$0.00" onchange="recalcInvoice()">
+      </div>
+      <div style="padding-bottom:12px">
+        <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="inv-freight-taxable" ${inv.freightTaxable?'checked':''} onchange="recalcInvoice()" style="accent-color:var(--russet);width:12px;height:12px"> Taxable</label>
+      </div>
+    </div>
+  </div>`;
+
+  // Discount & CC Fee
+  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+    <div class="frow" style="align-items:flex-end">
+      <div class="fg" style="max-width:140px">
+        <label class="fl">Discount Type</label>
+        <select class="fi fsel" id="inv-disc-type" onchange="recalcInvoice()" style="font-size:12px">
+          <option value="" ${!inv.discountType?'selected':''}>None</option>
+          <option value="pct" ${inv.discountType==='pct'?'selected':''}>Percentage</option>
+          <option value="flat" ${inv.discountType==='flat'?'selected':''}>Flat Amount</option>
+        </select>
+      </div>
+      <div class="fg" style="max-width:120px">
+        <label class="fl">Discount</label>
+        <input type="number" class="fi" id="inv-disc-value" value="${inv.discountValue||0}" min="0" step="1" onchange="recalcInvoice()" style="font-size:12px">
+      </div>
+      <div class="fg" style="max-width:140px">
+        <label class="fl">CC Fee %</label>
+        <input type="number" class="fi" id="inv-cc-fee" value="${inv.ccFeePct||0}" min="0" step="0.1" onchange="recalcInvoice()" style="font-size:12px" placeholder="e.g. 3">
+      </div>
+    </div>
+  </div>`;
+
+  // Notes & Attachments
+  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="inv-notes" style="resize:vertical;min-height:50px;font-size:12px" placeholder="Payment terms, special instructions…">${escH(inv.notes||'')}</textarea>
+    </div>
+    <div class="fg" style="margin-top:8px">
+      <label class="fl">Attachments</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0">
+        <span>+ Upload File</span>
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg" multiple style="display:none" onchange="handleInvFileUpload(this)">
+      </label>
+      <div id="inv-files" style="margin-top:4px"></div>
+    </div>
+  </div>`;
+
+  html += '</div>';
+
+  // ── Right: totals panel (sticky) ──
+  html += `<div style="position:sticky;top:20px">
+    <div style="background:white;border-radius:var(--rl);padding:20px 22px;border:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:14px">Invoice Summary</div>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-family:var(--font-b);font-size:13px">
+        <span style="color:var(--text-mid)">Subtotal</span><span id="inv-subtotal" style="text-align:right">$0.00</span>
+        <span style="color:var(--text-mid)">Freight</span><span id="inv-freight-total" style="text-align:right">$0.00</span>
+        <span style="color:var(--text-mid)">Discount</span><span id="inv-disc-total" style="text-align:right">—</span>
+        <span style="color:var(--text-mid)" id="inv-tax-label">Tax${proj?.taxRate?' ('+proj.taxRate+'%)':''}</span><span id="inv-tax-total" style="text-align:right">$0.00</span>
+        <span style="color:var(--text-mid)">CC Fee</span><span id="inv-cc-total" style="text-align:right">—</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:2px solid var(--pecan)">
+        <span style="font-family:var(--font-h);font-weight:900;font-size:14px;text-transform:uppercase;color:var(--mahogany)">Total</span>
+        <span id="inv-grand-total" style="font-family:var(--font-h);font-weight:900;font-size:20px;color:var(--pecan)">$0.00</span>
+      </div>
+    </div>
+  </div>`;
+
+  html += '</div>';
+  $c('invb-body').innerHTML = html;
+  renderInvLineItems();
+  renderInvFiles();
+  recalcInvoice();
+}
+
+function saveInvoiceFromBuilder(status) {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+
+  if (status === 'sent' && !_invLineItems.length) { toast('Add at least one line item.'); return; }
+
+  const proj = S.projects.find(p => p.id === inv.projectId);
+  const taxRate = (proj?.taxRate || 0) / 100;
+
+  let subtotal = 0, taxableAmt = 0;
+  _invLineItems.forEach(l => {
+    const lt = (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
+    subtotal += lt;
+    if (l.taxable) taxableAmt += lt;
+  });
+  const freight = parse$($c('inv-freight')?.value||'');
+  if ($c('inv-freight-taxable')?.checked) taxableAmt += freight;
+  const discType = $c('inv-disc-type')?.value || '';
+  const discVal = parseFloat($c('inv-disc-value')?.value) || 0;
+  let discount = 0;
+  if (discType === 'pct') discount = (subtotal + freight) * (discVal / 100);
+  else if (discType === 'flat') discount = discVal;
+  const tax = Math.max(0, (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate);
+  const afterDiscount = subtotal + freight - discount;
+  const ccPct = parseFloat($c('inv-cc-fee')?.value) || 0;
+  const ccFee = ccPct > 0 ? (afterDiscount + tax) * (ccPct / 100) : 0;
+  const total = afterDiscount + tax + ccFee;
+
+  Object.assign(inv, {
+    status,
+    lineItems: JSON.parse(JSON.stringify(_invLineItems)),
+    freight, freightTaxable: $c('inv-freight-taxable')?.checked || false,
+    discountType: discType, discountValue: discVal, discount,
+    ccFeePct: ccPct, ccFee,
+    taxRate: proj?.taxRate || 0,
+    subtotal, tax, total,
+    notes: $c('inv-notes')?.value?.trim() || '',
+    files: [..._invFiles],
+  });
+  save();
+  showView('invoices');
+  toast('Invoice ' + inv.number + (status === 'sent' ? ' saved & marked sent.' : ' draft saved.'));
+}
+
+function renderInvoices() {
+  const body = $c('invoices-body');
+  if (!body) return;
+
+  // Populate project filter
+  const projFilter = $c('inv-filter-project');
+  if (projFilter) {
+    const cur = projFilter.value;
+    projFilter.innerHTML = '<option value="">All Projects</option>' +
+      S.projects.map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+
+  let invoices = S.invoices || [];
+  const fProj = $c('inv-filter-project')?.value;
+  const fStatus = $c('inv-filter-status')?.value;
+  const fType = $c('inv-filter-type')?.value;
+
+  if (fProj) invoices = invoices.filter(i => i.projectId === fProj);
+  if (fType) invoices = invoices.filter(i => i.type === fType);
+  if (fStatus) {
+    invoices = invoices.filter(i => {
+      if (fStatus === 'overdue') return i.status === 'sent' && i.dueDate && new Date(i.dueDate) < new Date();
+      return i.status === fStatus;
+    });
+  }
+
+  if (!invoices.length) {
+    body.innerHTML = '<div class="no-results">No invoices yet. Create your first one.</div>';
+    return;
+  }
+
+  const sorted = [...invoices].sort((a,b) => (b.created||'').localeCompare(a.created||''));
+
+  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(inv => {
+    const proj = S.projects.find(p => p.id === inv.projectId);
+    const client = (S.clients||[]).find(c => c.id === inv.clientId);
+    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+    const due = inv.total - paid;
+    const isOverdue = inv.status === 'sent' && inv.dueDate && new Date(inv.dueDate) < new Date();
+    const statusLabel = inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
+    const statusColor = inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
+    const typeLabels = { phased:'Phased', monthly:'Monthly', standalone:'Standalone', design_fee:'Design Fee' };
+
+    return `
+    <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditInvoice('${inv.id}')">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany);letter-spacing:0.03em">${escH(inv.number)}</span>
+          <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${statusColor}15;color:${statusColor};border:1px solid ${statusColor}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${statusLabel}</span>
+          <span style="font-size:10px;font-family:var(--font-b);color:var(--text-light)">${typeLabels[inv.type]||inv.type}</span>
+        </div>
+        <span style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${fmt(inv.total)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:6px;font-size:11px;font-family:var(--font-b);color:var(--text-mid)">
+        ${proj ? '<span>'+escH(proj.name)+'</span>' : ''}
+        ${client ? '<span>· '+escH(client.name)+'</span>' : ''}
+        ${inv.phase ? '<span>· '+escH(inv.phase)+'</span>' : ''}
+        ${inv.sentDate ? '<span>· Sent: '+escH(inv.sentDate)+'</span>' : ''}
+        ${inv.dueDate ? '<span>· Due: '+escH(inv.dueDate)+'</span>' : ''}
+        ${inv.status === 'partial' ? '<span style="color:var(--russet)">· Outstanding: '+fmt(due)+'</span>' : ''}
+      </div>
+      <div style="margin-top:6px;font-size:10px;color:var(--text-light);font-family:var(--font-b)">
+        ${inv.lineItems.length} item${inv.lineItems.length!==1?'s':''}
+        ${inv.files?.length ? ' · '+inv.files.length+' attachment'+(inv.files.length!==1?'s':'') : ''}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function openEditInvoice(invId) {
+  openInvoiceBuilder(invId);
+}
+
 // ─── TIME TRACKER ─────────────────────────────────────
  
 let _currentTimeTab  = 'summary';
@@ -5962,6 +8019,7 @@ function saveTimeEntry() {
     toast('Time logged.');
   }
   save();
+
   closeModal('modal-time');
   renderTime();
 }
@@ -5975,6 +8033,7 @@ function deleteTimeEntry(id) {
   if (!id || !confirm('Delete this time entry?')) return;
   S.timeEntries = (S.timeEntries||[]).filter(e => e.id !== id);
   save();
+
   closeModal('modal-time');
   renderTime();
   toast('Entry deleted.');
