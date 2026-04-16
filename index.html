@@ -7709,16 +7709,21 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
           <th style="width:30px;border-bottom:1px solid var(--border)"></th>
         </tr></thead>
         <tbody>`;
-    roomItems.forEach(item => {
+    roomItems.forEach((item, ri) => {
       const gi = doc.items.indexOf(item);
       const indent = item.indent ? 'padding-left:'+(16 + item.indent * 16)+'px' : '';
       const rowBg = item.indent ? 'background:rgba(91,45,34,0.015);' : '';
+      // Check if this is a parent row (indent 0) with sub-rows (next item has indent > 0)
+      const nextItem = roomItems[ri + 1];
+      const isParent = !item.indent && nextItem && nextItem.indent;
       html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06);${rowBg}">
         <td style="padding:4px 4px;${indent}"><input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}${item.indent?';font-size:10px':''}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim())" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim())" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim())" style="${iStyle}"></td>
-        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Application notes…" onchange="updateDocItem(${gi},'description',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 4px">
+          ${isParent ? `<label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:9px;color:var(--russet);cursor:pointer;white-space:nowrap;padding:4px 0"><input type="checkbox" onchange="applyToSubRows(${gi})" style="accent-color:var(--russet);width:11px;height:11px"> Apply to all</label>` : `<input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Application notes…" onchange="updateDocItem(${gi},'description',this.value.trim())" style="${iStyle}">`}
+        </td>
         <td style="padding:4px 2px"><button onclick="removeDocItem(${gi})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button></td>
       </tr>`;
     });
@@ -7744,6 +7749,24 @@ function addPaintItem(room) {
   doc.updated = new Date().toISOString();
   save();
   renderDocEditor();
+}
+
+function applyToSubRows(parentIdx) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const parent = doc.items[parentIdx];
+  if (!parent) return;
+  // Apply color, vendor, finish to all subsequent items with indent > 0 until we hit another indent-0 item
+  for (let i = parentIdx + 1; i < doc.items.length; i++) {
+    if (!doc.items[i].indent || doc.items[i].room !== parent.room) break;
+    doc.items[i].color = parent.color;
+    doc.items[i].vendor = parent.vendor;
+    doc.items[i].finish = parent.finish;
+  }
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+  toast('Applied to sub-rows.');
 }
 
 function paintRow(room, name, indent) {
