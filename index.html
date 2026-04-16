@@ -7734,7 +7734,11 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
       </tr>`;
     });
     html += `</tbody></table>
-      <button class="btn btn-ghost btn-sm" onclick="addPaintItem('${escH(room)}')" style="margin-top:6px;font-size:10px">+ Add Row</button>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn btn-ghost btn-sm" onclick="addPaintItem('${escH(room)}')" style="font-size:10px">+ Add Row</button>
+        <button class="btn btn-ghost btn-sm" onclick="addPaintWindow('${escH(room)}')" style="font-size:10px">+ Add Window</button>
+        <button class="btn btn-ghost btn-sm" onclick="addPaintDoor('${escH(room)}')" style="font-size:10px">+ Add Door</button>
+      </div>
     </div>`;
   });
 
@@ -7752,6 +7756,43 @@ function addPaintItem(room) {
     id: uid(), name:'', color:'', vendor:'', finish:'', description:'', room: room,
     imageData: null, proposalItemId: null,
   });
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function addPaintWindow(room) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const existing = doc.items.filter(i => i.room === room && /^Window\b/.test(i.name) && !i.indent).length;
+  const num = existing + 1;
+  const label = 'Window ' + num;
+  doc.items.push(paintRow(room, label, 0));
+  doc.items.push(paintRow(room, label + ' — Casing', 1));
+  doc.items.push(paintRow(room, label + ' — Apron', 1));
+  doc.items.push(paintRow(room, label + ' — Stool', 1));
+  doc.items.push(paintRow(room, label + ' — Stile', 1));
+  doc.items.push(paintRow(room, label + ' — Muntin(s)', 1));
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function addPaintDoor(room) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const existing = doc.items.filter(i => i.room === room && /^Door\b/.test(i.name) && !i.indent).length;
+  const num = existing + 1;
+  const label = 'Door ' + num;
+  doc.items.push(paintRow(room, label, 0));
+  doc.items.push(paintRow(room, label + ' — Casing (side in view from this location)', 1));
+  doc.items.push(paintRow(room, label + ' — Casing (side not in view from this location)', 1));
+  doc.items.push(paintRow(room, label + ' — Jamb (side in view from this location)', 1));
+  doc.items.push(paintRow(room, label + ' — Jamb (side not in view from this location)', 1));
+  doc.items.push(paintRow(room, label + ' — Panel (side in view from this location)', 1));
+  doc.items.push(paintRow(room, label + ' — Panel (side not in view from this location)', 1));
+  doc.items.push(paintRow(room, label + ' — Knob Edge', 1));
+  doc.items.push(paintRow(room, label + ' — Hinge Edge', 1));
   doc.updated = new Date().toISOString();
   save();
   renderDocEditor();
