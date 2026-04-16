@@ -7580,14 +7580,13 @@ function renderDocEditor() {
   $c('doce-title').textContent = doc.title;
   $c('doce-subtitle').textContent = [templateLabel, proj?.name, client?.name].filter(Boolean).join(' · ');
 
-  const prop = S.proposals[doc.projectId];
+  const rooms = [...new Set((doc.items||[]).map(i => i.room || 'Unassigned'))];
+  if (!rooms.length) rooms.push('Unassigned');
 
   let html = '<div style="display:grid;grid-template-columns:1fr 300px;gap:24px;align-items:start">';
-
-  // ── Left: document content ──
   html += '<div>';
 
-  // Document title editable
+  // Shared: title & date
   html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div class="frow">
       <div class="fg" style="flex:2">
@@ -7599,7 +7598,30 @@ function renderDocEditor() {
         <input type="date" class="fi" id="doce-date" value="${escH(doc.date||new Date().toISOString().slice(0,10))}" onchange="updateDocField('date',this.value)">
       </div>
     </div>
+    ${doc.templateId === 'paint_paper_schedule' ? `<div class="fg" style="margin-top:8px"><label class="fl">Additional Notes</label><textarea class="fi" style="resize:vertical;min-height:40px;font-size:12px" placeholder="General notes for the schedule…" onchange="updateDocField('notes',this.value.trim())">${escH(doc.notes||'')}</textarea></div>` : ''}
   </div>`;
+
+  // Template-specific body
+  if (doc.templateId === 'paint_paper_schedule') {
+    html += renderPaintScheduleEditor(doc, proj, rooms);
+  } else {
+    html += renderSwatchScheduleEditor(doc, proj, rooms);
+  }
+
+  html += '</div>';
+
+  // Shared: right panel
+  html += renderDocInfoPanel(doc, proj, client, templateLabel, rooms);
+
+  html += '</div>';
+  $c('doce-body').innerHTML = html;
+}
+
+// ── SWATCH SCHEDULE EDITOR (material, furniture, tile, lighting, hardware) ──
+
+function renderSwatchScheduleEditor(doc, proj, rooms) {
+  const prop = S.proposals[doc.projectId];
+  let html = '';
 
   // Proposal items picker
   if (prop?.spaces?.length) {
@@ -7615,7 +7637,6 @@ function renderDocEditor() {
           <span style="font-family:var(--font-b);font-size:12px;flex:1">${escH(item.name||'—')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</span>
           <span style="font-size:10px;color:var(--text-light)">${escH(sp.name||'')}</span>
         </label>`;
-        // Also show components for constructed items
         if (item.type === 'constructed' && item.components?.length) {
           item.components.forEach(c => {
             if (c.componentType === 'shipping' || c.componentType === 'receiving') return;
@@ -7631,55 +7652,102 @@ function renderDocEditor() {
     html += '</div></details></div>';
   }
 
-  // Schedule items grid
-  const rooms = [...new Set(doc.items.map(i => i.room || 'Unassigned'))];
-  if (!rooms.length) rooms.push('Unassigned');
-
   rooms.forEach(room => {
     const roomItems = doc.items.filter(i => (i.room || 'Unassigned') === room);
     html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--pecan);margin-bottom:12px">${escH(room)}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">`;
-
-    roomItems.forEach((item, idx) => {
-      const globalIdx = doc.items.indexOf(item);
-      const imgTypeLabel = item.imageType === 'detail' ? 'Detail' : item.imageType === 'reference' ? 'Reference' : 'Material';
+    roomItems.forEach(item => {
+      const gi = doc.items.indexOf(item);
       html += `<div style="border:1px solid var(--border);border-radius:var(--rs);padding:10px;position:relative">
-        <div style="width:100%;aspect-ratio:1;background:${item.imageData ? 'url('+item.imageData+') center/cover' : 'rgba(91,45,34,0.06)'};border-radius:var(--rs);margin-bottom:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">
-          ${!item.imageData ? '<label style="cursor:pointer;font-size:10px;color:var(--text-light);font-family:var(--font-b);text-align:center">+ Upload<br>Image<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage('+globalIdx+',this)"></label>' : ''}
+        <div style="width:100%;aspect-ratio:1;background:${item.imageData?'url('+item.imageData+') center/cover':'rgba(91,45,34,0.06)'};border-radius:var(--rs);margin-bottom:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          ${!item.imageData?'<label style="cursor:pointer;font-size:10px;color:var(--text-light);font-family:var(--font-b);text-align:center">+ Upload<br>Image<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage('+gi+',this)"></label>':''}
         </div>
-        ${item.imageData ? `<div style="display:flex;gap:4px;margin-bottom:6px">
-          <select class="fi fsel" style="font-size:9px;padding:2px 4px;flex:1" value="${item.imageType||'material'}" onchange="updateDocItem(${globalIdx},'imageType',this.value)">
+        ${item.imageData?`<div style="display:flex;gap:4px;margin-bottom:6px">
+          <select class="fi fsel" style="font-size:9px;padding:2px 4px;flex:1" onchange="updateDocItem(${gi},'imageType',this.value)">
             <option value="material" ${item.imageType==='material'||!item.imageType?'selected':''}>Material</option>
             <option value="detail" ${item.imageType==='detail'?'selected':''}>Detail</option>
             <option value="reference" ${item.imageType==='reference'?'selected':''}>Reference</option>
           </select>
-          <label style="cursor:pointer;font-size:9px;color:var(--russet);font-family:var(--font-b);padding:2px 4px;white-space:nowrap">Swap<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage(${globalIdx},this)"></label>
-        </div>` : ''}
+          <label style="cursor:pointer;font-size:9px;color:var(--russet);font-family:var(--font-b);padding:2px 4px;white-space:nowrap">Swap<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage(${gi},this)"></label>
+        </div>`:''}
         <div style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
-        <input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Material / fabric name" onchange="updateDocItem(${globalIdx},'description',this.value.trim())" style="font-size:11px;padding:4px 6px;margin-top:4px">
-        <input type="text" class="fi" value="${escH(item.caption||'')}" placeholder="Caption (optional)" onchange="updateDocItem(${globalIdx},'caption',this.value.trim())" style="font-size:10px;padding:3px 6px;margin-top:3px;color:var(--text-mid)">
-        <button onclick="removeDocItem(${globalIdx})" style="position:absolute;top:4px;right:4px;background:white;border:1px solid var(--border);border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;color:var(--text-light);display:flex;align-items:center;justify-content:center">✕</button>
+        <input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Material / fabric name" onchange="updateDocItem(${gi},'description',this.value.trim())" style="font-size:11px;padding:4px 6px;margin-top:4px">
+        <input type="text" class="fi" value="${escH(item.caption||'')}" placeholder="Caption (optional)" onchange="updateDocItem(${gi},'caption',this.value.trim())" style="font-size:10px;padding:3px 6px;margin-top:3px;color:var(--text-mid)">
+        <button onclick="removeDocItem(${gi})" style="position:absolute;top:4px;right:4px;background:white;border:1px solid var(--border);border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;color:var(--text-light);display:flex;align-items:center;justify-content:center">✕</button>
       </div>`;
     });
-
     html += `<div style="border:1px dashed var(--border);border-radius:var(--rs);padding:10px;display:flex;align-items:center;justify-content:center;min-height:100px;cursor:pointer" onclick="addManualDocItem('${escH(room)}')" onmouseenter="this.style.borderColor='var(--russet)'" onmouseleave="this.style.borderColor='var(--border)'">
       <span style="font-size:11px;color:var(--text-light);font-family:var(--font-b)">+ Add Item</span>
-    </div>`;
-
-    html += '</div></div>';
+    </div></div></div>`;
   });
 
-  // Add room button
   html += `<div style="display:flex;gap:8px;align-items:center">
     <input type="text" class="fi" id="doce-new-room" placeholder="New room / section name" style="font-size:12px;padding:6px 10px;max-width:250px">
     <button class="btn btn-ghost btn-sm" onclick="addDocRoom()">+ Add Room</button>
   </div>`;
+  return html;
+}
 
-  html += '</div>';
+// ── PAINT / PAPER SCHEDULE EDITOR ──
 
-  // ── Right: preview info ──
-  html += `<div style="position:sticky;top:20px">
+function renderPaintScheduleEditor(doc, proj, rooms) {
+  let html = '';
+  const iStyle = 'font-size:11px;padding:5px 7px';
+
+  rooms.forEach(room => {
+    const roomItems = doc.items.filter(i => (i.room || 'Unassigned') === room);
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--pecan);margin-bottom:12px">${escH(room)}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;font-family:var(--font-b)">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);border-bottom:1px solid var(--border)">Location</th>
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);border-bottom:1px solid var(--border)">Color</th>
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);border-bottom:1px solid var(--border)">Vendor</th>
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);border-bottom:1px solid var(--border)">Finish</th>
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);border-bottom:1px solid var(--border)">Notes</th>
+          <th style="width:30px;border-bottom:1px solid var(--border)"></th>
+        </tr></thead>
+        <tbody>`;
+    roomItems.forEach(item => {
+      const gi = doc.items.indexOf(item);
+      html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06)">
+        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Application notes…" onchange="updateDocItem(${gi},'description',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 2px"><button onclick="removeDocItem(${gi})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button></td>
+      </tr>`;
+    });
+    html += `</tbody></table>
+      <button class="btn btn-ghost btn-sm" onclick="addPaintItem('${escH(room)}')" style="margin-top:6px;font-size:10px">+ Add Row</button>
+    </div>`;
+  });
+
+  html += `<div style="display:flex;gap:8px;align-items:center">
+    <input type="text" class="fi" id="doce-new-room" placeholder="New room / section name" style="font-size:12px;padding:6px 10px;max-width:250px">
+    <button class="btn btn-ghost btn-sm" onclick="addDocRoom()">+ Add Room</button>
+  </div>`;
+  return html;
+}
+
+function addPaintItem(room) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  doc.items.push({
+    id: uid(), name:'', color:'', vendor:'', finish:'', description:'', room: room,
+    imageData: null, proposalItemId: null,
+  });
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+// ── SHARED: Document Info Panel ──
+
+function renderDocInfoPanel(doc, proj, client, templateLabel, rooms) {
+  return `<div style="position:sticky;top:20px">
     <div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:14px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Document Info</div>
       <div style="font-size:12px;font-family:var(--font-b);color:var(--text-mid);line-height:1.7">
@@ -7692,9 +7760,9 @@ function renderDocEditor() {
       <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;font-family:var(--font-b);color:var(--text-mid);line-height:1.8">
         <div><strong>Version:</strong> <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany)">${doc.version||'A'}.${doc.revision||1}</span></div>
         <div><strong>Created:</strong> ${new Date(doc.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
-        <div><strong>Last Saved:</strong> ${doc.updated ? new Date(doc.updated).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+new Date(doc.updated).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—'}</div>
+        <div><strong>Last Saved:</strong> ${doc.updated?new Date(doc.updated).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+new Date(doc.updated).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'—'}</div>
       </div>
-      ${(doc.revisionHistory||[]).length ? `
+      ${(doc.revisionHistory||[]).length?`
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
         <details>
           <summary style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);cursor:pointer;user-select:none;padding:2px 0">Version History</summary>
@@ -7703,16 +7771,12 @@ function renderDocEditor() {
               `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(91,45,34,0.06)">
                 <span>${doc.version||'A'}.${r.revision} — ${r.itemCount} item${r.itemCount!==1?'s':''}</span>
                 <span style="color:var(--text-light)">${new Date(r.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(r.savedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</span>
-              </div>`
-            ).join('')}
+              </div>`).join('')}
           </div>
         </details>
-      </div>` : ''}
+      </div>`:''}
     </div>
   </div>`;
-
-  html += '</div>';
-  $c('doce-body').innerHTML = html;
 }
 
 function updateDocField(key, val) {
@@ -7872,22 +7936,45 @@ function printCurrentDoc() {
   const client = (S.clients||[]).find(c => c.id === proj?.clientId);
 
   const rooms = [...new Set(doc.items.map(i => i.room || 'Unassigned'))];
+  const isPaint = doc.templateId === 'paint_paper_schedule';
   let itemsHtml = '';
+
+  if (doc.notes) {
+    itemsHtml += `<div style="font-size:12px;color:var(--text-mid);font-style:italic;margin-bottom:20px;padding:10px 12px;background:rgba(91,45,34,0.03);border-radius:4px">${escH(doc.notes)}</div>`;
+  }
+
   rooms.forEach(room => {
     const items = doc.items.filter(i => (i.room || 'Unassigned') === room);
     if (!items.length) return;
-    itemsHtml += `<div class="room-section">
-      <div class="room-title">${escH(room)}</div>
-      <div class="swatch-grid">
-        ${items.map(item => `<div class="swatch-card">
-          ${item.imageData ? `<div class="swatch-img"><img src="${item.imageData}" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>` : '<div class="swatch-img empty"></div>'}
-          <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
-          ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
-          ${item.caption ? '<div class="swatch-caption">'+escH(item.caption)+'</div>' : ''}
-          ${item.imageType && item.imageType !== 'material' ? '<div class="swatch-type">'+escH(item.imageType === 'detail' ? 'Detail' : 'Reference')+'</div>' : ''}
-        </div>`).join('')}
-      </div>
-    </div>`;
+
+    if (isPaint) {
+      itemsHtml += `<div class="room-section">
+        <div class="room-title">${escH(room)}</div>
+        <table class="paint-table">
+          <thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Application Note(s)</th></tr></thead>
+          <tbody>${items.map(item => `<tr>
+            <td class="loc-cell">${escH(item.name||'')}</td>
+            <td>${escH(item.color||'')}</td>
+            <td>${escH(item.vendor||'')}</td>
+            <td>${escH(item.finish||'')}</td>
+            <td class="note-cell">${escH(item.description||'')}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    } else {
+      itemsHtml += `<div class="room-section">
+        <div class="room-title">${escH(room)}</div>
+        <div class="swatch-grid">
+          ${items.map(item => `<div class="swatch-card">
+            ${item.imageData ? `<div class="swatch-img"><img src="${item.imageData}" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>` : '<div class="swatch-img empty"></div>'}
+            <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
+            ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
+            ${item.caption ? '<div class="swatch-caption">'+escH(item.caption)+'</div>' : ''}
+            ${item.imageType && item.imageType !== 'material' ? '<div class="swatch-type">'+escH(item.imageType === 'detail' ? 'Detail' : 'Reference')+'</div>' : ''}
+          </div>`).join('')}
+        </div>
+      </div>`;
+    }
   });
 
   const w = window.open('','_blank','width=900,height=1000');
@@ -7911,7 +7998,12 @@ function printCurrentDoc() {
     .swatch-desc { font-size:10px; color:var(--text-mid); font-style:italic; margin-top:2px; }
     .swatch-caption { font-size:9px; color:var(--text-light); margin-top:2px; }
     .swatch-type { font-family:var(--font-h); font-size:8px; text-transform:uppercase; letter-spacing:0.08em; color:var(--russet); margin-top:2px; }
-    @media print { body { padding:30px 36px; } }
+    .paint-table { width:100%; border-collapse:collapse; font-size:11px; }
+    .paint-table th { font-family:var(--font-h); font-weight:700; text-transform:uppercase; letter-spacing:0.08em; font-size:9px; color:var(--text-light); padding:6px 8px; text-align:left; border-bottom:2px solid var(--border); }
+    .paint-table td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+    .paint-table .loc-cell { font-family:var(--font-h); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); white-space:nowrap; }
+    .paint-table .note-cell { font-style:italic; color:var(--text-mid); font-size:10px; }
+    @media print { body { padding:30px 36px; } .paint-table { page-break-inside:auto; } .paint-table tr { page-break-inside:avoid; } }
   </style></head><body>
     <div class="doc-header">
       <div>
