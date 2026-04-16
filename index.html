@@ -4325,6 +4325,7 @@ function renderPDDocuments(proj, pid) {
               </div>
               <div style="font-size:10px;font-family:var(--font-b);color:var(--text-mid);margin-top:2px">${escH(tmplLabel)} · ${doc.items.length} item${doc.items.length!==1?'s':''} · ${rooms.length} room${rooms.length!==1?'s':''} · Updated ${new Date(doc.updated||doc.created).toLocaleDateString()}</div>
             </div>
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();viewCurrentDoc('${doc.id}')" style="font-size:10px;white-space:nowrap">View Current Version</button>
           </div>`;
         }).join('')}
       </div>
@@ -8120,6 +8121,13 @@ function saveCurrentDoc() {
   save();
   renderDocEditor();
   toast('Saved as Version ' + (doc.version||'A') + '.' + doc.revision);
+}
+
+function viewCurrentDoc(docId) {
+  const prev = _currentDocId;
+  _currentDocId = docId;
+  printCurrentDoc();
+  _currentDocId = prev;
 }
 
 function viewDocRevision(revIdx) {
