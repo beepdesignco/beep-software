@@ -1370,12 +1370,12 @@ tr:hover .row-btns { opacity:1; }
 
     <!-- ─────────── INVOICES VIEW ─────────── -->
     <div class="view" id="view-invoices">
-      <div class="page-header">
+      <div class="page-header" style="border-bottom:none;padding-bottom:0">
         <div>
           <div class="page-title">Invoices</div>
           <div class="page-sub">Create, send, and track invoices</div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center" id="inv-toolbar">
           <select class="fi" id="inv-filter-project" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px;width:200px">
             <option value="">All Projects</option>
           </select>
@@ -1397,7 +1397,11 @@ tr:hover .row-btns { opacity:1; }
           <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>
         </div>
       </div>
-      <div id="invoices-body" style="padding:0 30px 40px"></div>
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
+        <button class="view-tab active" data-invtab="list" onclick="setInvTab('list')" style="margin-bottom:-1px">Invoices</button>
+        <button class="view-tab" data-invtab="reports" onclick="setInvTab('reports')" style="margin-bottom:-1px">Reports</button>
+      </div>
+      <div id="invoices-body" style="padding:22px 30px 40px"></div>
     </div>
 
     <!-- ─────────── INVOICE BUILDER VIEW ─────────── -->
@@ -2192,7 +2196,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div class="fg" style="flex:1">
         <label class="fl">Invoice Type</label>
-        <select class="fi fsel" id="inv-type">
+        <select class="fi fsel" id="inv-type" onchange="if(this.value==='monthly')autoSetDueDate($c('inv-sent-date').value)">
           <option value="phased">Phased Invoice</option>
           <option value="monthly">Monthly Charges</option>
           <option value="standalone">Standalone</option>
@@ -2213,7 +2217,7 @@ tr:hover .row-btns { opacity:1; }
     <div class="frow">
       <div class="fg">
         <label class="fl">Sent Date</label>
-        <input type="date" class="fi" id="inv-sent-date">
+        <input type="date" class="fi" id="inv-sent-date" onchange="autoSetDueDate(this.value)">
       </div>
       <div class="fg">
         <label class="fl">Due Date</label>
@@ -2612,7 +2616,7 @@ function showView(v) {
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'time') renderTime();
-  if (v === 'invoices') renderInvoices();
+  if (v === 'invoices') { if (_invTab === 'reports') renderInvReports(); else renderInvoices(); }
   if (v === 'invoice-builder') { /* rendered by openInvoiceBuilder */ }
   save();
 }
@@ -7127,8 +7131,10 @@ function openNewInvoiceModal() {
   $c('inv-id').value = '';
   $c('inv-number').value = getNextInvoiceNumber();
   $c('inv-type').value = 'phased';
-  $c('inv-sent-date').value = '';
-  $c('inv-due-date').value = '';
+  const today = new Date().toISOString().slice(0,10);
+  $c('inv-sent-date').value = today;
+  const due = new Date(); due.setDate(due.getDate()+10);
+  $c('inv-due-date').value = due.toISOString().slice(0,10);
   $c('inv-phase').value = '';
   _invLineItems = [];
   _invFiles = [];
@@ -7186,15 +7192,42 @@ function onInvProjectChange() {
   container.innerHTML = html;
 }
 
+function autoSetDueDate(sentDate) {
+  if (!sentDate) return;
+  const type = $c('inv-type')?.value;
+  if (type === 'monthly') {
+    $c('inv-due-date').value = sentDate; // due upon receipt
+  } else {
+    const d = new Date(sentDate + 'T12:00:00');
+    d.setDate(d.getDate()+10);
+    $c('inv-due-date').value = d.toISOString().slice(0,10);
+  }
+}
+
+function getItemNonFreightClient(item, pid) {
+  // Client price minus any freight components/charges
+  const total = getItemClient(item, pid);
+  const freightComp = getFreightFromComponents(item, pid);
+  const freightCharge = getFreightFromCharges(item, pid);
+  return total - freightComp - freightCharge;
+}
+
+function getItemFreightClient(item, pid) {
+  if (isFreightItem(item)) {
+    const qty = parseFloat(item.qty)||1;
+    return getItemClient(item, pid) * qty;
+  }
+  return getFreightFromComponents(item, pid) + getFreightFromCharges(item, pid);
+}
+
 function toggleInvProposalItem(pid, spId, itemId, checked) {
   if (checked) {
     _invSelectedProposalItems.add(itemId);
-    // Add as a line item
     const prop = S.proposals[pid];
     const sp = prop?.spaces.find(s => s.id === spId);
     const item = sp?.items?.find(i => i.id === itemId);
-    if (item) {
-      const client = getItemClient(item, pid);
+    if (item && !isFreightItem(item)) {
+      const nonFreight = getItemNonFreightClient(item, pid);
       const qty = parseFloat(item.qty)||1;
       _invLineItems.push({
         id: uid(),
@@ -7202,17 +7235,38 @@ function toggleInvProposalItem(pid, spId, itemId, checked) {
         spaceId: spId,
         name: item.name,
         qty: item.type === 'constructed' ? 1 : qty,
-        price: item.type === 'constructed' ? client : client / qty,
+        price: item.type === 'constructed' ? nonFreight : nonFreight / qty,
         taxable: !item.taxExempt,
         trackInPM: false,
       });
     }
+    // Freight items are handled by recalcInvFreight
   } else {
     _invSelectedProposalItems.delete(itemId);
     _invLineItems = _invLineItems.filter(l => l.proposalItemId !== itemId);
   }
+  recalcInvFreight();
   renderInvLineItems();
   recalcInvoice();
+}
+
+function recalcInvFreight() {
+  // Sum freight from all selected proposal items
+  const pid = _currentInvoiceId ? (S.invoices||[]).find(i=>i.id===_currentInvoiceId)?.projectId : $c('inv-project')?.value;
+  if (!pid) return;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  let totalFreight = 0;
+  (prop.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      if (!_invSelectedProposalItems.has(item.id)) return;
+      totalFreight += getItemFreightClient(item, pid);
+    });
+  });
+  const freightEl = $c('inv-freight');
+  if (freightEl && totalFreight > 0) {
+    freightEl.value = totalFreight.toFixed(2);
+  }
 }
 
 function toggleAllInvItems() {
@@ -7234,6 +7288,7 @@ function toggleAllInvItems() {
       }
     });
   }
+  recalcInvFreight();
   onInvProjectChange();
   renderInvLineItems();
   recalcInvoice();
@@ -7650,6 +7705,272 @@ function renderInvoices() {
 
 function openEditInvoice(invId) {
   openInvoiceBuilder(invId);
+}
+
+// ─── INVOICE TABS & REPORTS ──────────────────────────────
+
+let _invTab = 'list';
+
+function setInvTab(tab) {
+  _invTab = tab;
+  $a('[data-invtab]').forEach(b => b.classList.toggle('active', b.dataset.invtab === tab));
+  $c('inv-toolbar').style.display = tab === 'list' ? 'flex' : 'none';
+  if (tab === 'list') renderInvoices();
+  else if (tab === 'reports') renderInvReports();
+}
+
+function renderInvReports() {
+  const body = $c('invoices-body');
+  if (!body) return;
+  const invoices = S.invoices || [];
+
+  // Date range filter
+  let html = `
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Date Range</div>
+    <select class="fi" id="rpt-range" onchange="onRptRangeChange()" style="font-size:12px;padding:6px 10px">
+      <option value="this_month">This Month</option>
+      <option value="last_month">Last Month</option>
+      <option value="this_week">This Week</option>
+      <option value="this_year" selected>This Year</option>
+      <option value="last_year">Last Year</option>
+      <option value="all">All Time</option>
+      <option value="custom">Custom Range</option>
+    </select>
+    <input type="date" class="fi" id="rpt-from" style="font-size:12px;padding:6px 10px;display:none" onchange="renderInvReports()">
+    <input type="date" class="fi" id="rpt-to" style="font-size:12px;padding:6px 10px;display:none" onchange="renderInvReports()">
+  </div>`;
+
+  body.innerHTML = html + '<div id="rpt-content"></div>';
+  onRptRangeChange();
+}
+
+function onRptRangeChange() {
+  const sel = $c('rpt-range').value;
+  const fromEl = $c('rpt-from');
+  const toEl = $c('rpt-to');
+  fromEl.style.display = sel === 'custom' ? '' : 'none';
+  toEl.style.display = sel === 'custom' ? '' : 'none';
+
+  const now = new Date();
+  let from, to;
+  if (sel === 'this_month') {
+    from = new Date(now.getFullYear(), now.getMonth(), 1);
+    to = new Date(now.getFullYear(), now.getMonth()+1, 0);
+  } else if (sel === 'last_month') {
+    from = new Date(now.getFullYear(), now.getMonth()-1, 1);
+    to = new Date(now.getFullYear(), now.getMonth(), 0);
+  } else if (sel === 'this_week') {
+    const day = now.getDay();
+    from = new Date(now); from.setDate(now.getDate() - day);
+    to = new Date(from); to.setDate(from.getDate()+6);
+  } else if (sel === 'this_year') {
+    from = new Date(now.getFullYear(), 0, 1);
+    to = new Date(now.getFullYear(), 11, 31);
+  } else if (sel === 'last_year') {
+    from = new Date(now.getFullYear()-1, 0, 1);
+    to = new Date(now.getFullYear()-1, 11, 31);
+  } else if (sel === 'all') {
+    from = new Date('2020-01-01'); to = new Date('2099-12-31');
+  } else {
+    from = fromEl.value ? new Date(fromEl.value+'T00:00:00') : new Date('2020-01-01');
+    to = toEl.value ? new Date(toEl.value+'T23:59:59') : new Date('2099-12-31');
+  }
+
+  if (sel !== 'custom') {
+    fromEl.value = from.toISOString().slice(0,10);
+    toEl.value = to.toISOString().slice(0,10);
+  }
+
+  renderReportContent(from, to);
+}
+
+function renderReportContent(from, to) {
+  const container = $c('rpt-content');
+  if (!container) return;
+
+  const invoices = (S.invoices||[]).filter(inv => {
+    const d = inv.sentDate ? new Date(inv.sentDate+'T12:00:00') : new Date(inv.created);
+    return d >= from && d <= to;
+  });
+
+  const paidInvs = invoices.filter(i => i.status === 'paid');
+  const sentInvs = invoices.filter(i => i.status === 'sent' || i.status === 'partial');
+  const allPayments = invoices.flatMap(i => (i.payments||[]).filter(p => {
+    const pd = new Date(p.date+'T12:00:00');
+    return pd >= from && pd <= to;
+  }));
+
+  // Revenue = total of all payments received in range
+  const revenue = allPayments.reduce((s,p) => s + (p.amount||0), 0);
+
+  // Outstanding = total of sent/partial invoices
+  const outstanding = sentInvs.reduce((s,i) => {
+    const paid = (i.payments||[]).reduce((s2,p) => s2 + (p.amount||0), 0);
+    return s + (i.total - paid);
+  }, 0);
+
+  // Overdue
+  const today = new Date();
+  const overdueInvs = sentInvs.filter(i => i.dueDate && new Date(i.dueDate) < today);
+  const overdue = overdueInvs.reduce((s,i) => {
+    const paid = (i.payments||[]).reduce((s2,p) => s2 + (p.amount||0), 0);
+    return s + (i.total - paid);
+  }, 0);
+
+  // Total invoiced in period
+  const totalInvoiced = invoices.filter(i=>i.status!=='draft').reduce((s,i) => s + i.total, 0);
+
+  // Tax collected by state
+  const taxByState = {};
+  invoices.filter(i=>i.status!=='draft').forEach(inv => {
+    const proj = S.projects.find(p => p.id === inv.projectId);
+    const state = proj?.state || 'Unknown';
+    const rate = inv.taxRate || 0;
+    const key = state + (rate ? ' ('+rate+'%)' : '');
+    if (inv.tax > 0) {
+      if (!taxByState[key]) taxByState[key] = { state, rate, tax:0, subtotal:0 };
+      taxByState[key].tax += inv.tax;
+      taxByState[key].subtotal += inv.subtotal;
+    }
+  });
+
+  // Revenue by project
+  const revByProject = {};
+  invoices.filter(i=>i.status!=='draft').forEach(inv => {
+    const proj = S.projects.find(p => p.id === inv.projectId);
+    const name = proj?.name || 'Unlinked';
+    if (!revByProject[name]) revByProject[name] = { total:0, paid:0, outstanding:0 };
+    revByProject[name].total += inv.total;
+    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+    revByProject[name].paid += paid;
+    revByProject[name].outstanding += (inv.total - paid);
+  });
+
+  // Revenue by client
+  const revByClient = {};
+  invoices.filter(i=>i.status!=='draft').forEach(inv => {
+    const client = (S.clients||[]).find(c => c.id === inv.clientId);
+    const name = client?.name || 'No Client';
+    if (!revByClient[name]) revByClient[name] = { total:0, paid:0, outstanding:0 };
+    revByClient[name].total += inv.total;
+    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+    revByClient[name].paid += paid;
+    revByClient[name].outstanding += (inv.total - paid);
+  });
+
+  const cardStyle = 'background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)';
+  const statNum = 'font-family:var(--font-h);font-weight:800;font-size:26px;line-height:1';
+  const statLabel = 'font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-b);margin-top:4px';
+  const tblStyle = 'width:100%;font-size:12px;font-family:var(--font-b);border-collapse:collapse';
+  const thStyle = 'text-align:left;padding:8px 10px;font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);border-bottom:2px solid var(--border)';
+  const tdStyle = 'padding:8px 10px;border-bottom:1px solid var(--border)';
+
+  let html = '';
+
+  // Summary cards
+  html += `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px">
+    <div style="${cardStyle}">
+      <div style="${statNum};color:var(--pecan)">${fmt(totalInvoiced)}</div>
+      <div style="${statLabel}">Total Invoiced</div>
+    </div>
+    <div style="${cardStyle}">
+      <div style="${statNum};color:#1a6e3a">${fmt(revenue)}</div>
+      <div style="${statLabel}">Payments Received</div>
+    </div>
+    <div style="${cardStyle}">
+      <div style="${statNum};color:#c47a20">${fmt(outstanding)}</div>
+      <div style="${statLabel}">Outstanding</div>
+    </div>
+    <div style="${cardStyle}">
+      <div style="${statNum};color:${overdue>0?'#b33':'var(--text-light)'}">${fmt(overdue)}</div>
+      <div style="${statLabel}">Overdue</div>
+    </div>
+  </div>`;
+
+  // Two-column layout
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">';
+
+  // Tax by State
+  html += `<div style="${cardStyle}">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);margin-bottom:12px">Taxes Collected by State</div>`;
+  const taxEntries = Object.values(taxByState);
+  if (taxEntries.length) {
+    html += `<table style="${tblStyle}">
+      <thead><tr><th style="${thStyle}">State</th><th style="${thStyle}">Rate</th><th style="${thStyle}" class="amt">Taxable</th><th style="${thStyle}" class="amt">Tax Collected</th></tr></thead>
+      <tbody>${taxEntries.map(t => `<tr>
+        <td style="${tdStyle}">${escH(t.state)}</td>
+        <td style="${tdStyle}">${t.rate}%</td>
+        <td style="${tdStyle};text-align:right">${fmt(t.subtotal)}</td>
+        <td style="${tdStyle};text-align:right;font-weight:600;color:var(--pecan)">${fmt(t.tax)}</td>
+      </tr>`).join('')}
+      <tr><td colspan="3" style="${tdStyle};font-weight:700">Total</td><td style="${tdStyle};text-align:right;font-weight:700;color:var(--pecan)">${fmt(taxEntries.reduce((s,t)=>s+t.tax,0))}</td></tr>
+      </tbody></table>`;
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic">No tax data for this period.</div>';
+  }
+  html += '</div>';
+
+  // Revenue by Client
+  html += `<div style="${cardStyle}">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);margin-bottom:12px">Revenue by Client</div>`;
+  const clientEntries = Object.entries(revByClient).sort((a,b) => b[1].total - a[1].total);
+  if (clientEntries.length) {
+    html += `<table style="${tblStyle}">
+      <thead><tr><th style="${thStyle}">Client</th><th style="${thStyle}" class="amt">Invoiced</th><th style="${thStyle}" class="amt">Paid</th><th style="${thStyle}" class="amt">Outstanding</th></tr></thead>
+      <tbody>${clientEntries.map(([name, d]) => `<tr>
+        <td style="${tdStyle}">${escH(name)}</td>
+        <td style="${tdStyle};text-align:right">${fmt(d.total)}</td>
+        <td style="${tdStyle};text-align:right;color:#1a6e3a">${fmt(d.paid)}</td>
+        <td style="${tdStyle};text-align:right;color:${d.outstanding>0?'#c47a20':'var(--text-light)'}">${fmt(d.outstanding)}</td>
+      </tr>`).join('')}</tbody></table>`;
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic">No invoice data for this period.</div>';
+  }
+  html += '</div>';
+
+  html += '</div>';
+
+  // Revenue by Project
+  html += `<div style="${cardStyle};margin-bottom:24px">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);margin-bottom:12px">Revenue by Project</div>`;
+  const projEntries = Object.entries(revByProject).sort((a,b) => b[1].total - a[1].total);
+  if (projEntries.length) {
+    html += `<table style="${tblStyle}">
+      <thead><tr><th style="${thStyle}">Project</th><th style="${thStyle}" class="amt">Invoiced</th><th style="${thStyle}" class="amt">Paid</th><th style="${thStyle}" class="amt">Outstanding</th></tr></thead>
+      <tbody>${projEntries.map(([name, d]) => `<tr>
+        <td style="${tdStyle}">${escH(name)}</td>
+        <td style="${tdStyle};text-align:right">${fmt(d.total)}</td>
+        <td style="${tdStyle};text-align:right;color:#1a6e3a">${fmt(d.paid)}</td>
+        <td style="${tdStyle};text-align:right;color:${d.outstanding>0?'#c47a20':'var(--text-light)'}">${fmt(d.outstanding)}</td>
+      </tr>`).join('')}</tbody></table>`;
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic">No invoice data for this period.</div>';
+  }
+  html += '</div>';
+
+  // Pre-tax vs total income
+  const preTax = invoices.filter(i=>i.status!=='draft').reduce((s,i)=>s+i.subtotal+(i.freight||0)-(i.discount||0),0);
+  const totalTax = invoices.filter(i=>i.status!=='draft').reduce((s,i)=>s+i.tax,0);
+  html += `<div style="${cardStyle};margin-bottom:24px">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);margin-bottom:12px">Income Summary</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+      <div>
+        <div style="${statNum};font-size:20px;color:var(--pecan)">${fmt(preTax)}</div>
+        <div style="${statLabel}">Pre-Tax Income</div>
+      </div>
+      <div>
+        <div style="${statNum};font-size:20px;color:var(--text-mid)">${fmt(totalTax)}</div>
+        <div style="${statLabel}">Total Tax</div>
+      </div>
+      <div>
+        <div style="${statNum};font-size:20px;color:var(--mahogany)">${fmt(preTax + totalTax)}</div>
+        <div style="${statLabel}">Total w/ Tax</div>
+      </div>
+    </div>
+  </div>`;
+
+  container.innerHTML = html;
 }
 
 // ─── TIME TRACKER ─────────────────────────────────────
