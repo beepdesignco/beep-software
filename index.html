@@ -5809,56 +5809,377 @@ function printEstimate(pid, estId) {
   const est = prop?.estimates?.find(e => e.id === estId);
   if (!est) return;
   const proj = S.projects.find(p => p.id === pid);
+  const clientName = getClientName(proj?.clientId) || '';
+  const location = [proj?.street, proj?.city, proj?.zip].filter(Boolean).join(', ') || proj?.city || '';
 
-  const w = window.open('','_blank','width=900,height=700');
-  let h = `<!DOCTYPE html><html><head><title>${escH(est.name)}</title>
-  <style>
-    body{font-family:sans-serif;padding:40px;color:#333;max-width:800px;margin:0 auto}
-    h1{font-size:22px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;color:#3f151c}
-    h2{font-size:14px;color:#888;font-weight:400;margin-top:0}
-    table{width:100%;border-collapse:collapse;margin-top:20px;font-size:13px}
-    th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eee}
-    th{background:#f8f5f2;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:0.08em;color:#888}
-    .amt{text-align:right;font-weight:600}
-    .total-row td{border-top:2px solid #3f151c;font-weight:800;font-size:15px;color:#3f151c;padding-top:12px}
-    .est-line td{background:#faf7f5;font-style:italic}
-    .section{font-weight:700;background:#f0ebe6;text-transform:uppercase;font-size:11px;letter-spacing:0.06em;color:#5b2d22}
-  </style></head><body>
-  <h1>${escH(est.name)}</h1>
-  <h2>${escH(proj?.name||'')} · ${escH(getClientName(proj?.clientId)||'')} · ${escH(est.date)}</h2>
-  <table><thead><tr><th>Item</th><th>Space</th><th style="text-align:right">Amount</th></tr></thead><tbody>`;
-
+  // Build item rows with components / charges
+  let itemsHtml = '';
   est.spaces.forEach(sp => {
-    h += `<tr class="section"><td colspan="3">${escH(sp.name||'Unnamed Space')}</td></tr>`;
-    (sp.items||[]).forEach(item => {
+    const spaceItems = sp.items || [];
+    if (!spaceItems.length) return;
+    itemsHtml += `<tr class="space-row"><td colspan="4">${escH(sp.name||'Unnamed Space')}</td></tr>`;
+    spaceItems.forEach(item => {
       const client = getItemClient(item, pid);
       const qty = parseFloat(item.qty)||1;
       const total = item.type==='constructed' ? client : client * qty;
-      h += `<tr><td>${escH(item.name)}</td><td>${escH(sp.name||'')}</td><td class="amt">${fmt(total)}</td></tr>`;
+      const isAllowance = !!item.allowance;
+      const qtyDisplay = item.type==='constructed'
+        ? (qty > 1 ? qty + ' <span class="qty-note">(total)</span>' : (qty === 1 ? '1' : '—'))
+        : (qty ? qty + (item.qtyUnit ? ' '+escH(item.qtyUnit) : '') : '—');
+      const badge = isAllowance ? '<span class="allow-badge">Allowance</span>' : '';
+
+      itemsHtml += `<tr class="item-row${isAllowance?' allowance':''}">
+        <td class="item-name">
+          <div class="item-title">${escH(item.name||'—')} ${badge}</div>
+          ${item.contact && !isAllowance ? '<div class="item-meta">'+escH(item.contact)+'</div>' : ''}
+          ${item.room ? '<div class="item-meta">'+escH(item.room)+'</div>' : ''}
+          ${item.notes && !isAllowance ? '<div class="item-notes">'+escH(item.notes)+'</div>' : ''}
+        </td>
+        <td class="qty-col">${qtyDisplay}</td>
+        <td class="price-col">${client>0?fmt(client):'—'}</td>
+        <td class="amt-col">${total>0?fmt(total):'—'}</td>
+      </tr>`;
+
+      // Components (constructed items) — skip for allowances
+      if (!isAllowance && item.type === 'constructed' && item.components?.length) {
+        item.components.forEach(c => {
+          const cQty = parseFloat(c.qty)||1;
+          const cNet = parse$(c.netCost) * cQty;
+          const cMarkup = (typeof componentEffectiveMarkup === 'function' ? componentEffectiveMarkup(c, item, pid) : 25) / 100;
+          const cClient = cNet * (1 + cMarkup);
+          const cTypeLabel = (typeof COMPONENT_TYPES !== 'undefined' ? COMPONENT_TYPES.find(t => t.id === c.componentType)?.label : '') || '';
+          const cAllow = !!c.allowance;
+          itemsHtml += `<tr class="comp-row${cAllow?' allowance':''}">
+            <td class="comp-name">
+              <span class="comp-dash">—</span>
+              ${escH(c.name||'')}
+              ${cTypeLabel ? '<span class="type-tag">'+escH(cTypeLabel)+'</span>' : ''}
+              ${cAllow ? '<span class="allow-badge-sm">Allowance</span>' : ''}
+            </td>
+            <td class="qty-col comp">${cQty}${c.qtyUnit?' '+escH(c.qtyUnit):''}</td>
+            <td class="price-col comp">${cClient>0?fmt(cClient):'—'}</td>
+            <td class="amt-col comp"></td>
+          </tr>`;
+        });
+      }
+
+      // Additional charges (ready-made)
+      if (!isAllowance && item.type === 'readymade' && item.additionalCharges?.length) {
+        item.additionalCharges.forEach(ch => {
+          const fakeItem = { billCostOnly: ch.billCostOnly || item.billCostOnly, adjustMarkup: ch.adjustMarkup != null ? ch.adjustMarkup : item.adjustMarkup };
+          const chClient = typeof calcClientPrice === 'function' ? calcClientPrice(ch.amount, fakeItem, pid) : parse$(ch.amount);
+          itemsHtml += `<tr class="comp-row">
+            <td class="comp-name">
+              <span class="comp-dash">—</span>
+              ${escH(ch.name||'')}
+              ${ch.category ? '<span class="type-tag">'+escH(ch.category)+'</span>' : ''}
+            </td>
+            <td class="qty-col comp"></td>
+            <td class="price-col comp">${chClient>0?fmt(chClient):'—'}</td>
+            <td class="amt-col comp"></td>
+          </tr>`;
+        });
+      }
     });
   });
 
-  h += `<tr><td colspan="2" style="font-weight:700">Proposal Subtotal</td><td class="amt">${fmt(est.proposalTotals.subtotal)}</td></tr>`;
-  if (est.proposalTotals.freight>0) h += `<tr><td colspan="2">Freight (from proposal)</td><td class="amt">${fmt(est.proposalTotals.freight)}</td></tr>`;
-  h += `<tr><td colspan="2">Tax</td><td class="amt">${fmt(est.proposalTotals.tax)}</td></tr>`;
-  h += `<tr><td colspan="2" style="font-weight:700">Proposal Total</td><td class="amt" style="font-weight:700">${fmt(est.proposalTotals.total)}</td></tr>`;
-
-  if (est.estimationLines.length) {
-    h += `<tr class="section"><td colspan="3">Estimation Lines</td></tr>`;
-    est.estimationLines.forEach(l => {
-      h += `<tr class="est-line"><td colspan="2">${escH(l.label)}${l.taxable?' <span style="font-size:10px;color:#999">(taxable)</span>':''}</td><td class="amt">${fmt(l.amount)}</td></tr>`;
-    });
-    if (est.estimationTax > 0) {
-      h += `<tr class="est-line"><td colspan="2">Estimation Tax</td><td class="amt">${fmt(est.estimationTax)}</td></tr>`;
+  const w = window.open('','_blank','width=900,height=1000');
+  let h = `<!DOCTYPE html><html><head><title>${escH(est.name)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --pecan: #5B2D22;
+      --mahogany: #3F151C;
+      --russet: #963D27;
+      --cloud: #F3E8D6;
+      --text-dark: #2A1008;
+      --text-mid: #7A4535;
+      --text-light: rgba(91,45,34,0.45);
+      --border: rgba(91,45,34,0.14);
+      --font-h: 'Barlow Condensed', sans-serif;
+      --font-b: 'Courier Prime', monospace;
     }
-  }
+    * { box-sizing: border-box; }
+    body {
+      font-family: var(--font-b);
+      padding: 42px 48px;
+      color: var(--text-dark);
+      max-width: 820px;
+      margin: 0 auto;
+      background: white;
+      line-height: 1.45;
+    }
+    .doc-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 26px;
+      padding-bottom: 18px;
+      border-bottom: 2px solid var(--pecan);
+    }
+    .doc-title {
+      font-family: var(--font-h);
+      font-weight: 900;
+      font-size: 30px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--mahogany);
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .doc-subtitle {
+      font-family: var(--font-h);
+      font-size: 14px;
+      color: var(--text-mid);
+      letter-spacing: 0.03em;
+    }
+    .doc-meta {
+      text-align: right;
+      font-size: 11px;
+      color: var(--text-mid);
+      line-height: 1.7;
+    }
+    .doc-meta .label {
+      font-family: var(--font-h);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-light);
+      font-size: 9px;
+    }
+    .doc-meta .value {
+      font-family: var(--font-h);
+      font-weight: 700;
+      color: var(--mahogany);
+      font-size: 13px;
+    }
+    .badge {
+      display: inline-block;
+      font-family: var(--font-h);
+      font-weight: 700;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 12px;
+      background: rgba(150,61,39,0.1);
+      color: var(--russet);
+      border: 1px solid rgba(150,61,39,0.25);
+      margin-top: 4px;
+    }
+    table.items {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+    }
+    table.items thead th {
+      font-family: var(--font-h);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 10px;
+      color: var(--text-light);
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    table.items thead th.r { text-align: right; }
+    .space-row td {
+      font-family: var(--font-h);
+      font-weight: 800;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--pecan);
+      background: rgba(243,232,214,0.55);
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+    }
+    .item-row td {
+      padding: 10px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      vertical-align: top;
+    }
+    .item-row.allowance td { background: rgba(150,61,39,0.04); }
+    .item-title {
+      font-family: var(--font-h);
+      font-weight: 700;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--mahogany);
+    }
+    .item-meta { font-size: 11px; color: var(--text-mid); margin-top: 2px; }
+    .item-notes {
+      font-size: 11px;
+      color: var(--text-mid);
+      font-style: italic;
+      margin-top: 4px;
+      padding-left: 2px;
+    }
+    .allow-badge {
+      display: inline-block;
+      font-family: var(--font-h);
+      font-weight: 700;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(150,61,39,0.12);
+      color: var(--russet);
+      margin-left: 6px;
+    }
+    .allow-badge-sm {
+      font-size: 8px;
+      padding: 1px 6px;
+      margin-left: 4px;
+      background: rgba(150,61,39,0.1);
+      color: var(--russet);
+      border-radius: 8px;
+      font-family: var(--font-h);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .type-tag {
+      font-size: 8.5px;
+      font-family: var(--font-h);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-light);
+      margin-left: 6px;
+      padding: 1px 6px;
+      background: rgba(91,45,34,0.05);
+      border-radius: 8px;
+    }
+    .comp-row td {
+      padding: 4px 10px;
+      font-size: 11px;
+      border-bottom: 1px solid rgba(91,45,34,0.06);
+      background: rgba(243,232,214,0.25);
+    }
+    .comp-row.allowance td { background: rgba(150,61,39,0.03); }
+    .comp-name { padding-left: 24px; color: var(--text-dark); }
+    .comp-dash { color: var(--text-light); margin-right: 6px; }
+    .qty-col, .price-col, .amt-col { text-align: right; white-space: nowrap; }
+    .qty-col.comp, .price-col.comp { color: var(--text-mid); font-size: 10.5px; }
+    .qty-note { font-size: 10px; color: var(--text-light); }
+    .amt-col { font-family: var(--font-h); font-weight: 700; color: var(--pecan); }
+    table.totals {
+      width: 340px;
+      margin-left: auto;
+      font-size: 12px;
+      border-collapse: collapse;
+    }
+    table.totals td {
+      padding: 6px 10px;
+      color: var(--text-mid);
+    }
+    table.totals td.amt {
+      text-align: right;
+      font-family: var(--font-h);
+      font-weight: 700;
+      color: var(--text-dark);
+    }
+    .subtotal-row td {
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+      font-weight: 700;
+    }
+    .proposal-total-row td {
+      border-top: 1px solid var(--border);
+      font-family: var(--font-h);
+      font-weight: 800;
+      color: var(--mahogany);
+      font-size: 13px;
+      padding-top: 10px;
+    }
+    .est-section-hd td {
+      font-family: var(--font-h);
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 11px;
+      color: var(--pecan);
+      padding-top: 16px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .est-line td {
+      font-style: italic;
+      color: var(--text-mid);
+    }
+    .est-taxable {
+      font-size: 9px;
+      font-style: normal;
+      color: var(--text-light);
+      margin-left: 6px;
+      font-family: var(--font-h);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .grand-total-row td {
+      border-top: 3px double var(--pecan);
+      padding-top: 14px;
+      font-family: var(--font-h);
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 16px;
+      color: var(--mahogany);
+    }
+    .grand-total-row td.amt {
+      color: var(--pecan);
+      font-size: 20px;
+    }
+    @media print {
+      body { padding: 30px 40px; }
+    }
+  </style></head><body>
+    <div class="doc-header">
+      <div>
+        <div class="doc-title">${escH(est.name)}</div>
+        <div class="doc-subtitle">${escH(proj?.name||'')}${clientName?' · '+escH(clientName):''}${location?' · '+escH(location):''}</div>
+        <div class="badge">Estimate</div>
+      </div>
+      <div class="doc-meta">
+        <div><span class="label">Date</span><br><span class="value">${escH(est.date||'')}</span></div>
+      </div>
+    </div>
 
-  h += `<tr class="total-row"><td colspan="2">Estimate Total</td><td class="amt">${fmt(est.estimateTotal)}</td></tr>`;
-  h += `</tbody></table></body></html>`;
+    <table class="items">
+      <thead>
+        <tr>
+          <th style="width:54%">Item</th>
+          <th class="r" style="width:12%">Qty</th>
+          <th class="r" style="width:14%">Unit</th>
+          <th class="r" style="width:20%">Total</th>
+        </tr>
+      </thead>
+      <tbody>${itemsHtml}</tbody>
+    </table>
+
+    <table class="totals">
+      <tr><td>Proposal Subtotal</td><td class="amt">${fmt(est.proposalTotals.subtotal)}</td></tr>
+      ${est.proposalTotals.freight>0 ? '<tr><td>Freight</td><td class="amt">'+fmt(est.proposalTotals.freight)+'</td></tr>' : ''}
+      <tr><td>Tax${proj?.taxRate?' ('+proj.taxRate+'%)':''}</td><td class="amt">${fmt(est.proposalTotals.tax)}</td></tr>
+      <tr class="proposal-total-row"><td>Proposal Total</td><td class="amt">${fmt(est.proposalTotals.total)}</td></tr>
+      ${est.estimationLines.length ? '<tr class="est-section-hd"><td colspan="2">Estimation Lines</td></tr>' : ''}
+      ${est.estimationLines.map(l => '<tr class="est-line"><td>'+escH(l.label)+(l.taxable?'<span class="est-taxable">Taxable</span>':'')+'</td><td class="amt">'+fmt(l.amount)+'</td></tr>').join('')}
+      ${est.estimationTax > 0 ? '<tr class="est-line"><td>Estimation Tax</td><td class="amt">'+fmt(est.estimationTax)+'</td></tr>' : ''}
+      <tr class="grand-total-row"><td>Estimate Total</td><td class="amt">${fmt(est.estimateTotal)}</td></tr>
+    </table>
+  </body></html>`;
 
   w.document.write(h);
   w.document.close();
-  setTimeout(() => w.print(), 300);
+  setTimeout(() => w.print(), 500);
 }
 
 function renderEstimatesSection(pid) {
