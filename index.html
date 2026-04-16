@@ -7777,9 +7777,11 @@ function toggleWallpaper(idx, checked) {
   doc.items[idx].wallpaper = checked;
   if (checked) {
     doc.items[idx].color = 'WALLPAPER';
+    doc.items[idx].finish = 'WALLPAPER';
     if (!doc.items[idx].description) doc.items[idx].description = 'USE SHEILDZ WALLPAPER PRIMER UNLESS OTHERWISE DIRECTED';
   } else {
     if (doc.items[idx].color === 'WALLPAPER') doc.items[idx].color = '';
+    if (doc.items[idx].finish === 'WALLPAPER') doc.items[idx].finish = '';
     if (doc.items[idx].description === 'USE SHEILDZ WALLPAPER PRIMER UNLESS OTHERWISE DIRECTED') doc.items[idx].description = '';
   }
   save();
