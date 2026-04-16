@@ -7724,7 +7724,8 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
       // Check if this is a parent row (indent 0) with sub-rows (next item has indent > 0)
       const nextItem = roomItems[ri + 1];
       const isParent = !item.indent && nextItem && nextItem.indent;
-      const canWallpaper = !item.indent && !isParent;
+      const noWpNames = ['baseboards','baseboard','crown molding','crown'];
+      const canWallpaper = !item.indent && !isParent && !noWpNames.includes((item.name||'').toLowerCase());
       html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06);${rowBg}">
         <td style="padding:4px 4px;${indent}">
           <div style="display:flex;align-items:center;gap:4px">
