@@ -7918,7 +7918,10 @@ function printCurrentDoc() {
         <div class="doc-title">${escH(doc.title)}</div>
         <div class="doc-subtitle">${escH(proj?.name||'')}${client?' · '+escH(client.name):''}</div>
       </div>
-      <div class="doc-date">${escH(doc.date||'')}</div>
+      <div class="doc-date">
+        <div>Version ${doc.version||'A'}.${doc.revision||1}</div>
+        <div>${doc.updated ? new Date(doc.updated).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : escH(doc.date||'')}</div>
+      </div>
     </div>
     ${itemsHtml}
   </body></html>`);
