@@ -7538,6 +7538,12 @@ function createNewDoc() {
   const title = $c('nd-title').value.trim() || 'Untitled';
   if (!pid) { toast('Select a project.'); return; }
 
+  if (!S.documents) S.documents = [];
+
+  // Determine version letter: count existing docs for same project + template
+  const existing = S.documents.filter(d => d.projectId === pid && d.templateId === templateId);
+  const versionLetter = String.fromCharCode(65 + existing.length); // A, B, C...
+
   const doc = {
     id: uid(),
     projectId: pid,
@@ -7545,12 +7551,13 @@ function createNewDoc() {
     title,
     created: new Date().toISOString(),
     updated: new Date().toISOString(),
-    // Schedule items: array of {id, name, itemCode, description, room, imageData, imageType, caption, proposalItemId, proposalCompId}
+    version: versionLetter,
+    revision: 1,
+    revisionHistory: [],
     items: [],
     rooms: [],
   };
 
-  if (!S.documents) S.documents = [];
   S.documents.push(doc);
   save();
   closeModal('modal-new-doc');
@@ -7682,6 +7689,25 @@ function renderDocEditor() {
         <div><strong>Items:</strong> ${doc.items.length}</div>
         <div><strong>Rooms:</strong> ${rooms.join(', ')}</div>
       </div>
+      <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;font-family:var(--font-b);color:var(--text-mid);line-height:1.8">
+        <div><strong>Version:</strong> <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany)">${doc.version||'A'}.${doc.revision||1}</span></div>
+        <div><strong>Created:</strong> ${new Date(doc.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
+        <div><strong>Last Saved:</strong> ${doc.updated ? new Date(doc.updated).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+new Date(doc.updated).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—'}</div>
+      </div>
+      ${(doc.revisionHistory||[]).length ? `
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+        <details>
+          <summary style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);cursor:pointer;user-select:none;padding:2px 0">Version History</summary>
+          <div style="padding-top:6px;font-size:10px;font-family:var(--font-b);color:var(--text-mid);line-height:1.8">
+            ${(doc.revisionHistory||[]).slice().reverse().map(r =>
+              `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(91,45,34,0.06)">
+                <span>${doc.version||'A'}.${r.revision} — ${r.itemCount} item${r.itemCount!==1?'s':''}</span>
+                <span style="color:var(--text-light)">${new Date(r.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(r.savedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</span>
+              </div>`
+            ).join('')}
+          </div>
+        </details>
+      </div>` : ''}
     </div>
   </div>`;
 
@@ -7813,9 +7839,22 @@ function uploadDocItemImage(idx, input) {
 function saveCurrentDoc() {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
+
+  // Snapshot current state as prior revision
+  if (!doc.revisionHistory) doc.revisionHistory = [];
+  doc.revisionHistory.push({
+    revision: doc.revision,
+    savedAt: doc.updated || doc.created,
+    itemCount: doc.items.length,
+    snapshot: JSON.parse(JSON.stringify(doc.items)),
+  });
+
+  // Bump revision
+  doc.revision = (doc.revision || 1) + 1;
   doc.updated = new Date().toISOString();
   save();
-  toast('Document saved.');
+  renderDocEditor();
+  toast('Saved as Version ' + (doc.version||'A') + '.' + doc.revision);
 }
 
 function deleteDoc(docId) {
@@ -7934,6 +7973,7 @@ function renderDocuments() {
       <div>
         <div style="display:flex;align-items:center;gap:8px">
           <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(doc.title)}</span>
+          <span style="font-size:10px;font-family:var(--font-h);font-weight:700;color:var(--pecan);padding:1px 8px;background:rgba(91,45,34,0.06);border-radius:8px">v${doc.version||'A'}.${doc.revision||1}</span>
           <span style="font-size:10px;font-family:var(--font-b);color:var(--text-light)">${escH(tmplLabel)}</span>
         </div>
         <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
