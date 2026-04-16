@@ -5828,12 +5828,12 @@ function printEstimate(pid, estId) {
         : (qty ? qty + (item.qtyUnit ? ' '+escH(item.qtyUnit) : '') : '—');
       const badge = isAllowance ? '<span class="allow-badge">Allowance</span>' : '';
 
+      const typeLabels = { constructed:'Constructed', readymade:'Ready Made', openline:'Open Line' };
+      const itemTypeLabel = typeLabels[item.type] || '';
       itemsHtml += `<tr class="item-row${isAllowance?' allowance':''}">
         <td class="item-name">
           <div class="item-title">${escH(item.name||'—')} ${badge}</div>
-          ${item.contact && !isAllowance ? '<div class="item-meta">'+escH(item.contact)+'</div>' : ''}
-          ${item.room ? '<div class="item-meta">'+escH(item.room)+'</div>' : ''}
-          ${item.notes && !isAllowance ? '<div class="item-notes">'+escH(item.notes)+'</div>' : ''}
+          ${itemTypeLabel ? '<div class="item-meta">'+itemTypeLabel+'</div>' : ''}
         </td>
         <td class="qty-col">${qtyDisplay}</td>
         <td class="price-col">${client>0?fmt(client):'—'}</td>
@@ -6158,7 +6158,7 @@ function printEstimate(pid, estId) {
         <tr>
           <th style="width:54%">Item</th>
           <th class="r" style="width:12%">Qty</th>
-          <th class="r" style="width:14%">Unit</th>
+          <th class="r" style="width:14%">Unit Price</th>
           <th class="r" style="width:20%">Total</th>
         </tr>
       </thead>
