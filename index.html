@@ -7711,8 +7711,10 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
         <tbody>`;
     roomItems.forEach(item => {
       const gi = doc.items.indexOf(item);
-      html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06)">
-        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}"></td>
+      const indent = item.indent ? 'padding-left:'+(16 + item.indent * 16)+'px' : '';
+      const rowBg = item.indent ? 'background:rgba(91,45,34,0.015);' : '';
+      html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06);${rowBg}">
+        <td style="padding:4px 4px;${indent}"><input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}${item.indent?';font-size:10px':''}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim())" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim())" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim())" style="${iStyle}"></td>
@@ -7742,6 +7744,46 @@ function addPaintItem(room) {
   doc.updated = new Date().toISOString();
   save();
   renderDocEditor();
+}
+
+function paintRow(room, name, indent) {
+  return { id:uid(), name, color:'', vendor:'', finish:'', description:'', room, indent: indent||0, imageData:null, proposalItemId:null };
+}
+
+function addPaintRoomRows(doc, room, winCount, doorCount) {
+  // Standard rows
+  doc.items.push(paintRow(room, 'Ceiling', 0));
+  doc.items.push(paintRow(room, 'Walls', 0));
+  doc.items.push(paintRow(room, 'Baseboards', 0));
+  doc.items.push(paintRow(room, 'Crown Molding', 0));
+
+  // Windows
+  for (let w = 1; w <= winCount; w++) {
+    const label = winCount > 1 ? 'Window ' + w : 'Window';
+    doc.items.push(paintRow(room, label, 0));
+    doc.items.push(paintRow(room, label + ' — Casing', 1));
+    doc.items.push(paintRow(room, label + ' — Apron', 1));
+    doc.items.push(paintRow(room, label + ' — Stool', 1));
+    doc.items.push(paintRow(room, label + ' — Stile', 1));
+    doc.items.push(paintRow(room, label + ' — Muntin(s)', 1));
+  }
+  if (winCount === 0) {
+    // Still add a generic window section users can fill in or delete
+  }
+
+  // Doors
+  for (let d = 1; d <= doorCount; d++) {
+    const label = doorCount > 1 ? 'Door ' + d : 'Door';
+    doc.items.push(paintRow(room, label, 0));
+    doc.items.push(paintRow(room, label + ' — Casing (side in view from this location)', 1));
+    doc.items.push(paintRow(room, label + ' — Casing (side not in view from this location)', 1));
+    doc.items.push(paintRow(room, label + ' — Jamb (side in view from this location)', 1));
+    doc.items.push(paintRow(room, label + ' — Jamb (side not in view from this location)', 1));
+    doc.items.push(paintRow(room, label + ' — Panel (side in view from this location)', 1));
+    doc.items.push(paintRow(room, label + ' — Panel (side not in view from this location)', 1));
+    doc.items.push(paintRow(room, label + ' — Knob Edge', 1));
+    doc.items.push(paintRow(room, label + ' — Hinge Edge', 1));
+  }
 }
 
 // ── SHARED: Document Info Panel ──
@@ -7834,12 +7876,19 @@ function addDocRoom() {
   if (!name) return;
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
-  // Add a placeholder item in the new room
-  doc.items.push({
-    id: uid(), name: '', itemCode: '', description: '', room: name,
-    imageData: null, imageType: 'material', caption: '',
-    proposalItemId: null, proposalCompId: null,
-  });
+
+  if (doc.templateId === 'paint_paper_schedule') {
+    // Prompt for window and door counts
+    const winCount = parseInt(prompt('How many windows in ' + name + '? (Enter 0 or leave blank to skip)', '0')) || 0;
+    const doorCount = parseInt(prompt('How many doors in ' + name + '? (Enter 0 or leave blank to skip)', '0')) || 0;
+    addPaintRoomRows(doc, name, winCount, doorCount);
+  } else {
+    doc.items.push({
+      id: uid(), name: '', itemCode: '', description: '', room: name,
+      imageData: null, imageType: 'material', caption: '',
+      proposalItemId: null, proposalCompId: null,
+    });
+  }
   doc.updated = new Date().toISOString();
   save();
   renderDocEditor();
@@ -7953,7 +8002,7 @@ function printCurrentDoc() {
         <table class="paint-table">
           <thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Application Note(s)</th></tr></thead>
           <tbody>${items.map(item => `<tr>
-            <td class="loc-cell">${escH(item.name||'')}</td>
+            <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}</td>
             <td>${escH(item.color||'')}</td>
             <td>${escH(item.vendor||'')}</td>
             <td>${escH(item.finish||'')}</td>
