@@ -7695,6 +7695,14 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
   let html = '';
   const iStyle = 'font-size:11px;padding:5px 7px';
 
+  // Build datalists from existing values
+  const usedColors = [...new Set(doc.items.map(i=>i.color).filter(Boolean))];
+  const usedVendors = [...new Set(doc.items.map(i=>i.vendor).filter(Boolean))];
+  const usedFinishes = [...new Set(doc.items.map(i=>i.finish).filter(Boolean))];
+  html += `<datalist id="dl-colors">${usedColors.map(v=>'<option value="'+escH(v)+'">').join('')}</datalist>`;
+  html += `<datalist id="dl-vendors">${usedVendors.map(v=>'<option value="'+escH(v)+'">').join('')}</datalist>`;
+  html += `<datalist id="dl-finishes">${usedFinishes.map(v=>'<option value="'+escH(v)+'">').join('')}</datalist>`;
+
   rooms.forEach(room => {
     const roomItems = doc.items.filter(i => (i.room || 'Unassigned') === room);
     html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
@@ -7724,9 +7732,9 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
             ${(item.name||'').includes('not in view from this location)') ? '<span title="Side not in view" style="font-size:13px;flex-shrink:0;cursor:default;opacity:0.4;text-decoration:line-through">👁</span>' : ''}
           </div>
         </td>
-        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim())" style="${iStyle}"></td>
-        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim())" style="${iStyle}"></td>
-        <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim())" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-colors" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-vendors" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-finishes" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
         <td style="padding:4px 4px">
           ${isParent ? `<label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:9px;color:var(--russet);cursor:pointer;white-space:nowrap;padding:4px 0"><input type="checkbox" onchange="applyToSubRows(${gi})" style="accent-color:var(--russet);width:11px;height:11px"> Apply to all</label>` : `<input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Application notes…" onchange="updateDocItem(${gi},'description',this.value.trim())" style="${iStyle}">`}
         </td>
