@@ -7717,7 +7717,13 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
       const nextItem = roomItems[ri + 1];
       const isParent = !item.indent && nextItem && nextItem.indent;
       html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06);${rowBg}">
-        <td style="padding:4px 4px;${indent}"><input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}${item.indent?';font-size:10px':''}"></td>
+        <td style="padding:4px 4px;${indent}">
+          <div style="display:flex;align-items:center;gap:4px">
+            <input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}${item.indent?';font-size:10px':''};flex:1">
+            ${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? '<span title="Side in view" style="font-size:13px;flex-shrink:0;cursor:default">👁</span>' : ''}
+            ${(item.name||'').includes('not in view from this location)') ? '<span title="Side not in view" style="font-size:13px;flex-shrink:0;cursor:default;opacity:0.4;text-decoration:line-through">👁</span>' : ''}
+          </div>
+        </td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim())" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim())" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim())" style="${iStyle}"></td>
@@ -8025,7 +8031,7 @@ function printCurrentDoc() {
         <table class="paint-table">
           <thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Application Note(s)</th></tr></thead>
           <tbody>${items.map(item => `<tr>
-            <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}</td>
+            <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? ' <span style="font-size:11px">👁</span>' : ''}${(item.name||'').includes('not in view from this location)') ? ' <span style="font-size:11px;opacity:0.35;text-decoration:line-through">👁</span>' : ''}</td>
             <td>${escH(item.color||'')}</td>
             <td>${escH(item.vendor||'')}</td>
             <td>${escH(item.finish||'')}</td>
