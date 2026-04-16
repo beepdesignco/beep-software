@@ -1400,7 +1400,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab active" data-invtab="list" onclick="setInvTab('list')" style="margin-bottom:-1px">Invoices</button>
         <button class="view-tab" data-invtab="reports" onclick="setInvTab('reports')" style="margin-bottom:-1px">Reports</button>
       </div>
-      <div id="invoices-body" style="padding:22px 30px 40px"></div>
+      <div class="contacts-body" id="invoices-body"></div>
     </div>
 
     <!-- ─────────── DOCUMENTS VIEW ─────────── -->
@@ -1420,7 +1420,7 @@ tr:hover .row-btns { opacity:1; }
           <button class="btn btn-primary" onclick="openNewDocModal()">+ New Document</button>
         </div>
       </div>
-      <div id="documents-list-body" style="padding:0 30px 40px"></div>
+      <div class="contacts-body" id="documents-list-body"></div>
     </div>
 
     <!-- ─────────── DOCUMENT EDITOR VIEW ─────────── -->
@@ -1436,7 +1436,7 @@ tr:hover .row-btns { opacity:1; }
           <button class="btn btn-primary btn-sm" onclick="saveCurrentDoc()">Save</button>
         </div>
       </div>
-      <div id="doce-body" style="padding:22px 30px 40px"></div>
+      <div class="contacts-body" id="doce-body"></div>
     </div>
 
     <!-- ─────────── INVOICE BUILDER VIEW ─────────── -->
@@ -1452,7 +1452,7 @@ tr:hover .row-btns { opacity:1; }
           <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>
         </div>
       </div>
-      <div id="invb-body" style="padding:22px 30px 40px"><!-- rendered by JS --></div>
+      <div class="contacts-body" id="invb-body"><!-- rendered by JS --></div>
     </div>
 
   </main>
@@ -6408,6 +6408,7 @@ function populateRoomSelect(pid) {
 }
 
 function addModalComponent(comp) {
+  readModalComponentsFromDOM();
   _modalComponents.push(comp || {
     id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1, qtyUnit: '',
     allowance: false, billCostOnly: false, adjustMarkup: null, note: ''
@@ -7832,7 +7833,7 @@ function printCurrentDoc() {
       <div class="room-title">${escH(room)}</div>
       <div class="swatch-grid">
         ${items.map(item => `<div class="swatch-card">
-          ${item.imageData ? `<div class="swatch-img" style="background-image:url(${item.imageData})"></div>` : '<div class="swatch-img empty"></div>'}
+          ${item.imageData ? `<div class="swatch-img"><img src="${item.imageData}" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>` : '<div class="swatch-img empty"></div>'}
           <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
           ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
           ${item.caption ? '<div class="swatch-caption">'+escH(item.caption)+'</div>' : ''}
@@ -7875,7 +7876,15 @@ function printCurrentDoc() {
     ${itemsHtml}
   </body></html>`);
   w.document.close();
-  setTimeout(() => w.print(), 500);
+  // Wait for all images to load before printing
+  const imgs = w.document.querySelectorAll('img');
+  if (imgs.length) {
+    let loaded = 0;
+    const tryPrint = () => { loaded++; if (loaded >= imgs.length) setTimeout(() => w.print(), 200); };
+    imgs.forEach(img => { if (img.complete) tryPrint(); else { img.onload = tryPrint; img.onerror = tryPrint; } });
+  } else {
+    setTimeout(() => w.print(), 300);
+  }
 }
 
 function renderDocuments() {
