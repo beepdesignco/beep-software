@@ -1173,10 +1173,9 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◎</span>
         <span class="nav-label">Invoices</span>
       </div>
-      <div class="nav-item" style="opacity:0.38;cursor:default">
+      <div class="nav-item" onclick="showView('documents')" data-view="documents">
         <span class="nav-icon">◫</span>
         <span class="nav-label">Documents</span>
-        <span class="nav-soon">soon</span>
       </div>
       <div class="nav-item" style="opacity:0.38;cursor:default">
         <span class="nav-icon">⊞</span>
@@ -1402,6 +1401,42 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-invtab="reports" onclick="setInvTab('reports')" style="margin-bottom:-1px">Reports</button>
       </div>
       <div id="invoices-body" style="padding:22px 30px 40px"></div>
+    </div>
+
+    <!-- ─────────── DOCUMENTS VIEW ─────────── -->
+    <div class="view" id="view-documents">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Documents</div>
+          <div class="page-sub">Create schedules, worksheets, and project documents</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="fi" id="doc-filter-project" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px;width:200px">
+            <option value="">All Projects</option>
+          </select>
+          <select class="fi" id="doc-filter-template" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px">
+            <option value="">All Types</option>
+          </select>
+          <button class="btn btn-primary" onclick="openNewDocModal()">+ New Document</button>
+        </div>
+      </div>
+      <div id="documents-list-body" style="padding:0 30px 40px"></div>
+    </div>
+
+    <!-- ─────────── DOCUMENT EDITOR VIEW ─────────── -->
+    <div class="view" id="view-doc-editor">
+      <div class="page-header" style="border-bottom:none;padding-bottom:0">
+        <div>
+          <button class="btn btn-ghost btn-sm" onclick="showView('documents')" style="margin-bottom:6px;padding-left:0">← Back to Documents</button>
+          <div class="page-title" id="doce-title">Document</div>
+          <div class="page-sub" id="doce-subtitle"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="printCurrentDoc()">Print / PDF</button>
+          <button class="btn btn-primary btn-sm" onclick="saveCurrentDoc()">Save</button>
+        </div>
+      </div>
+      <div id="doce-body" style="padding:22px 30px 40px"></div>
     </div>
 
     <!-- ─────────── INVOICE BUILDER VIEW ─────────── -->
@@ -1675,9 +1710,15 @@ tr:hover .row-btns { opacity:1; }
     </div>
 
     <!-- COMMON FIELDS -->
-    <div class="fg">
-      <label class="fl">Item Name</label>
-      <input type="text" class="fi" id="ai-name" placeholder="e.g. Custom Drapery — Master Bedroom">
+    <div class="frow">
+      <div class="fg" style="flex:3">
+        <label class="fl">Item Name</label>
+        <input type="text" class="fi" id="ai-name" placeholder="e.g. Custom Drapery — Master Bedroom">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Item Code</label>
+        <input type="text" class="fi" id="ai-itemcode" placeholder="e.g. LV3">
+      </div>
     </div>
     <div class="frow">
       <div class="fg" id="ai-contact-wrap">
@@ -2182,6 +2223,30 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ NEW DOCUMENT MODAL ═════════════════ -->
+<div class="overlay" id="modal-new-doc">
+  <div class="modal" style="width:440px">
+    <button class="modal-x" onclick="closeModal('modal-new-doc')">✕</button>
+    <div class="modal-title">New Document</div>
+    <div class="fg">
+      <label class="fl">Project</label>
+      <select class="fi fsel" id="nd-project"><!-- populated by JS --></select>
+    </div>
+    <div class="fg">
+      <label class="fl">Template</label>
+      <select class="fi fsel" id="nd-template"><!-- populated by JS --></select>
+    </div>
+    <div class="fg">
+      <label class="fl">Document Title</label>
+      <input type="text" class="fi" id="nd-title" placeholder="e.g. Living Room Fabrics">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-new-doc')">Cancel</button>
+      <button class="btn btn-primary" onclick="createNewDoc()">Create</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ INVOICE SETUP MODAL (Step 1) ═════════════════ -->
 <div class="overlay" id="modal-invoice">
   <div class="modal" style="width:480px">
@@ -2373,6 +2438,7 @@ let S = {
   contacts: [],
   timeEntries: [],
   invoices: [],
+  documents: [],
   activeTimer: null,   // { projectId, person, startMs }
   categories: [],
   currentView: 'projects',
@@ -2616,6 +2682,8 @@ function showView(v) {
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'time') renderTime();
+  if (v === 'documents') renderDocuments();
+  if (v === 'doc-editor') { /* rendered by openDocEditor */ }
   if (v === 'invoices') { if (_invTab === 'reports') renderInvReports(); else renderInvoices(); }
   if (v === 'invoice-builder') { /* rendered by openInvoiceBuilder */ }
   save();
@@ -6503,7 +6571,7 @@ function openAddItemModal(pid, spId) {
   const prop = S.proposals[pid];
   const sp = prop?.spaces.find(s => s.id === spId);
   if (sp && sp.name) $c('ai-room').value = sp.name;
-  ['ai-name','ai-contact','ai-net','ai-notes'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  ['ai-name','ai-contact','ai-net','ai-notes','ai-itemcode'].forEach(id => { if($c(id)) $c(id).value = ''; });
   $c('ai-qty').value = '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
@@ -6535,6 +6603,7 @@ function openEditItemModal(pid, spId, itemId) {
   populateRoomSelect(pid);
   $c('ai-room').value = item.room || '';
   $c('ai-name').value = item.name || '';
+  $c('ai-itemcode').value = item.itemCode || '';
   $c('ai-contact').value = item.contact || '';
   $c('ai-net').value = item.netPrice || '';
   $c('ai-qty').value = item.qty || '1';
@@ -6568,6 +6637,7 @@ function saveItem() {
   const base = {
     type,
     name,
+    itemCode: $c('ai-itemcode').value.trim(),
     room: $c('ai-room').value,
     status: 'proposed',
     notes: $c('ai-notes').value.trim(),
@@ -7431,6 +7501,434 @@ function initTimer() {
   else _renderTimerWidget();
 }
  
+// ─── DOCUMENTS ────────────────────────────────────────
+
+const DOC_TEMPLATES = [
+  { id:'material_schedule', label:'Material / Scheme Schedule' },
+  { id:'furniture_schedule', label:'Furniture Schedule' },
+  { id:'lighting_schedule', label:'Lighting Schedule' },
+  { id:'paint_paper_schedule', label:'Paint / Paper Schedule' },
+  { id:'tile_schedule', label:'Tile Schedule' },
+  { id:'hardware_worksheet', label:'Hardware Worksheet' },
+  { id:'purchase_order', label:'Purchase Order / Work Order' },
+];
+
+let _currentDocId = null;
+
+function openNewDocModal() {
+  $c('nd-project').innerHTML = '<option value="">— Select project —</option>' +
+    S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  $c('nd-template').innerHTML = DOC_TEMPLATES.map(t => `<option value="${t.id}">${escH(t.label)}</option>`).join('');
+  $c('nd-title').value = '';
+  $c('modal-new-doc').classList.add('open');
+}
+
+function createNewDoc() {
+  const pid = $c('nd-project').value;
+  const templateId = $c('nd-template').value;
+  const title = $c('nd-title').value.trim() || DOC_TEMPLATES.find(t=>t.id===templateId)?.label || 'Untitled';
+  if (!pid) { toast('Select a project.'); return; }
+
+  const doc = {
+    id: uid(),
+    projectId: pid,
+    templateId,
+    title,
+    created: new Date().toISOString(),
+    updated: new Date().toISOString(),
+    // Schedule items: array of {id, name, itemCode, description, room, imageData, imageType, caption, proposalItemId, proposalCompId}
+    items: [],
+    rooms: [],
+  };
+
+  if (!S.documents) S.documents = [];
+  S.documents.push(doc);
+  save();
+  closeModal('modal-new-doc');
+  openDocEditor(doc.id);
+}
+
+function openDocEditor(docId) {
+  _currentDocId = docId;
+  showView('doc-editor');
+  renderDocEditor();
+}
+
+function renderDocEditor() {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const client = (S.clients||[]).find(c => c.id === proj?.clientId);
+  const templateLabel = DOC_TEMPLATES.find(t => t.id === doc.templateId)?.label || doc.templateId;
+
+  $c('doce-title').textContent = doc.title;
+  $c('doce-subtitle').textContent = [templateLabel, proj?.name, client?.name].filter(Boolean).join(' · ');
+
+  const prop = S.proposals[doc.projectId];
+
+  let html = '<div style="display:grid;grid-template-columns:1fr 300px;gap:24px;align-items:start">';
+
+  // ── Left: document content ──
+  html += '<div>';
+
+  // Document title editable
+  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+    <div class="frow">
+      <div class="fg" style="flex:2">
+        <label class="fl">Document Title</label>
+        <input type="text" class="fi" id="doce-doc-title" value="${escH(doc.title)}" onchange="updateDocField('title',this.value.trim())">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Date</label>
+        <input type="date" class="fi" id="doce-date" value="${escH(doc.date||new Date().toISOString().slice(0,10))}" onchange="updateDocField('date',this.value)">
+      </div>
+    </div>
+  </div>`;
+
+  // Proposal items picker
+  if (prop?.spaces?.length) {
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <details>
+        <summary style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);cursor:pointer;user-select:none;padding:2px 0">Add from Proposal</summary>
+        <div style="padding-top:10px;max-height:250px;overflow-y:auto">`;
+    prop.spaces.forEach(sp => {
+      (sp.items||[]).forEach(item => {
+        const already = doc.items.some(d => d.proposalItemId === item.id && !d.proposalCompId);
+        html += `<label style="display:flex;align-items:center;gap:8px;padding:4px;cursor:pointer;border-radius:var(--rs);opacity:${already?'0.4':'1'}" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background=''">
+          <input type="checkbox" ${already?'checked disabled':''} onchange="addProposalItemToDoc('${item.id}','${sp.id}')" style="accent-color:var(--russet);width:13px;height:13px">
+          <span style="font-family:var(--font-b);font-size:12px;flex:1">${escH(item.name||'—')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</span>
+          <span style="font-size:10px;color:var(--text-light)">${escH(sp.name||'')}</span>
+        </label>`;
+        // Also show components for constructed items
+        if (item.type === 'constructed' && item.components?.length) {
+          item.components.forEach(c => {
+            if (c.componentType === 'shipping' || c.componentType === 'receiving') return;
+            const cAlready = doc.items.some(d => d.proposalCompId === c.id);
+            html += `<label style="display:flex;align-items:center;gap:8px;padding:3px 4px 3px 24px;cursor:pointer;border-radius:var(--rs);opacity:${cAlready?'0.4':'1'}" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background=''">
+              <input type="checkbox" ${cAlready?'checked disabled':''} onchange="addProposalCompToDoc('${item.id}','${sp.id}','${c.id}')" style="accent-color:var(--russet);width:12px;height:12px">
+              <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);flex:1">— ${escH(c.name||'')}</span>
+            </label>`;
+          });
+        }
+      });
+    });
+    html += '</div></details></div>';
+  }
+
+  // Schedule items grid
+  const rooms = [...new Set(doc.items.map(i => i.room || 'Unassigned'))];
+  if (!rooms.length) rooms.push('Unassigned');
+
+  rooms.forEach(room => {
+    const roomItems = doc.items.filter(i => (i.room || 'Unassigned') === room);
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--pecan);margin-bottom:12px">${escH(room)}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">`;
+
+    roomItems.forEach((item, idx) => {
+      const globalIdx = doc.items.indexOf(item);
+      const imgTypeLabel = item.imageType === 'detail' ? 'Detail' : item.imageType === 'reference' ? 'Reference' : 'Material';
+      html += `<div style="border:1px solid var(--border);border-radius:var(--rs);padding:10px;position:relative">
+        <div style="width:100%;aspect-ratio:1;background:${item.imageData ? 'url('+item.imageData+') center/cover' : 'rgba(91,45,34,0.06)'};border-radius:var(--rs);margin-bottom:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          ${!item.imageData ? '<label style="cursor:pointer;font-size:10px;color:var(--text-light);font-family:var(--font-b);text-align:center">+ Upload<br>Image<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage('+globalIdx+',this)"></label>' : ''}
+        </div>
+        ${item.imageData ? `<div style="display:flex;gap:4px;margin-bottom:6px">
+          <select class="fi fsel" style="font-size:9px;padding:2px 4px;flex:1" value="${item.imageType||'material'}" onchange="updateDocItem(${globalIdx},'imageType',this.value)">
+            <option value="material" ${item.imageType==='material'||!item.imageType?'selected':''}>Material</option>
+            <option value="detail" ${item.imageType==='detail'?'selected':''}>Detail</option>
+            <option value="reference" ${item.imageType==='reference'?'selected':''}>Reference</option>
+          </select>
+          <label style="cursor:pointer;font-size:9px;color:var(--russet);font-family:var(--font-b);padding:2px 4px;white-space:nowrap">Swap<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage(${globalIdx},this)"></label>
+        </div>` : ''}
+        <div style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
+        <input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Material / fabric name" onchange="updateDocItem(${globalIdx},'description',this.value.trim())" style="font-size:11px;padding:4px 6px;margin-top:4px">
+        <input type="text" class="fi" value="${escH(item.caption||'')}" placeholder="Caption (optional)" onchange="updateDocItem(${globalIdx},'caption',this.value.trim())" style="font-size:10px;padding:3px 6px;margin-top:3px;color:var(--text-mid)">
+        <button onclick="removeDocItem(${globalIdx})" style="position:absolute;top:4px;right:4px;background:white;border:1px solid var(--border);border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;color:var(--text-light);display:flex;align-items:center;justify-content:center">✕</button>
+      </div>`;
+    });
+
+    html += `<div style="border:1px dashed var(--border);border-radius:var(--rs);padding:10px;display:flex;align-items:center;justify-content:center;min-height:100px;cursor:pointer" onclick="addManualDocItem('${escH(room)}')" onmouseenter="this.style.borderColor='var(--russet)'" onmouseleave="this.style.borderColor='var(--border)'">
+      <span style="font-size:11px;color:var(--text-light);font-family:var(--font-b)">+ Add Item</span>
+    </div>`;
+
+    html += '</div></div>';
+  });
+
+  // Add room button
+  html += `<div style="display:flex;gap:8px;align-items:center">
+    <input type="text" class="fi" id="doce-new-room" placeholder="New room / section name" style="font-size:12px;padding:6px 10px;max-width:250px">
+    <button class="btn btn-ghost btn-sm" onclick="addDocRoom()">+ Add Room</button>
+  </div>`;
+
+  html += '</div>';
+
+  // ── Right: preview info ──
+  html += `<div style="position:sticky;top:20px">
+    <div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Document Info</div>
+      <div style="font-size:12px;font-family:var(--font-b);color:var(--text-mid);line-height:1.7">
+        <div><strong>Project:</strong> ${escH(proj?.name||'—')}</div>
+        <div><strong>Client:</strong> ${escH(client?.name||'—')}</div>
+        <div><strong>Type:</strong> ${escH(templateLabel)}</div>
+        <div><strong>Items:</strong> ${doc.items.length}</div>
+        <div><strong>Rooms:</strong> ${rooms.join(', ')}</div>
+      </div>
+    </div>
+  </div>`;
+
+  html += '</div>';
+  $c('doce-body').innerHTML = html;
+}
+
+function updateDocField(key, val) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  doc[key] = val;
+  doc.updated = new Date().toISOString();
+  save();
+  if (key === 'title') $c('doce-title').textContent = val;
+}
+
+function updateDocItem(idx, key, val) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc || !doc.items[idx]) return;
+  doc.items[idx][key] = val;
+  doc.updated = new Date().toISOString();
+  save();
+  // If updating itemCode, also update proposal item
+  if (key === 'itemCode' && doc.items[idx].proposalItemId) {
+    const prop = S.proposals[doc.projectId];
+    if (prop) {
+      prop.spaces.forEach(sp => {
+        const item = sp.items?.find(i => i.id === doc.items[idx].proposalItemId);
+        if (item) item.itemCode = val;
+      });
+      save();
+    }
+  }
+}
+
+function removeDocItem(idx) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  doc.items.splice(idx, 1);
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function addManualDocItem(room) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  doc.items.push({
+    id: uid(), name: '', itemCode: '', description: '', room: room,
+    imageData: null, imageType: 'material', caption: '',
+    proposalItemId: null, proposalCompId: null,
+  });
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function addDocRoom() {
+  const name = $c('doce-new-room')?.value.trim();
+  if (!name) return;
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  // Add a placeholder item in the new room
+  doc.items.push({
+    id: uid(), name: '', itemCode: '', description: '', room: name,
+    imageData: null, imageType: 'material', caption: '',
+    proposalItemId: null, proposalCompId: null,
+  });
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function addProposalItemToDoc(itemId, spId) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const prop = S.proposals[doc.projectId];
+  const sp = prop?.spaces?.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  if (!item) return;
+  // Pull image from proposal item files if available
+  const img = (item.files||[]).find(f => /\.(png|jpg|jpeg|gif|webp)$/i.test(f.name));
+  doc.items.push({
+    id: uid(), name: item.name || '', itemCode: item.itemCode || '',
+    description: item.contact || '', room: sp.name || 'Unassigned',
+    imageData: img?.data || null, imageType: 'material', caption: '',
+    proposalItemId: item.id, proposalCompId: null,
+  });
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function addProposalCompToDoc(itemId, spId, compId) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const prop = S.proposals[doc.projectId];
+  const sp = prop?.spaces?.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  const comp = item?.components?.find(c => c.id === compId);
+  if (!comp) return;
+  const img = (comp.files||[]).find(f => /\.(png|jpg|jpeg|gif|webp)$/i.test(f.name));
+  doc.items.push({
+    id: uid(),
+    name: item.name + (comp.name ? ' — ' + comp.name : ''),
+    itemCode: item.itemCode || '',
+    description: comp.contact || comp.note || '',
+    room: sp.name || 'Unassigned',
+    imageData: img?.data || null, imageType: 'material', caption: '',
+    proposalItemId: item.id, proposalCompId: comp.id,
+  });
+  doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function uploadDocItemImage(idx, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    updateDocItem(idx, 'imageData', e.target.result);
+    renderDocEditor();
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function saveCurrentDoc() {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  doc.updated = new Date().toISOString();
+  save();
+  toast('Document saved.');
+}
+
+function deleteDoc(docId) {
+  if (!confirm('Delete this document?')) return;
+  S.documents = (S.documents||[]).filter(d => d.id !== docId);
+  save();
+  renderDocuments();
+  toast('Document deleted.');
+}
+
+function printCurrentDoc() {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const client = (S.clients||[]).find(c => c.id === proj?.clientId);
+
+  const rooms = [...new Set(doc.items.map(i => i.room || 'Unassigned'))];
+  let itemsHtml = '';
+  rooms.forEach(room => {
+    const items = doc.items.filter(i => (i.room || 'Unassigned') === room);
+    if (!items.length) return;
+    itemsHtml += `<div class="room-section">
+      <div class="room-title">${escH(room)}</div>
+      <div class="swatch-grid">
+        ${items.map(item => `<div class="swatch-card">
+          ${item.imageData ? `<div class="swatch-img" style="background-image:url(${item.imageData})"></div>` : '<div class="swatch-img empty"></div>'}
+          <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
+          ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
+          ${item.caption ? '<div class="swatch-caption">'+escH(item.caption)+'</div>' : ''}
+          ${item.imageType && item.imageType !== 'material' ? '<div class="swatch-type">'+escH(item.imageType === 'detail' ? 'Detail' : 'Reference')+'</div>' : ''}
+        </div>`).join('')}
+      </div>
+    </div>`;
+  });
+
+  const w = window.open('','_blank','width=900,height=1000');
+  w.document.write(`<!DOCTYPE html><html><head><title>${escH(doc.title)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root { --pecan:#5B2D22; --mahogany:#3F151C; --russet:#963D27; --cloud:#F3E8D6; --text-mid:#7A4535; --text-light:rgba(91,45,34,0.45); --border:rgba(91,45,34,0.14); --font-h:'Barlow Condensed',sans-serif; --font-b:'Courier Prime',monospace; }
+    * { box-sizing:border-box; }
+    body { font-family:var(--font-b); padding:42px 48px; color:#2A1008; max-width:820px; margin:0 auto; background:white; }
+    .doc-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:28px; padding-bottom:16px; border-bottom:2px solid var(--pecan); }
+    .doc-title { font-family:var(--font-h); font-weight:900; font-size:28px; text-transform:uppercase; letter-spacing:0.04em; color:var(--mahogany); line-height:1; margin-bottom:2px; }
+    .doc-subtitle { font-family:var(--font-h); font-size:14px; color:var(--text-mid); }
+    .doc-date { font-family:var(--font-b); font-size:11px; color:var(--text-mid); }
+    .room-section { margin-bottom:28px; }
+    .room-title { font-family:var(--font-h); font-weight:800; font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:var(--pecan); margin-bottom:14px; padding-bottom:6px; border-bottom:1px solid var(--border); }
+    .swatch-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:16px; }
+    .swatch-card { text-align:left; }
+    .swatch-img { width:100%; aspect-ratio:1; background-size:cover; background-position:center; border-radius:4px; border:1px solid var(--border); margin-bottom:6px; }
+    .swatch-img.empty { background:rgba(91,45,34,0.06); }
+    .swatch-name { font-family:var(--font-h); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); line-height:1.3; }
+    .swatch-desc { font-size:10px; color:var(--text-mid); font-style:italic; margin-top:2px; }
+    .swatch-caption { font-size:9px; color:var(--text-light); margin-top:2px; }
+    .swatch-type { font-family:var(--font-h); font-size:8px; text-transform:uppercase; letter-spacing:0.08em; color:var(--russet); margin-top:2px; }
+    @media print { body { padding:30px 36px; } }
+  </style></head><body>
+    <div class="doc-header">
+      <div>
+        <div class="doc-title">${escH(doc.title)}</div>
+        <div class="doc-subtitle">${escH(proj?.name||'')}${client?' · '+escH(client.name):''}</div>
+      </div>
+      <div class="doc-date">${escH(doc.date||'')}</div>
+    </div>
+    ${itemsHtml}
+  </body></html>`);
+  w.document.close();
+  setTimeout(() => w.print(), 500);
+}
+
+function renderDocuments() {
+  const body = $c('documents-list-body');
+  if (!body) return;
+
+  // Populate filters
+  const projFilter = $c('doc-filter-project');
+  if (projFilter) {
+    const cur = projFilter.value;
+    projFilter.innerHTML = '<option value="">All Projects</option>' +
+      S.projects.map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+  const tmplFilter = $c('doc-filter-template');
+  if (tmplFilter) {
+    const cur = tmplFilter.value;
+    tmplFilter.innerHTML = '<option value="">All Types</option>' +
+      DOC_TEMPLATES.map(t => `<option value="${t.id}" ${t.id===cur?'selected':''}>${escH(t.label)}</option>`).join('');
+  }
+
+  let docs = S.documents || [];
+  const fProj = projFilter?.value;
+  const fTmpl = tmplFilter?.value;
+  if (fProj) docs = docs.filter(d => d.projectId === fProj);
+  if (fTmpl) docs = docs.filter(d => d.templateId === fTmpl);
+
+  if (!docs.length) {
+    body.innerHTML = '<div class="no-results">No documents yet. Create your first one.</div>';
+    return;
+  }
+
+  const sorted = [...docs].sort((a,b) => (b.updated||b.created||'').localeCompare(a.updated||a.created||''));
+  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(doc => {
+    const proj = S.projects.find(p => p.id === doc.projectId);
+    const tmplLabel = DOC_TEMPLATES.find(t => t.id === doc.templateId)?.label || doc.templateId;
+    const rooms = [...new Set(doc.items.map(i => i.room).filter(Boolean))];
+    return `
+    <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t);display:flex;align-items:center;justify-content:space-between" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openDocEditor('${doc.id}')">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(doc.title)}</span>
+          <span style="font-size:10px;font-family:var(--font-b);color:var(--text-light)">${escH(tmplLabel)}</span>
+        </div>
+        <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
+          ${proj ? escH(proj.name) : ''} · ${doc.items.length} item${doc.items.length!==1?'s':''} · ${rooms.length} room${rooms.length!==1?'s':''}
+          · Updated ${new Date(doc.updated||doc.created).toLocaleDateString()}
+        </div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteDoc('${doc.id}')" style="font-size:10px;padding:4px 10px">Delete</button>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 // ─── INVOICES ─────────────────────────────────────────
 
 let _invLineItems = [];
