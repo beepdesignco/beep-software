@@ -7737,7 +7737,7 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
         </td>
         <td style="padding:4px 4px"><input type="text" class="fi" list="dl-colors" value="${escH(item.color||'')}" placeholder="${item.wallpaper?'WALLPAPER':'e.g. Ivory White (925)'}" onchange="updateDocItem(${gi},'color',this.value.trim());renderDocEditor()" style="${iStyle}${item.wallpaper?';font-style:italic':''}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" list="dl-vendors" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
-        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-finishes" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-finishes" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim());renderDocEditor()" style="${iStyle}${item.wallpaper?';font-style:italic':''}"></td>
         <td style="padding:4px 4px">
           ${isParent ? `<label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:9px;color:var(--russet);cursor:pointer;white-space:nowrap;padding:4px 0"><input type="checkbox" onchange="applyToSubRows(${gi})" style="accent-color:var(--russet);width:11px;height:11px"> Apply to all</label>` : `<input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Application notes…" onchange="updateDocItem(${gi},'description',this.value.trim())" style="${iStyle}">`}
         </td>
@@ -8121,7 +8121,7 @@ function viewDocRevision(revIdx) {
         <table class="paint-table"><thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Notes</th></tr></thead>
         <tbody>${items.map(item => `<tr>
           <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? ' 👁' : ''}${(item.name||'').includes('not in view from this location)') ? ' <span style="opacity:0.35;text-decoration:line-through">👁</span>' : ''}</td>
-          <td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.color||'')}</td><td>${escH(item.vendor||'')}</td><td>${escH(item.finish||'')}</td>
+          <td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.color||'')}</td><td>${escH(item.vendor||'')}</td><td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.finish||'')}</td>
           <td class="note-cell">${escH(item.description||'')}</td>
         </tr>`).join('')}</tbody></table></div>`;
     } else {
@@ -8210,7 +8210,7 @@ function printCurrentDoc() {
             <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? ' <span style="font-size:11px">👁</span>' : ''}${(item.name||'').includes('not in view from this location)') ? ' <span style="font-size:11px;opacity:0.35;text-decoration:line-through">👁</span>' : ''}</td>
             <td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.color||'')}</td>
             <td>${escH(item.vendor||'')}</td>
-            <td>${escH(item.finish||'')}</td>
+            <td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.finish||'')}</td>
             <td class="note-cell">${escH(item.description||'')}</td>
           </tr>`).join('')}</tbody>
         </table>
