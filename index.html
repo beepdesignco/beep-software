@@ -7724,15 +7724,17 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
       // Check if this is a parent row (indent 0) with sub-rows (next item has indent > 0)
       const nextItem = roomItems[ri + 1];
       const isParent = !item.indent && nextItem && nextItem.indent;
+      const canWallpaper = !item.indent && !isParent;
       html += `<tr style="border-bottom:1px solid rgba(91,45,34,0.06);${rowBg}">
         <td style="padding:4px 4px;${indent}">
           <div style="display:flex;align-items:center;gap:4px">
             <input type="text" class="fi" value="${escH(item.name||'')}" placeholder="e.g. Walls" onchange="updateDocItem(${gi},'name',this.value.trim())" style="${iStyle}${item.indent?';font-size:10px':''};flex:1">
+            ${canWallpaper ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:8px;color:var(--text-light);cursor:pointer;white-space:nowrap;flex-shrink:0"><input type="checkbox" ${item.wallpaper?'checked':''} onchange="toggleWallpaper(${gi},this.checked)" style="accent-color:var(--russet);width:10px;height:10px"> WP</label>` : ''}
             ${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? '<span title="Side in view" style="font-size:13px;flex-shrink:0;cursor:default">👁</span>' : ''}
             ${(item.name||'').includes('not in view from this location)') ? '<span title="Side not in view" style="font-size:13px;flex-shrink:0;cursor:default;opacity:0.4;text-decoration:line-through">👁</span>' : ''}
           </div>
         </td>
-        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-colors" value="${escH(item.color||'')}" placeholder="e.g. Ivory White (925)" onchange="updateDocItem(${gi},'color',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
+        <td style="padding:4px 4px"><input type="text" class="fi" list="dl-colors" value="${escH(item.color||'')}" placeholder="${item.wallpaper?'WALLPAPER':'e.g. Ivory White (925)'}" onchange="updateDocItem(${gi},'color',this.value.trim());renderDocEditor()" style="${iStyle}${item.wallpaper?';font-style:italic':''}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" list="dl-vendors" value="${escH(item.vendor||'')}" placeholder="e.g. Benjamin Moore" onchange="updateDocItem(${gi},'vendor',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
         <td style="padding:4px 4px"><input type="text" class="fi" list="dl-finishes" value="${escH(item.finish||'')}" placeholder="e.g. Aura Interior - Matte" onchange="updateDocItem(${gi},'finish',this.value.trim());renderDocEditor()" style="${iStyle}"></td>
         <td style="padding:4px 4px">
@@ -7765,6 +7767,21 @@ function addPaintItem(room) {
     imageData: null, proposalItemId: null,
   });
   doc.updated = new Date().toISOString();
+  save();
+  renderDocEditor();
+}
+
+function toggleWallpaper(idx, checked) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc || !doc.items[idx]) return;
+  doc.items[idx].wallpaper = checked;
+  if (checked) {
+    doc.items[idx].color = 'WALLPAPER';
+    if (!doc.items[idx].description) doc.items[idx].description = 'USE SHEILDZ WALLPAPER PRIMER UNLESS OTHERWISE DIRECTED';
+  } else {
+    if (doc.items[idx].color === 'WALLPAPER') doc.items[idx].color = '';
+    if (doc.items[idx].description === 'USE SHEILDZ WALLPAPER PRIMER UNLESS OTHERWISE DIRECTED') doc.items[idx].description = '';
+  }
   save();
   renderDocEditor();
 }
@@ -8101,7 +8118,7 @@ function viewDocRevision(revIdx) {
         <table class="paint-table"><thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Notes</th></tr></thead>
         <tbody>${items.map(item => `<tr>
           <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? ' 👁' : ''}${(item.name||'').includes('not in view from this location)') ? ' <span style="opacity:0.35;text-decoration:line-through">👁</span>' : ''}</td>
-          <td>${escH(item.color||'')}</td><td>${escH(item.vendor||'')}</td><td>${escH(item.finish||'')}</td>
+          <td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.color||'')}</td><td>${escH(item.vendor||'')}</td><td>${escH(item.finish||'')}</td>
           <td class="note-cell">${escH(item.description||'')}</td>
         </tr>`).join('')}</tbody></table></div>`;
     } else {
@@ -8188,7 +8205,7 @@ function printCurrentDoc() {
           <thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Application Note(s)</th></tr></thead>
           <tbody>${items.map(item => `<tr>
             <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? ' <span style="font-size:11px">👁</span>' : ''}${(item.name||'').includes('not in view from this location)') ? ' <span style="font-size:11px;opacity:0.35;text-decoration:line-through">👁</span>' : ''}</td>
-            <td>${escH(item.color||'')}</td>
+            <td${item.wallpaper?' style="font-style:italic"':''}>${escH(item.color||'')}</td>
             <td>${escH(item.vendor||'')}</td>
             <td>${escH(item.finish||'')}</td>
             <td class="note-cell">${escH(item.description||'')}</td>
