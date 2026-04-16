@@ -7585,8 +7585,8 @@ function recalcInvFreight() {
     });
   });
   const freightEl = $c('inv-freight');
-  if (freightEl && totalFreight > 0) {
-    freightEl.value = totalFreight.toFixed(2);
+  if (freightEl) {
+    freightEl.value = totalFreight > 0 ? totalFreight.toFixed(2) : '';
   }
 }
 
