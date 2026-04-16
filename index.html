@@ -7884,16 +7884,17 @@ function renderDocInfoPanel(doc, proj, client, templateLabel, rooms) {
       </div>
       ${(doc.revisionHistory||[]).length?`
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
-        <details>
-          <summary style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);cursor:pointer;user-select:none;padding:2px 0">Version History</summary>
-          <div style="padding-top:6px;font-size:10px;font-family:var(--font-b);color:var(--text-mid);line-height:1.8">
-            ${(doc.revisionHistory||[]).slice().reverse().map(r =>
-              `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(91,45,34,0.06)">
-                <span>${doc.version||'A'}.${r.revision} — ${r.itemCount} item${r.itemCount!==1?'s':''}</span>
-                <span style="color:var(--text-light)">${new Date(r.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(r.savedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</span>
-              </div>`).join('')}
-          </div>
-        </details>
+        <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-bottom:6px">Version History</div>
+        ${(doc.revisionHistory||[]).slice().reverse().map((r, ri) => {
+          const actualIdx = doc.revisionHistory.length - 1 - ri;
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;margin-bottom:4px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs)">
+            <div>
+              <div style="font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--mahogany)">${doc.version||'A'}.${r.revision}</div>
+              <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${r.itemCount} item${r.itemCount!==1?'s':''} · ${new Date(r.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(r.savedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="viewDocRevision(${actualIdx})" style="font-size:9px;padding:2px 8px">View</button>
+          </div>`;
+        }).join('')}
       </div>`:''}
     </div>
   </div>`;
@@ -8041,22 +8042,117 @@ function uploadDocItemImage(idx, input) {
 function saveCurrentDoc() {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
-
-  // Snapshot current state as prior revision
   if (!doc.revisionHistory) doc.revisionHistory = [];
+
+  // Check if anything actually changed since last save
+  const currentSnapshot = JSON.stringify(doc.items);
+  const lastSnapshot = doc.revisionHistory.length
+    ? JSON.stringify(doc.revisionHistory[doc.revisionHistory.length - 1].snapshot)
+    : JSON.stringify([]);
+  const notesChanged = (doc._lastSavedNotes || '') !== (doc.notes || '');
+  const titleChanged = (doc._lastSavedTitle || '') !== (doc.title || '');
+
+  if (currentSnapshot === lastSnapshot && !notesChanged && !titleChanged) {
+    toast('No changes to save.');
+    return;
+  }
+
+  // Snapshot current state as this revision
   doc.revisionHistory.push({
-    revision: doc.revision,
-    savedAt: doc.updated || doc.created,
+    revision: (doc.revision || 1),
+    savedAt: new Date().toISOString(),
     itemCount: doc.items.length,
-    snapshot: JSON.parse(JSON.stringify(doc.items)),
+    title: doc.title,
+    notes: doc.notes || '',
+    snapshot: JSON.parse(currentSnapshot),
   });
 
   // Bump revision
   doc.revision = (doc.revision || 1) + 1;
+  doc._lastSavedNotes = doc.notes || '';
+  doc._lastSavedTitle = doc.title || '';
   doc.updated = new Date().toISOString();
   save();
   renderDocEditor();
   toast('Saved as Version ' + (doc.version||'A') + '.' + doc.revision);
+}
+
+function viewDocRevision(revIdx) {
+  const doc = (S.documents||[]).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const rev = doc.revisionHistory[revIdx];
+  if (!rev) return;
+
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const client = (S.clients||[]).find(c => c.id === proj?.clientId);
+  const isPaint = doc.templateId === 'paint_paper_schedule';
+
+  const w = window.open('','_blank','width=900,height=800');
+  let rooms = [...new Set(rev.snapshot.map(i => i.room || 'Unassigned'))];
+  let itemsHtml = '';
+  if (rev.notes) {
+    itemsHtml += `<div style="font-size:12px;color:var(--text-mid);font-style:italic;margin-bottom:20px;padding:10px 12px;background:rgba(91,45,34,0.03);border-radius:4px">${escH(rev.notes)}</div>`;
+  }
+  rooms.forEach(room => {
+    const items = rev.snapshot.filter(i => (i.room || 'Unassigned') === room);
+    if (!items.length) return;
+    if (isPaint) {
+      itemsHtml += `<div class="room-section"><div class="room-title">${escH(room)}</div>
+        <table class="paint-table"><thead><tr><th>Location</th><th>Color</th><th>Vendor</th><th>Finish</th><th>Notes</th></tr></thead>
+        <tbody>${items.map(item => `<tr>
+          <td class="loc-cell" style="${item.indent?'padding-left:'+(8+item.indent*18)+'px;font-size:10px;font-weight:400':''}">${escH(item.name||'')}${(item.name||'').includes('in view from this location)') && !(item.name||'').includes('not in view') ? ' 👁' : ''}${(item.name||'').includes('not in view from this location)') ? ' <span style="opacity:0.35;text-decoration:line-through">👁</span>' : ''}</td>
+          <td>${escH(item.color||'')}</td><td>${escH(item.vendor||'')}</td><td>${escH(item.finish||'')}</td>
+          <td class="note-cell">${escH(item.description||'')}</td>
+        </tr>`).join('')}</tbody></table></div>`;
+    } else {
+      itemsHtml += `<div class="room-section"><div class="room-title">${escH(room)}</div>
+        <div class="swatch-grid">${items.map(item => `<div class="swatch-card">
+          ${item.imageData ? '<div class="swatch-img"><img src="'+item.imageData+'" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>' : '<div class="swatch-img empty"></div>'}
+          <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
+          ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
+        </div>`).join('')}</div></div>`;
+    }
+  });
+
+  w.document.write(`<!DOCTYPE html><html><head><title>${escH(doc.title)} — v${doc.version||'A'}.${rev.revision}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root { --pecan:#5B2D22; --mahogany:#3F151C; --russet:#963D27; --cloud:#F3E8D6; --text-mid:#7A4535; --text-light:rgba(91,45,34,0.45); --border:rgba(91,45,34,0.14); --font-h:'Barlow Condensed',sans-serif; --font-b:'Courier Prime',monospace; }
+    * { box-sizing:border-box; }
+    body { font-family:var(--font-b); padding:42px 48px; color:#2A1008; max-width:820px; margin:0 auto; background:white; }
+    .doc-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:28px; padding-bottom:16px; border-bottom:2px solid var(--pecan); }
+    .doc-title { font-family:var(--font-h); font-weight:900; font-size:28px; text-transform:uppercase; letter-spacing:0.04em; color:var(--mahogany); line-height:1; margin-bottom:2px; }
+    .doc-subtitle { font-family:var(--font-h); font-size:14px; color:var(--text-mid); }
+    .doc-date { font-family:var(--font-b); font-size:11px; color:var(--text-mid); }
+    .room-section { margin-bottom:28px; }
+    .room-title { font-family:var(--font-h); font-weight:800; font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:var(--pecan); margin-bottom:14px; padding-bottom:6px; border-bottom:1px solid var(--border); }
+    .swatch-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:16px; }
+    .swatch-card { text-align:left; }
+    .swatch-img { width:100%; aspect-ratio:1; border-radius:4px; border:1px solid var(--border); margin-bottom:6px; }
+    .swatch-img.empty { background:rgba(91,45,34,0.06); }
+    .swatch-name { font-family:var(--font-h); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); line-height:1.3; }
+    .swatch-desc { font-size:10px; color:var(--text-mid); font-style:italic; margin-top:2px; }
+    .paint-table { width:100%; border-collapse:collapse; font-size:11px; }
+    .paint-table th { font-family:var(--font-h); font-weight:700; text-transform:uppercase; letter-spacing:0.08em; font-size:9px; color:var(--text-light); padding:6px 8px; text-align:left; border-bottom:2px solid var(--border); }
+    .paint-table td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+    .paint-table .loc-cell { font-family:var(--font-h); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); }
+    .paint-table .note-cell { font-style:italic; color:var(--text-mid); font-size:10px; }
+    .rev-banner { background:rgba(150,61,39,0.08); border:1px solid rgba(150,61,39,0.2); border-radius:6px; padding:10px 16px; margin-bottom:20px; font-family:var(--font-b); font-size:12px; color:var(--russet); }
+  </style></head><body>
+    <div class="rev-banner">Viewing Version ${doc.version||'A'}.${rev.revision} — saved ${new Date(rev.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} ${new Date(rev.savedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
+    <div class="doc-header">
+      <div>
+        <div class="doc-title">${escH(rev.title || doc.title)}</div>
+        <div class="doc-subtitle">${escH(proj?.name||'')}${client?' · '+escH(client.name):''}</div>
+      </div>
+      <div class="doc-date">
+        <div>Version ${doc.version||'A'}.${rev.revision}</div>
+        <div>${new Date(rev.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
+      </div>
+    </div>
+    ${itemsHtml}
+  </body></html>`);
+  w.document.close();
 }
 
 function deleteDoc(docId) {
