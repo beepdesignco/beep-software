@@ -2230,11 +2230,11 @@ tr:hover .row-btns { opacity:1; }
     <div class="modal-title">New Document</div>
     <div class="fg">
       <label class="fl">Project</label>
-      <select class="fi fsel" id="nd-project"><!-- populated by JS --></select>
+      <select class="fi fsel" id="nd-project" onchange="autoDocTitle()"><!-- populated by JS --></select>
     </div>
     <div class="fg">
       <label class="fl">Template</label>
-      <select class="fi fsel" id="nd-template"><!-- populated by JS --></select>
+      <select class="fi fsel" id="nd-template" onchange="autoDocTitle()"><!-- populated by JS --></select>
     </div>
     <div class="fg">
       <label class="fl">Document Title</label>
@@ -7524,10 +7524,18 @@ function openNewDocModal() {
   $c('modal-new-doc').classList.add('open');
 }
 
+function autoDocTitle() {
+  const pid = $c('nd-project').value;
+  const templateId = $c('nd-template').value;
+  const proj = S.projects.find(p => p.id === pid);
+  const tmpl = DOC_TEMPLATES.find(t => t.id === templateId);
+  if (proj && tmpl) $c('nd-title').value = proj.name + ' — ' + tmpl.label;
+}
+
 function createNewDoc() {
   const pid = $c('nd-project').value;
   const templateId = $c('nd-template').value;
-  const title = $c('nd-title').value.trim() || DOC_TEMPLATES.find(t=>t.id===templateId)?.label || 'Untitled';
+  const title = $c('nd-title').value.trim() || 'Untitled';
   if (!pid) { toast('Select a project.'); return; }
 
   const doc = {
