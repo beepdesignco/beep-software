@@ -7941,6 +7941,8 @@ function renderExpenseCard(exp) {
         <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(exp.name)}</span>
         <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${color}15;color:${color};border:1px solid ${color}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${label}</span>
         ${exp.trackInPM ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet)">Tracked</span>' : ''}
+          ${exp.status === 'invoiced' ? '<span style="font-size:9px;font-family:var(--font-b);color:#2d5a8a">Invoiced</span>' : ''}
+          ${exp.status === 'client_payment_received' ? '<span style="font-size:9px;font-family:var(--font-b);color:#1a6e3a">Client Payment Received</span>' : ''}
       </div>
       <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
         ${proj ? escH(proj.name)+' · ' : ''}${exp.date ? escH(exp.date)+' · ' : ''}${exp.card ? escH(exp.card) : ''}
@@ -9491,13 +9493,23 @@ function processInvoicePaidAutomations(inv) {
   if (!prop) return;
   let updatedCount = 0;
 
-  // Update proposal items to ready_for_ordering
+  // Update proposal items to ready_for_ordering (client payment received)
   (inv.lineItems||[]).forEach(line => {
     if (line.proposalItemId) {
       (prop.spaces||[]).forEach(sp => {
         const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
         if (item && item.status === 'invoiced') { item.status = 'ready_for_ordering'; updatedCount++; }
       });
+    }
+    // Update expense-sourced PM items too
+    if (line._expenseId) {
+      (prop.spaces||[]).forEach(sp => {
+        const item = (sp.items||[]).find(i => i._expenseId === line._expenseId);
+        if (item && item.status === 'invoiced') { item.status = 'ready_for_ordering'; updatedCount++; }
+      });
+      // Update expense status
+      const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
+      if (exp) exp.status = 'client_payment_received';
     }
   });
   // Backup: check _invoiceIds
@@ -9516,7 +9528,7 @@ function processInvoicePaidAutomations(inv) {
       type: 'invoice_paid',
       invoiceId: inv.id,
       invoiceNumber: inv.number,
-      message: 'Invoice ' + inv.number + ' paid — ' + updatedCount + ' item' + (updatedCount!==1?'s':'') + ' ready for ordering',
+      message: 'Invoice ' + inv.number + ' paid — ' + updatedCount + ' item' + (updatedCount!==1?'s':'') + ': Client Payment Received',
       timestamp: new Date().toISOString(),
       read: false,
     });
@@ -9683,11 +9695,34 @@ function processInvoiceSentAutomations(inv) {
     }
   });
 
-  // 2b. Mark expenses as resolved
+  // 2b. Mark expenses as resolved + invoiced, add tracked ones to PM
   inv.lineItems.forEach(line => {
     if (line._expenseId) {
       const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
-      if (exp) { exp.resolved = true; exp.resolvedInvoiceId = inv.id; exp.resolvedInvoiceNumber = inv.number; }
+      if (exp) {
+        exp.resolved = true;
+        exp.status = 'invoiced';
+        exp.resolvedInvoiceId = inv.id;
+        exp.resolvedInvoiceNumber = inv.number;
+
+        // Add tracked expenses to PM if not already there
+        if ((line.trackInPM || exp.trackInPM) && pid && prop) {
+          const alreadyInPM = prop.spaces.some(sp => (sp.items||[]).some(i => i._expenseId === exp.id));
+          if (!alreadyInPM) {
+            let expSpace = prop.spaces.find(sp => sp.name === 'Expenses');
+            if (!expSpace) { expSpace = { id:uid(), name:'Expenses', items:[] }; prop.spaces.push(expSpace); }
+            expSpace.items.push({
+              id: uid(), _expenseId: exp.id, _invoiceLineId: line.id,
+              _invoiceNumber: inv.number, type:'openline', name: exp.name,
+              netPrice: exp.cost, qty:'1', status:'invoiced',
+              notes: 'Expense — Invoice ' + inv.number,
+              category:'', allowance:false, taxExempt: exp.expenseType !== 'billable',
+              billCostOnly: exp.expenseType === 'passthrough',
+            });
+            addedCount++;
+          }
+        }
+      }
     }
   });
 
