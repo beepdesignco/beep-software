@@ -8016,7 +8016,7 @@ function addExpenseToInvoice(expId, checked) {
 }
 
 function getUnresolvedExpenses(pid) {
-  return (S.expenses||[]).filter(e => e.projectId === pid && !e.resolved && (e.expenseType === 'billable' || e.expenseType === 'passthrough'));
+  return (S.expenses||[]).filter(e => e.projectId === pid && !e.resolved && e.status !== 'invoiced' && (e.expenseType === 'billable' || e.expenseType === 'passthrough'));
 }
 
 // ─── DOCUMENTS ────────────────────────────────────────
@@ -9509,7 +9509,7 @@ function processInvoicePaidAutomations(inv) {
       });
       // Update expense status
       const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
-      if (exp) exp.status = 'client_payment_received';
+      if (exp) { exp.resolved = true; exp.status = 'client_payment_received'; }
     }
   });
   // Backup: check _invoiceIds
@@ -9700,7 +9700,6 @@ function processInvoiceSentAutomations(inv) {
     if (line._expenseId) {
       const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
       if (exp) {
-        exp.resolved = true;
         exp.status = 'invoiced';
         exp.resolvedInvoiceId = inv.id;
         exp.resolvedInvoiceNumber = inv.number;
