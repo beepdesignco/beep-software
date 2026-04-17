@@ -1428,6 +1428,10 @@ tr:hover .row-btns { opacity:1; }
           <button class="btn btn-primary" onclick="openNewExpenseModal()">+ New Expense</button>
         </div>
       </div>
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
+        <button class="view-tab active" data-exptab="unresolved" onclick="setExpTab('unresolved')" style="margin-bottom:-1px">Unresolved</button>
+        <button class="view-tab" data-exptab="resolved" onclick="setExpTab('resolved')" style="margin-bottom:-1px">Resolved</button>
+      </div>
       <div class="contacts-body" id="expenses-body"></div>
     </div>
 
@@ -7786,6 +7790,13 @@ function initTimer() {
 // ─── EXPENSES ─────────────────────────────────────────
 
 let _expReceipt = null;
+let _expTab = 'unresolved';
+
+function setExpTab(tab) {
+  _expTab = tab;
+  $a('[data-exptab]').forEach(b => b.classList.toggle('active', b.dataset.exptab === tab));
+  renderExpenses();
+}
 
 function openNewExpenseModal() {
   $c('exp-modal-title').textContent = 'New Expense';
@@ -7917,6 +7928,32 @@ function deleteExpense(expId) {
   toast('Expense deleted.');
 }
 
+function renderExpenseCard(exp) {
+  const proj = S.projects.find(p => p.id === exp.projectId);
+  const typeColors = { billable:'#b33', passthrough:'#2d5a8a', nonbillable:'#8a8a8a' };
+  const typeLabels = { billable:'Billable', passthrough:'Pass-Through', nonbillable:'Non-Billable' };
+  const color = typeColors[exp.expenseType] || '#8a8a8a';
+  const label = typeLabels[exp.expenseType] || exp.expenseType;
+  return `
+  <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t);display:flex;align-items:center;justify-content:space-between" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditExpense('${exp.id}')">
+    <div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(exp.name)}</span>
+        <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${color}15;color:${color};border:1px solid ${color}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${label}</span>
+        ${exp.trackInPM ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet)">Tracked</span>' : ''}
+      </div>
+      <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
+        ${proj ? escH(proj.name)+' · ' : ''}${exp.date ? escH(exp.date)+' · ' : ''}${exp.card ? escH(exp.card) : ''}
+        ${exp.resolved && exp.resolvedInvoiceNumber ? ' · <span style="color:var(--russet)">Invoice '+escH(exp.resolvedInvoiceNumber)+'</span>' : ''}
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${exp.cost ? fmt(parse$(exp.cost)) : '—'}</span>
+      ${!exp.resolved ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteExpense('${exp.id}')" style="font-size:10px;padding:4px 8px">✕</button>` : ''}
+    </div>
+  </div>`;
+}
+
 function renderExpenses() {
   const body = $c('expenses-body');
   if (!body) return;
@@ -7934,38 +7971,15 @@ function renderExpenses() {
   if (fProj) expenses = expenses.filter(e => e.projectId === fProj);
   if (fType) expenses = expenses.filter(e => e.expenseType === fType);
 
-  if (!expenses.length) {
-    body.innerHTML = '<div class="no-results">No expenses yet. Log your first one.</div>';
+  const showing = _expTab === 'resolved' ? expenses.filter(e => e.resolved) : expenses.filter(e => !e.resolved);
+  const sorted = [...showing].sort((a,b) => (b.created||'').localeCompare(a.created||''));
+
+  if (!sorted.length) {
+    body.innerHTML = `<div class="no-results">${_expTab === 'resolved' ? 'No resolved expenses.' : 'No unresolved expenses. Log your first one.'}</div>`;
     return;
   }
 
-  const sorted = [...expenses].sort((a,b) => (b.created||'').localeCompare(a.created||''));
-  const typeColors = { billable:'#b33', passthrough:'#2d5a8a', nonbillable:'#8a8a8a' };
-  const typeLabels = { billable:'Billable', passthrough:'Pass-Through', nonbillable:'Non-Billable' };
-
-  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(exp => {
-    const proj = S.projects.find(p => p.id === exp.projectId);
-    const color = typeColors[exp.expenseType] || '#8a8a8a';
-    const label = typeLabels[exp.expenseType] || exp.expenseType;
-    return `
-    <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t);display:flex;align-items:center;justify-content:space-between" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditExpense('${exp.id}')">
-      <div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(exp.name)}</span>
-          <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${color}15;color:${color};border:1px solid ${color}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${label}</span>
-          ${exp.resolved ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--text-light)">Resolved</span>' : ''}
-          ${exp.trackInPM ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet)">Tracked</span>' : ''}
-        </div>
-        <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
-          ${proj ? escH(proj.name)+' · ' : ''}${exp.date ? escH(exp.date)+' · ' : ''}${exp.card ? escH(exp.card) : ''}
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${exp.cost ? fmt(parse$(exp.cost)) : '—'}</span>
-        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteExpense('${exp.id}')" style="font-size:10px;padding:4px 8px">✕</button>
-      </div>
-    </div>`;
-  }).join('')}</div>`;
+  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(exp => renderExpenseCard(exp)).join('')}</div>`;
 }
 
 function addExpenseToInvoice(expId, checked) {
@@ -9673,7 +9687,7 @@ function processInvoiceSentAutomations(inv) {
   inv.lineItems.forEach(line => {
     if (line._expenseId) {
       const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
-      if (exp) exp.resolved = true;
+      if (exp) { exp.resolved = true; exp.resolvedInvoiceId = inv.id; exp.resolvedInvoiceNumber = inv.number; }
     }
   });
 
