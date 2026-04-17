@@ -2344,7 +2344,7 @@ const STATUSES = [
   { v:'billable',           l:'Billable' },
   { v:'invoiced',           l:'Invoiced' },
   { v:'pending_status',     l:'Pending Status' },
-  { v:'ready_for_ordering', l:'Ready for Ordering' },
+  { v:'ready_for_ordering', l:'Client Payment Received' },
   { v:'ordered',            l:'Ordered' },
   { v:'payment_processed',  l:'Payment Processed' },
   { v:'shipped',            l:'Shipped' },
@@ -2997,10 +2997,22 @@ function _getItem(pid, spId, itemId) {
   return sp?.items?.find(i => i.id === itemId);
 }
 
+function autoEngageFlags(pid, spId, itemId, status) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  if (!item.statusFlags) item.statusFlags = [];
+  if (status === 'pending_status') {
+    if (!item.statusFlags.includes('needs_attention')) item.statusFlags.push('needs_attention');
+  }
+}
+
 function savePMField(pid, spId, itemId, key, val) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
   item[key] = val;
+  if (key === 'status' && val === 'pending_status') {
+    autoEngageFlags(pid, spId, itemId, val);
+  }
   if (key === 'status' && item.groupComponents) {
     (item.components||[]).forEach(c => {
       if (!isExcludedFromGrouping(c)) c.status = val;
@@ -3446,10 +3458,18 @@ function renderPMItemCard(item, sp, pid) {
     </div>
     ${!isAllowance ? `
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
-      <div style="flex:1;height:4px;background:rgba(91,45,34,0.08);border-radius:2px;overflow:hidden">
-        <div style="height:100%;width:${progress}%;background:${statusColor};border-radius:2px;transition:width 0.3s ease"></div>
-      </div>
-      <span style="font-size:10px;font-family:var(--font-b);color:${statusColor};white-space:nowrap">${statusLabel}</span>
+      ${item.status === 'pending_status' ? `
+        <span style="font-family:var(--font-h);font-weight:900;font-size:16px;color:#b33;letter-spacing:2px">!!!</span>
+        <span style="font-size:10px;font-family:var(--font-b);color:#b33;white-space:nowrap">${statusLabel}</span>
+      ` : item.status === 'ready_for_ordering' ? `
+        <span style="font-family:var(--font-h);font-weight:900;font-size:16px;color:#1a6e3a;letter-spacing:2px">$$$</span>
+        <span style="font-size:10px;font-family:var(--font-b);color:#1a6e3a;white-space:nowrap">${statusLabel}</span>
+      ` : `
+        <div style="flex:1;height:4px;background:rgba(91,45,34,0.08);border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:${progress}%;background:${statusColor};border-radius:2px;transition:width 0.3s ease"></div>
+        </div>
+        <span style="font-size:10px;font-family:var(--font-b);color:${statusColor};white-space:nowrap">${statusLabel}</span>
+      `}
     </div>` : ''}
     <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;font-family:var(--font-b);color:var(--text-light)">
       ${trackCount ? `<span>📦 ${trackCount} tracking</span>` : ''}
@@ -4054,10 +4074,16 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         ${!isAllowance ? `
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Item Status</div>
-          <select class="fi fsel" style="font-size:13px;color:${statusColor};margin-bottom:10px" onchange="savePMField('${pid}','${spId}','${itemId}','status',this.value);renderProjectDetail()">${statusOpts}</select>
-          <div style="height:6px;background:rgba(91,45,34,0.08);border-radius:3px;overflow:hidden;margin-bottom:10px">
-            <div style="height:100%;width:${statusIdx>=0?((statusIdx+1)/STATUSES.length*100):0}%;background:${statusColor};border-radius:3px;transition:width 0.3s ease"></div>
-          </div>
+          <select class="fi fsel" style="font-size:13px;color:${statusColor};margin-bottom:10px" onchange="savePMField('${pid}','${spId}','${itemId}','status',this.value);autoEngageFlags('${pid}','${spId}','${itemId}',this.value);renderProjectDetail()">${statusOpts}</select>
+          ${item.status === 'pending_status' ? `
+            <div style="margin-bottom:10px"><span style="font-family:var(--font-h);font-weight:900;font-size:20px;color:#b33;letter-spacing:3px">!!!</span></div>
+          ` : item.status === 'ready_for_ordering' ? `
+            <div style="margin-bottom:10px"><span style="font-family:var(--font-h);font-weight:900;font-size:20px;color:#1a6e3a;letter-spacing:3px">$$$</span></div>
+          ` : `
+            <div style="height:6px;background:rgba(91,45,34,0.08);border-radius:3px;overflow:hidden;margin-bottom:10px">
+              <div style="height:100%;width:${statusIdx>=0?((statusIdx+1)/STATUSES.length*100):0}%;background:${statusColor};border-radius:3px;transition:width 0.3s ease"></div>
+            </div>
+          `}
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             ${STATUS_FLAGS.map(f => {
               const active = (item.statusFlags||[]).includes(f.v);
@@ -9138,7 +9164,7 @@ function cancelInvoice() {
       if (line.proposalItemId) {
         (prop.spaces||[]).forEach(sp => {
           const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
-          if (item) { item.status = 'pending_status'; if (item._invoiceIds) item._invoiceIds = item._invoiceIds.filter(id => id !== inv.id); revertCount++; }
+          if (item) { item.status = 'pending_status'; if (!item.statusFlags) item.statusFlags = []; if (!item.statusFlags.includes('needs_attention')) item.statusFlags.push('needs_attention'); if (item._invoiceIds) item._invoiceIds = item._invoiceIds.filter(id => id !== inv.id); revertCount++; }
         });
       }
     });
@@ -9148,7 +9174,7 @@ function cancelInvoice() {
       (prop.spaces||[]).forEach(sp => {
         (sp.items||[]).forEach(item => {
           if (item._invoiceIds && item._invoiceIds.includes(inv.id)) {
-            item.status = 'pending_status';
+            item.status = 'pending_status'; if (!item.statusFlags) item.statusFlags = []; if (!item.statusFlags.includes('needs_attention')) item.statusFlags.push('needs_attention');
             item._invoiceIds = item._invoiceIds.filter(id => id !== inv.id);
             revertCount++;
           }
