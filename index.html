@@ -3323,6 +3323,19 @@ function renderActivityNote(note, pid, spId, itemId) {
 
 // ── PM Management Tab ──
 
+function getItemInvoiceRefs(itemId) {
+  return (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
+}
+
+function renderInvoiceRefBadges(itemId, size) {
+  const refs = getItemInvoiceRefs(itemId);
+  if (!refs.length) return '';
+  const s = size === 'sm' ? 'font-size:9px;padding:1px 6px;border-radius:6px;margin-right:3px' : 'font-size:10px;padding:2px 8px;border-radius:8px;margin-right:4px';
+  return '<div style="margin-top:3px">' + refs.map(inv =>
+    '<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-b);color:var(--russet);background:rgba(150,61,39,0.08);' + s + '">' + escH(inv.number) + (inv.phase && size !== 'sm' ? ' · ' + escH(inv.phase) : '') + '</span>'
+  ).join('') + '</div>';
+}
+
 function dismissNotification(pid, notifId) {
   const prop = S.proposals[pid];
   if (!prop?.notifications) return;
@@ -3408,12 +3421,7 @@ function renderPMItemCard(item, sp, pid) {
           ${flags}
         </div>
         ${item.contact ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${escH(item.contact)}</div>` : ''}
-        ${(() => {
-          const linkedInvs = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === item.id));
-          return linkedInvs.length ? '<div style="margin-top:3px">' + linkedInvs.map(inv =>
-            '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);background:rgba(150,61,39,0.08);padding:1px 6px;border-radius:6px;margin-right:3px">' + escH(inv.number) + '</span>'
-          ).join('') + '</div>' : '';
-        })()}
+        ${renderInvoiceRefBadges(item.id, 'sm')}
       </div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
@@ -4016,12 +4024,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
           ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
         </div>
         <div style="font-size:12px;color:var(--text-mid);font-family:var(--font-b)">${escH(sp.name||'')}${item.contact ? ' · '+escH(item.contact) : ''}</div>
-        ${(() => {
-          const linkedInvs = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
-          return linkedInvs.length ? '<div style="margin-top:4px">' + linkedInvs.map(inv =>
-            '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-family:var(--font-b);color:var(--russet);background:rgba(150,61,39,0.08);padding:2px 8px;border-radius:8px;margin-right:4px">' + escH(inv.number) + (inv.phase?' · '+escH(inv.phase):'') + '</span>'
-          ).join('') + '</div>' : '';
-        })()}
+        ${renderInvoiceRefBadges(itemId, 'lg')}
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--font-h);font-weight:800;font-size:22px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
@@ -8965,19 +8968,19 @@ function cancelInvoice() {
   if (!inv) return;
   if (!confirm('Cancel this invoice? Linked items will be set to "Pending Status".')) return;
 
-  // Save current builder state first so lineItems are up to date
-  inv.lineItems = JSON.parse(JSON.stringify(_invLineItems));
-
   const pid = inv.projectId;
   const prop = S.proposals[pid];
+  // Combine saved + builder line items for proposal item IDs
+  const allLineItems = (inv.lineItems||[]).concat((_invLineItems||[]).filter(l => l.proposalItemId && !(inv.lineItems||[]).some(s => s.proposalItemId === l.proposalItemId)));
 
   // Revert linked proposal items to "pending_status"
+  let revertCount = 0;
   if (prop) {
-    (inv.lineItems||[]).forEach(line => {
+    allLineItems.forEach(line => {
       if (line.proposalItemId) {
         (prop.spaces||[]).forEach(sp => {
           const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
-          if (item) item.status = 'pending_status';
+          if (item) { item.status = 'pending_status'; revertCount++; }
         });
       }
     });
@@ -8997,8 +9000,10 @@ function cancelInvoice() {
 
   inv.status = 'cancelled';
   save();
+  // Force localStorage update
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch(e){}
   showView('invoices');
-  toast('Invoice ' + inv.number + ' cancelled.');
+  toast('Invoice ' + inv.number + ' cancelled.' + (revertCount ? ' ' + revertCount + ' item(s) set to Pending Status.' : ''));
 }
 
 function processInvoiceSentAutomations(inv) {
