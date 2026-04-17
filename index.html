@@ -9036,9 +9036,8 @@ function removeInvLine(idx) {
   const line = _invLineItems[idx];
   if (line?.proposalItemId) _invSelectedProposalItems.delete(line.proposalItemId);
   _invLineItems.splice(idx, 1);
-  onInvProjectChange();
-  renderInvLineItems();
-  recalcInvoice();
+  recalcInvFreight();
+  renderInvoiceBuilder();
 }
 
 function renderInvLineItems() {
@@ -9224,6 +9223,7 @@ function renderInvoiceBuilder() {
     const eligibleItems = [];
     prop.spaces.forEach(sp => {
       (sp.items||[]).forEach(item => {
+        if (item._expenseId) return; // expenses show in their own section
         const isEligible = invoiceableStatuses.includes(item.status) || _invSelectedProposalItems.has(item.id);
         if (isEligible) eligibleItems.push({ item, sp });
       });
