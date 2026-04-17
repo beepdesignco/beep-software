@@ -2997,6 +2997,41 @@ function _getItem(pid, spId, itemId) {
   return sp?.items?.find(i => i.id === itemId);
 }
 
+function canDeleteItem(itemId) {
+  const deletableStatuses = ['proposed', 'approved', 'pending_status'];
+  // Find the item
+  let item = null;
+  for (const pid of Object.keys(S.proposals||{})) {
+    const prop = S.proposals[pid];
+    for (const sp of (prop.spaces||[])) {
+      const found = (sp.items||[]).find(i => i.id === itemId);
+      if (found) { item = found; break; }
+    }
+    if (item) break;
+  }
+  if (!item) return false;
+  if (!deletableStatuses.includes(item.status)) return false;
+  // Check if item is on any saved draft
+  const onDraft = (S.invoices||[]).some(inv => inv.status === 'draft' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
+  if (onDraft) return false;
+  return true;
+}
+
+function deleteItemFromPM(pid, spId, itemId) {
+  if (!canDeleteItem(itemId)) {
+    toast('This item cannot be deleted in its current state.');
+    return;
+  }
+  if (!confirm('Delete this item from the proposal? This cannot be undone.')) return;
+  const prop = S.proposals[pid];
+  const sp = prop?.spaces?.find(s => s.id === spId);
+  if (sp) sp.items = (sp.items||[]).filter(i => i.id !== itemId);
+  _pmDetailItem = null;
+  save();
+  renderProjectDetail();
+  toast('Item deleted.');
+}
+
 function autoEngageFlags(pid, spId, itemId, status) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
@@ -4064,7 +4099,10 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       <div style="text-align:right">
         <div style="font-family:var(--font-h);font-weight:800;font-size:22px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
         ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
-        <button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')" style="margin-top:4px">Edit Item</button>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')">Edit Item</button>
+          ${canDeleteItem(itemId) ? `<button class="btn btn-danger btn-sm" onclick="deleteItemFromPM('${pid}','${spId}','${itemId}')" style="font-size:10px">Delete Item</button>` : ''}
+        </div>
       </div>
     </div>
 
