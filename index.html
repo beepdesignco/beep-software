@@ -3324,7 +3324,26 @@ function renderActivityNote(note, pid, spId, itemId) {
 // ── PM Management Tab ──
 
 function getItemInvoiceRefs(itemId) {
-  return (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
+  // Check both directions: invoice lineItems → proposalItemId, AND item._invoiceIds
+  const fromLineItems = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
+  if (fromLineItems.length) return fromLineItems;
+  // Fallback: check if item has _invoiceIds tagged
+  const item = findProposalItemById(itemId);
+  if (item?._invoiceIds?.length) {
+    return (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && item._invoiceIds.includes(inv.id));
+  }
+  return [];
+}
+
+function findProposalItemById(itemId) {
+  for (const pid of Object.keys(S.proposals||{})) {
+    const prop = S.proposals[pid];
+    for (const sp of (prop.spaces||[])) {
+      const item = (sp.items||[]).find(i => i.id === itemId);
+      if (item) return item;
+    }
+  }
+  return null;
 }
 
 function renderInvoiceRefBadges(itemId, size) {
@@ -8970,20 +8989,33 @@ function cancelInvoice() {
 
   const pid = inv.projectId;
   const prop = S.proposals[pid];
-  // Combine saved + builder line items for proposal item IDs
-  const allLineItems = (inv.lineItems||[]).concat((_invLineItems||[]).filter(l => l.proposalItemId && !(inv.lineItems||[]).some(s => s.proposalItemId === l.proposalItemId)));
 
   // Revert linked proposal items to "pending_status"
   let revertCount = 0;
   if (prop) {
+    // Method 1: find items via lineItems.proposalItemId
+    const allLineItems = (inv.lineItems||[]).concat((_invLineItems||[]).filter(l => l.proposalItemId && !(inv.lineItems||[]).some(s => s.proposalItemId === l.proposalItemId)));
     allLineItems.forEach(line => {
       if (line.proposalItemId) {
         (prop.spaces||[]).forEach(sp => {
           const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
-          if (item) { item.status = 'pending_status'; revertCount++; }
+          if (item) { item.status = 'pending_status'; if (item._invoiceIds) item._invoiceIds = item._invoiceIds.filter(id => id !== inv.id); revertCount++; }
         });
       }
     });
+
+    // Method 2: find items tagged with this invoice's ID (backup)
+    if (revertCount === 0) {
+      (prop.spaces||[]).forEach(sp => {
+        (sp.items||[]).forEach(item => {
+          if (item._invoiceIds && item._invoiceIds.includes(inv.id)) {
+            item.status = 'pending_status';
+            item._invoiceIds = item._invoiceIds.filter(id => id !== inv.id);
+            revertCount++;
+          }
+        });
+      });
+    }
 
     // Add notification
     if (!prop.notifications) prop.notifications = [];
@@ -9013,14 +9045,20 @@ function processInvoiceSentAutomations(inv) {
   let updatedCount = 0;
   let addedCount = 0;
 
+  // Track which proposal items are on this invoice (store on the items themselves)
   inv.lineItems.forEach(line => {
     // 1. Update proposal item status to "invoiced"
     if (line.proposalItemId) {
       (prop.spaces||[]).forEach(sp => {
         const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
-        if (item && item.status !== 'invoiced') {
-          item.status = 'invoiced';
-          updatedCount++;
+        if (item) {
+          if (item.status !== 'invoiced') {
+            item.status = 'invoiced';
+            updatedCount++;
+          }
+          // Tag the item with invoice reference
+          if (!item._invoiceIds) item._invoiceIds = [];
+          if (!item._invoiceIds.includes(inv.id)) item._invoiceIds.push(inv.id);
         }
       });
     }
