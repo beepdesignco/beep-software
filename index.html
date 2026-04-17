@@ -9216,13 +9216,67 @@ function renderInvoices() {
       <summary style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);cursor:pointer;user-select:none;padding:8px 0;border-top:1px solid var(--border)">
         Cancelled Invoices (${cancelled.length})
       </summary>
-      <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px;opacity:0.7">
-        ${cancelled.map(inv => renderInvCard(inv)).join('')}
+      <div style="padding-top:8px">
+        <div id="inv-delete-bar" style="display:none;margin-bottom:10px">
+          <button class="btn btn-danger btn-sm" onclick="deleteSelectedInvoices()" id="inv-delete-btn">Delete</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;opacity:0.7">
+          ${cancelled.map(inv => `
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" value="${inv.id}" class="inv-del-cb" onchange="updateDeleteBar()" style="accent-color:var(--russet);width:15px;height:15px;flex-shrink:0;cursor:pointer">
+            <div style="flex:1">${renderInvCard(inv)}</div>
+          </div>`).join('')}
+        </div>
       </div>
     </details>`;
   }
 
   body.innerHTML = html;
+}
+
+function updateDeleteBar() {
+  const checked = $a('.inv-del-cb:checked');
+  const bar = $c('inv-delete-bar');
+  const btn = $c('inv-delete-btn');
+  if (checked.length) {
+    bar.style.display = '';
+    btn.textContent = checked.length === 1 ? 'Delete' : 'Delete (' + checked.length + ')';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function deleteSelectedInvoices() {
+  const checked = [...$a('.inv-del-cb:checked')].map(cb => cb.value);
+  if (!checked.length) return;
+  if (!confirm('Delete ' + checked.length + ' cancelled invoice' + (checked.length !== 1 ? 's' : '') + '? This cannot be undone.')) return;
+
+  checked.forEach(invId => {
+    const inv = (S.invoices||[]).find(i => i.id === invId);
+    if (!inv) return;
+
+    // Remove untracked open line items that were added from this invoice
+    const prop = S.proposals[inv.projectId];
+    if (prop) {
+      prop.spaces.forEach(sp => {
+        sp.items = (sp.items||[]).filter(item => {
+          // Keep if not from this invoice
+          if (item._invoiceLineId) {
+            const line = (inv.lineItems||[]).find(l => l.id === item._invoiceLineId);
+            if (line && !line.trackInPM) return false; // delete untracked
+          }
+          return true;
+        });
+      });
+    }
+
+    // Remove the invoice
+    S.invoices = S.invoices.filter(i => i.id !== invId);
+  });
+
+  save();
+  renderInvoices();
+  toast(checked.length + ' invoice' + (checked.length !== 1 ? 's' : '') + ' deleted.');
 }
 
 function openEditInvoice(invId) {
