@@ -1173,6 +1173,10 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◎</span>
         <span class="nav-label">Invoices</span>
       </div>
+      <div class="nav-item" onclick="showView('expenses')" data-view="expenses">
+        <span class="nav-icon">◆</span>
+        <span class="nav-label">Expenses</span>
+      </div>
       <div class="nav-item" onclick="showView('documents')" data-view="documents">
         <span class="nav-icon">◫</span>
         <span class="nav-label">Documents</span>
@@ -1402,6 +1406,29 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-invtab="reports" onclick="setInvTab('reports')" style="margin-bottom:-1px">Reports</button>
       </div>
       <div class="contacts-body" id="invoices-body"></div>
+    </div>
+
+    <!-- ─────────── EXPENSES VIEW ─────────── -->
+    <div class="view" id="view-expenses">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Expenses</div>
+          <div class="page-sub">Track billable, pass-through, and non-billable expenses</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="fi" id="exp-filter-project" onchange="renderExpenses()" style="font-size:12px;padding:6px 10px;width:200px">
+            <option value="">All Projects</option>
+          </select>
+          <select class="fi" id="exp-filter-type" onchange="renderExpenses()" style="font-size:12px;padding:6px 10px">
+            <option value="">All Types</option>
+            <option value="billable">Billable</option>
+            <option value="passthrough">Pass-Through</option>
+            <option value="nonbillable">Non-Billable</option>
+          </select>
+          <button class="btn btn-primary" onclick="openNewExpenseModal()">+ New Expense</button>
+        </div>
+      </div>
+      <div class="contacts-body" id="expenses-body"></div>
     </div>
 
     <!-- ─────────── DOCUMENTS VIEW ─────────── -->
@@ -1980,6 +2007,17 @@ tr:hover .row-btns { opacity:1; }
       <button class="btn btn-primary btn-sm" onclick="addTaskStatus()">Add</button>
     </div>
 
+    <div class="modal-section-hd" style="margin-top:22px">Payment Cards</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
+      Cards available for expense tracking.
+    </div>
+    <div id="as-cards-list" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px"></div>
+    <div style="display:flex;gap:6px">
+      <input type="text" class="fi" id="as-card-input" placeholder="e.g. Amex ending 4242" style="flex:1;font-size:12px;padding:6px 10px"
+        onkeydown="if(event.key==='Enter'){addPaymentCard();event.preventDefault()}">
+      <button class="btn btn-primary btn-sm" onclick="addPaymentCard()">Add</button>
+    </div>
+
     <div class="modal-footer" style="margin-top:18px">
       <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
       <div style="flex:1"></div>
@@ -2217,6 +2255,70 @@ tr:hover .row-btns { opacity:1; }
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-estimate')">Cancel</button>
       <button class="btn btn-primary" onclick="saveEstimate()">Save Estimate</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ EXPENSE MODAL ═════════════════ -->
+<div class="overlay" id="modal-expense">
+  <div class="modal" style="width:480px">
+    <button class="modal-x" onclick="closeModal('modal-expense')">✕</button>
+    <div class="modal-title" id="exp-modal-title">New Expense</div>
+    <input type="hidden" id="exp-id">
+    <div class="fg">
+      <label class="fl">Project</label>
+      <select class="fi fsel" id="exp-project"><!-- populated by JS --></select>
+    </div>
+    <div class="fg">
+      <label class="fl">Expense Name</label>
+      <input type="text" class="fi" id="exp-name" placeholder="e.g. Table from Magazine St. Antiques">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Net Cost</label>
+        <input type="text" class="fi" id="exp-cost" placeholder="$0.00">
+      </div>
+      <div class="fg">
+        <label class="fl">Date</label>
+        <input type="date" class="fi" id="exp-date">
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Card Used</label>
+        <select class="fi fsel" id="exp-card"><!-- populated by JS --></select>
+      </div>
+      <div class="fg">
+        <label class="fl">Expense Type <span style="font-weight:400;color:var(--russet);text-transform:none;letter-spacing:0">*required</span></label>
+        <select class="fi fsel" id="exp-type">
+          <option value="">— Select —</option>
+          <option value="billable">Billable</option>
+          <option value="passthrough">Pass-Through</option>
+          <option value="nonbillable">Non-Billable</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:16px;padding:8px 0">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="exp-track" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        Track in Project Management
+      </label>
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="exp-notes" style="resize:vertical;min-height:40px;font-size:12px" placeholder="Details, vendor info, etc."></textarea>
+    </div>
+    <div class="fg" style="margin-top:4px">
+      <label class="fl">Receipt</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0">
+        <span>+ Upload Receipt</span>
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg" style="display:none" onchange="handleExpReceiptUpload(this)">
+      </label>
+      <div id="exp-receipt-preview" style="margin-top:4px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-expense')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveExpense()">Save Expense</button>
     </div>
   </div>
 </div>
@@ -2480,6 +2582,8 @@ function load() {
     if (!S.taskStatuses || !S.taskStatuses.length) S.taskStatuses = [...DEFAULT_TASK_STATUSES];
     if (!S.invoices) S.invoices = [];
     if (!S.documents) S.documents = [];
+    if (!S.expenses) S.expenses = [];
+    if (!S.paymentCards) S.paymentCards = [];
     // Migrate old 'brands' field → 'lines'
     S.contacts.forEach(c => {
       if (c.brands !== undefined && c.lines === undefined) {
@@ -2686,6 +2790,7 @@ function showView(v) {
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'time') renderTime();
+  if (v === 'expenses') renderExpenses();
   if (v === 'documents') renderDocuments();
   if (v === 'doc-editor') { /* rendered by openDocEditor */ }
   if (v === 'invoices') { if (_invTab === 'reports') renderInvReports(); else renderInvoices(); }
@@ -7183,7 +7288,32 @@ function openAppSettings() {
   renderQtyUnitsList();
   renderStatusColorSettings();
   renderTaskStatusSettings();
+  renderCardsList();
   $c('modal-app-settings').classList.add('open');
+}
+
+function renderCardsList() {
+  if (!S.paymentCards) S.paymentCards = [];
+  $c('as-cards-list').innerHTML = S.paymentCards.map((c, i) =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.06);border:1px solid var(--border);border-radius:var(--r);padding:4px 10px;font-size:11px;font-family:var(--font-b);color:var(--text-dark)">${escH(c)} <button onclick="removePaymentCard(${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button></span>`
+  ).join('') || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No cards added.</span>';
+}
+
+function addPaymentCard() {
+  const input = $c('as-card-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!S.paymentCards) S.paymentCards = [];
+  S.paymentCards.push(val);
+  save();
+  input.value = '';
+  renderCardsList();
+}
+
+function removePaymentCard(idx) {
+  S.paymentCards.splice(idx, 1);
+  save();
+  renderCardsList();
 }
 
 function renderQtyUnitsList() {
@@ -7653,6 +7783,226 @@ function initTimer() {
   else _renderTimerWidget();
 }
  
+// ─── EXPENSES ─────────────────────────────────────────
+
+let _expReceipt = null;
+
+function openNewExpenseModal() {
+  $c('exp-modal-title').textContent = 'New Expense';
+  $c('exp-id').value = '';
+  $c('exp-name').value = '';
+  $c('exp-cost').value = '';
+  $c('exp-date').value = new Date().toISOString().slice(0,10);
+  $c('exp-type').value = '';
+  $c('exp-track').checked = false;
+  $c('exp-notes').value = '';
+  _expReceipt = null;
+  $c('exp-receipt-preview').innerHTML = '';
+
+  $c('exp-project').innerHTML = '<option value="">— Select project —</option>' +
+    S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  $c('exp-card').innerHTML = '<option value="">— Select card —</option>' +
+    (S.paymentCards||[]).map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join('');
+
+  $c('modal-expense').classList.add('open');
+}
+
+function openEditExpense(expId) {
+  const exp = (S.expenses||[]).find(e => e.id === expId);
+  if (!exp) return;
+  $c('exp-modal-title').textContent = 'Edit Expense';
+  $c('exp-id').value = exp.id;
+  $c('exp-name').value = exp.name || '';
+  $c('exp-cost').value = exp.cost || '';
+  $c('exp-date').value = exp.date || '';
+  $c('exp-type').value = exp.expenseType || '';
+  $c('exp-track').checked = !!exp.trackInPM;
+  $c('exp-notes').value = exp.notes || '';
+  _expReceipt = exp.receipt || null;
+
+  $c('exp-project').innerHTML = '<option value="">— Select project —</option>' +
+    S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  $c('exp-project').value = exp.projectId || '';
+
+  $c('exp-card').innerHTML = '<option value="">— Select card —</option>' +
+    (S.paymentCards||[]).map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join('');
+  $c('exp-card').value = exp.card || '';
+
+  renderExpReceiptPreview();
+  $c('modal-expense').classList.add('open');
+}
+
+function handleExpReceiptUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    _expReceipt = { name: file.name, size: file.size, type: file.type, data: e.target.result };
+    renderExpReceiptPreview();
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function renderExpReceiptPreview() {
+  const el = $c('exp-receipt-preview');
+  if (!_expReceipt) { el.innerHTML = ''; return; }
+  el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:3px 8px;font-size:11px;font-family:var(--font-b)">
+    ${_expReceipt.type?.includes('pdf')?'📄':'🖼'} ${escH(_expReceipt.name)}
+    <button onclick="_expReceipt=null;renderExpReceiptPreview()" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
+  </span>`;
+}
+
+function saveExpense() {
+  const expType = $c('exp-type').value;
+  if (!expType) { toast('Select an expense type.'); $c('exp-type').focus(); return; }
+  const name = $c('exp-name').value.trim();
+  if (!name) { $c('exp-name').focus(); return; }
+  const pid = $c('exp-project').value;
+
+  const expense = {
+    id: $c('exp-id').value || uid(),
+    projectId: pid,
+    name,
+    cost: $c('exp-cost').value.trim(),
+    date: $c('exp-date').value,
+    card: $c('exp-card').value,
+    expenseType: expType,
+    trackInPM: $c('exp-track').checked,
+    notes: $c('exp-notes').value.trim(),
+    receipt: _expReceipt,
+    resolved: false,
+    created: new Date().toISOString(),
+  };
+
+  if (!S.expenses) S.expenses = [];
+  const existIdx = S.expenses.findIndex(e => e.id === expense.id);
+  if (existIdx > -1) {
+    expense.created = S.expenses[existIdx].created;
+    expense.resolved = S.expenses[existIdx].resolved;
+    S.expenses[existIdx] = expense;
+  } else {
+    S.expenses.push(expense);
+  }
+
+  // If tracked in PM and billable, add to project proposal as billable item
+  if (expense.trackInPM && expense.expenseType === 'billable' && pid) {
+    const prop = S.proposals[pid];
+    if (prop) {
+      const alreadyAdded = prop.spaces.some(sp => (sp.items||[]).some(i => i._expenseId === expense.id));
+      if (!alreadyAdded) {
+        let expSpace = prop.spaces.find(sp => sp.name === 'Expenses');
+        if (!expSpace) { expSpace = { id:uid(), name:'Expenses', items:[] }; prop.spaces.push(expSpace); }
+        expSpace.items.push({
+          id: uid(), _expenseId: expense.id, type:'openline', name: expense.name,
+          netPrice: expense.cost, qty:'1', status:'billable',
+          notes:'Expense: '+expense.name, category:'', allowance:false,
+          taxExempt:false, billCostOnly:false,
+        });
+      }
+    }
+  }
+
+  save();
+  closeModal('modal-expense');
+  if (S.currentView === 'expenses') renderExpenses();
+  toast('Expense saved.');
+}
+
+function deleteExpense(expId) {
+  if (!confirm('Delete this expense?')) return;
+  S.expenses = (S.expenses||[]).filter(e => e.id !== expId);
+  save();
+  renderExpenses();
+  toast('Expense deleted.');
+}
+
+function renderExpenses() {
+  const body = $c('expenses-body');
+  if (!body) return;
+
+  const projFilter = $c('exp-filter-project');
+  if (projFilter) {
+    const cur = projFilter.value;
+    projFilter.innerHTML = '<option value="">All Projects</option>' +
+      S.projects.map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+
+  let expenses = S.expenses || [];
+  const fProj = $c('exp-filter-project')?.value;
+  const fType = $c('exp-filter-type')?.value;
+  if (fProj) expenses = expenses.filter(e => e.projectId === fProj);
+  if (fType) expenses = expenses.filter(e => e.expenseType === fType);
+
+  if (!expenses.length) {
+    body.innerHTML = '<div class="no-results">No expenses yet. Log your first one.</div>';
+    return;
+  }
+
+  const sorted = [...expenses].sort((a,b) => (b.created||'').localeCompare(a.created||''));
+  const typeColors = { billable:'#b33', passthrough:'#2d5a8a', nonbillable:'#8a8a8a' };
+  const typeLabels = { billable:'Billable', passthrough:'Pass-Through', nonbillable:'Non-Billable' };
+
+  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(exp => {
+    const proj = S.projects.find(p => p.id === exp.projectId);
+    const color = typeColors[exp.expenseType] || '#8a8a8a';
+    const label = typeLabels[exp.expenseType] || exp.expenseType;
+    return `
+    <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t);display:flex;align-items:center;justify-content:space-between" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditExpense('${exp.id}')">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(exp.name)}</span>
+          <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${color}15;color:${color};border:1px solid ${color}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${label}</span>
+          ${exp.resolved ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--text-light)">Resolved</span>' : ''}
+          ${exp.trackInPM ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet)">Tracked</span>' : ''}
+        </div>
+        <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
+          ${proj ? escH(proj.name)+' · ' : ''}${exp.date ? escH(exp.date)+' · ' : ''}${exp.card ? escH(exp.card) : ''}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${exp.cost ? fmt(parse$(exp.cost)) : '—'}</span>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteExpense('${exp.id}')" style="font-size:10px;padding:4px 8px">✕</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function addExpenseToInvoice(expId, checked) {
+  if (!checked) {
+    _invLineItems = _invLineItems.filter(l => l._expenseId !== expId);
+    renderInvLineItems();
+    recalcInvoice();
+    renderInvoiceBuilder();
+    return;
+  }
+  const exp = (S.expenses||[]).find(e => e.id === expId);
+  if (!exp) return;
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  const proj = S.projects.find(p => p.id === inv?.projectId);
+  const markupPct = proj?.markupPct || 25;
+  const cost = parse$(exp.cost);
+  const isBillable = exp.expenseType === 'billable';
+  const price = isBillable ? cost * (1 + markupPct/100) : cost;
+  _invLineItems.push({
+    id: uid(),
+    _expenseId: exp.id,
+    name: exp.name,
+    qty: 1,
+    price: price,
+    taxable: isBillable,
+    trackInPM: false,
+    manual: true,
+  });
+  renderInvLineItems();
+  recalcInvoice();
+  renderInvoiceBuilder();
+}
+
+function getUnresolvedExpenses(pid) {
+  return (S.expenses||[]).filter(e => e.projectId === pid && !e.resolved && (e.expenseType === 'billable' || e.expenseType === 'passthrough'));
+}
+
 // ─── DOCUMENTS ────────────────────────────────────────
 
 const DOC_TEMPLATES = [
@@ -8906,6 +9256,28 @@ function renderInvoiceBuilder() {
     html += '</div></div>';
   }
 
+  // Unresolved Expenses
+  const unresolvedExp = getUnresolvedExpenses(inv.projectId);
+  if (unresolvedExp.length) {
+    const proj = S.projects.find(p => p.id === inv.projectId);
+    const markupPct = proj?.markupPct || 25;
+    html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--russet);margin-bottom:10px">Unresolved Expenses</div>
+      ${unresolvedExp.map(exp => {
+        const cost = parse$(exp.cost);
+        const alreadyAdded = _invLineItems.some(l => l._expenseId === exp.id);
+        const isBillable = exp.expenseType === 'billable';
+        const suggestedPrice = isBillable ? cost * (1 + markupPct/100) : cost;
+        return `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs);opacity:${alreadyAdded?'0.4':'1'}" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${alreadyAdded?'checked disabled':''} onchange="addExpenseToInvoice('${exp.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(exp.name)}</span>
+          <span style="font-size:9px;font-family:var(--font-b);color:${isBillable?'#b33':'#2d5a8a'}">${isBillable?'Billable':'Pass-Through'}</span>
+          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(suggestedPrice)}</span>
+        </label>`;
+      }).join('')}
+    </div>`;
+  }
+
   // Line items
   html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Line Items</div>
@@ -9294,6 +9666,14 @@ function processInvoiceSentAutomations(inv) {
         });
         addedCount++;
       }
+    }
+  });
+
+  // 2b. Mark expenses as resolved
+  inv.lineItems.forEach(line => {
+    if (line._expenseId) {
+      const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
+      if (exp) exp.resolved = true;
     }
   });
 
