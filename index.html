@@ -3315,6 +3315,15 @@ function renderActivityNote(note, pid, spId, itemId) {
 
 // ── PM Management Tab ──
 
+function dismissNotification(pid, notifId) {
+  const prop = S.proposals[pid];
+  if (!prop?.notifications) return;
+  const n = prop.notifications.find(n => n.id === notifId);
+  if (n) n.read = true;
+  save();
+  renderProjectDetail();
+}
+
 function pmSearchChanged(val) {
   _pmSearch = val.toLowerCase().trim();
   renderProjectDetail();
@@ -3779,8 +3788,22 @@ function renderPDManagement(proj, pid) {
     return renderPMItemDetailPanel(_pmDetailItem.pid, _pmDetailItem.spId, _pmDetailItem.itemId);
   }
 
+  // Notifications
+  let html = '';
+  const notifs = (prop.notifications||[]).filter(n => !n.read);
+  if (notifs.length) {
+    html += `<div style="margin-bottom:16px">${notifs.map(n => `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:rgba(45,122,74,0.06);border:1px solid rgba(45,122,74,0.18);border-radius:var(--r);margin-bottom:6px">
+        <div style="font-family:var(--font-b);font-size:12px;color:#2d7a4a">
+          <strong>${escH(n.invoiceNumber||'')}</strong> — ${escH(n.message)}
+          <span style="font-size:10px;color:rgba(45,122,74,0.6);margin-left:6px">${new Date(n.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
+        </div>
+        <button onclick="dismissNotification('${pid}','${n.id}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:rgba(45,122,74,0.5);white-space:nowrap">Dismiss</button>
+      </div>`).join('')}</div>`;
+  }
+
   // Search bar
-  let html = `
+  html += `
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
     <input type="text" class="search-in" value="${escH(_pmSearch)}" placeholder="Search items, vendors, workrooms…" oninput="pmSearchChanged(this.value)" style="width:260px">
     <button class="btn btn-ghost btn-sm" onclick="document.getElementById('pm-filter-panel').style.display=document.getElementById('pm-filter-panel').style.display==='none'?'':'none'" style="font-size:11px">
@@ -8876,6 +8899,7 @@ function saveInvoiceFromBuilder(status) {
   const ccFee = ccPct > 0 ? (afterDiscount + tax) * (ccPct / 100) : 0;
   const total = afterDiscount + tax + ccFee;
 
+  const prevStatus = inv.status;
   Object.assign(inv, {
     status,
     lineItems: JSON.parse(JSON.stringify(_invLineItems)),
@@ -8887,9 +8911,83 @@ function saveInvoiceFromBuilder(status) {
     notes: $c('inv-notes')?.value?.trim() || '',
     files: [..._invFiles],
   });
+
+  // Run automations when marking as sent
+  if (status === 'sent' && prevStatus !== 'sent') {
+    processInvoiceSentAutomations(inv);
+  }
+
   save();
   showView('invoices');
   toast('Invoice ' + inv.number + (status === 'sent' ? ' saved & marked sent.' : ' draft saved.'));
+}
+
+function processInvoiceSentAutomations(inv) {
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  let updatedCount = 0;
+  let addedCount = 0;
+
+  inv.lineItems.forEach(line => {
+    // 1. Update proposal item status to "invoiced"
+    if (line.proposalItemId) {
+      (prop.spaces||[]).forEach(sp => {
+        const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
+        if (item && item.status !== 'invoiced') {
+          item.status = 'invoiced';
+          updatedCount++;
+        }
+      });
+    }
+
+    // 2. Add manual "track" items to proposal as open line items
+    if (!line.proposalItemId && line.trackInPM && line.name) {
+      // Find or create an "Invoice Items" space
+      let invSpace = prop.spaces.find(sp => sp.name === 'Invoice Items');
+      if (!invSpace) {
+        invSpace = { id: uid(), name: 'Invoice Items', items: [] };
+        prop.spaces.push(invSpace);
+      }
+      // Check if already added (by matching invoice line id)
+      const alreadyAdded = (invSpace.items||[]).some(i => i._invoiceLineId === line.id);
+      if (!alreadyAdded) {
+        invSpace.items.push({
+          id: uid(),
+          _invoiceLineId: line.id,
+          _invoiceNumber: inv.number,
+          type: 'openline',
+          name: line.name,
+          netPrice: String(line.price || ''),
+          qty: String(line.qty || 1),
+          status: 'invoiced',
+          notes: 'Added from invoice ' + inv.number,
+          category: '',
+          allowance: false,
+          taxExempt: !line.taxable,
+          billCostOnly: true,
+        });
+        addedCount++;
+      }
+    }
+  });
+
+  // 3. Add notification to project
+  if (updatedCount || addedCount) {
+    if (!prop.notifications) prop.notifications = [];
+    const parts = [];
+    if (updatedCount) parts.push(updatedCount + ' item' + (updatedCount!==1?'s':'') + ' updated to "Invoiced"');
+    if (addedCount) parts.push(addedCount + ' item' + (addedCount!==1?'s':'') + ' added to Project Management');
+    prop.notifications.push({
+      id: uid(),
+      type: 'invoice_sent',
+      invoiceId: inv.id,
+      invoiceNumber: inv.number,
+      message: 'Invoice ' + inv.number + ' sent: ' + parts.join(', '),
+      timestamp: new Date().toISOString(),
+      read: false,
+    });
+  }
 }
 
 function renderInvoices() {
