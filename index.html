@@ -2482,6 +2482,8 @@ function load() {
     if (!S.qtyUnits || !S.qtyUnits.length) S.qtyUnits = [...DEFAULT_QTY_UNITS];
     if (!S.statusColors || !Object.keys(S.statusColors).length) S.statusColors = {...DEFAULT_STATUS_COLORS};
     if (!S.taskStatuses || !S.taskStatuses.length) S.taskStatuses = [...DEFAULT_TASK_STATUSES];
+    if (!S.invoices) S.invoices = [];
+    if (!S.documents) S.documents = [];
     // Migrate old 'brands' field → 'lines'
     S.contacts.forEach(c => {
       if (c.brands !== undefined && c.lines === undefined) {
@@ -8963,6 +8965,9 @@ function cancelInvoice() {
   if (!inv) return;
   if (!confirm('Cancel this invoice? Linked items will be set to "Pending Status".')) return;
 
+  // Save current builder state first so lineItems are up to date
+  inv.lineItems = JSON.parse(JSON.stringify(_invLineItems));
+
   const pid = inv.projectId;
   const prop = S.proposals[pid];
 
@@ -9064,6 +9069,43 @@ function processInvoiceSentAutomations(inv) {
   }
 }
 
+let _invPage = 1;
+const INV_PER_PAGE = 20;
+
+function renderInvCard(inv) {
+  const proj = S.projects.find(p => p.id === inv.projectId);
+  const client = (S.clients||[]).find(c => c.id === inv.clientId);
+  const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+  const due = inv.total - paid;
+  const isOverdue = inv.status === 'sent' && inv.dueDate && new Date(inv.dueDate) < new Date();
+  const statusLabel = inv.status === 'cancelled' ? 'Cancelled' : inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
+  const statusColor = inv.status === 'cancelled' ? '#8a8a8a' : inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
+  const typeLabels = { phased:'Phased', monthly:'Monthly', standalone:'Standalone', design_fee:'Design Fee' };
+  return `
+  <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditInvoice('${inv.id}')">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany);letter-spacing:0.03em">${escH(inv.number)}</span>
+        <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${statusColor}15;color:${statusColor};border:1px solid ${statusColor}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${statusLabel}</span>
+        <span style="font-size:10px;font-family:var(--font-b);color:var(--text-light)">${typeLabels[inv.type]||inv.type}</span>
+      </div>
+      <span style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${fmt(inv.total)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:6px;font-size:11px;font-family:var(--font-b);color:var(--text-mid)">
+      ${proj ? '<span>'+escH(proj.name)+'</span>' : ''}
+      ${client ? '<span>· '+escH(client.name)+'</span>' : ''}
+      ${inv.phase ? '<span>· '+escH(inv.phase)+'</span>' : ''}
+      ${inv.sentDate ? '<span>· Sent: '+escH(inv.sentDate)+'</span>' : ''}
+      ${inv.dueDate ? '<span>· Due: '+escH(inv.dueDate)+'</span>' : ''}
+      ${inv.status === 'partial' ? '<span style="color:var(--russet)">· Outstanding: '+fmt(due)+'</span>' : ''}
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:var(--text-light);font-family:var(--font-b)">
+      ${(inv.lineItems||[]).length} item${(inv.lineItems||[]).length!==1?'s':''}
+      ${inv.files?.length ? ' · '+inv.files.length+' attachment'+(inv.files.length!==1?'s':'') : ''}
+    </div>
+  </div>`;
+}
+
 function renderInvoices() {
   const body = $c('invoices-body');
   if (!body) return;
@@ -9086,51 +9128,58 @@ function renderInvoices() {
   if (fStatus) {
     invoices = invoices.filter(i => {
       if (fStatus === 'overdue') return i.status === 'sent' && i.dueDate && new Date(i.dueDate) < new Date();
+      if (fStatus === 'cancelled') return i.status === 'cancelled';
       return i.status === fStatus;
     });
   }
 
-  if (!invoices.length) {
+  // Separate active from cancelled
+  const active = invoices.filter(i => i.status !== 'cancelled').sort((a,b) => (b.created||'').localeCompare(a.created||''));
+  const cancelled = invoices.filter(i => i.status === 'cancelled').sort((a,b) => (b.created||'').localeCompare(a.created||''));
+
+  if (!active.length && !cancelled.length) {
     body.innerHTML = '<div class="no-results">No invoices yet. Create your first one.</div>';
     return;
   }
 
-  const sorted = [...invoices].sort((a,b) => (b.created||'').localeCompare(a.created||''));
+  let html = '';
 
-  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(inv => {
-    const proj = S.projects.find(p => p.id === inv.projectId);
-    const client = (S.clients||[]).find(c => c.id === inv.clientId);
-    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
-    const due = inv.total - paid;
-    const isOverdue = inv.status === 'sent' && inv.dueDate && new Date(inv.dueDate) < new Date();
-    const statusLabel = inv.status === 'cancelled' ? 'Cancelled' : inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
-    const statusColor = inv.status === 'cancelled' ? '#8a8a8a' : inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
-    const typeLabels = { phased:'Phased', monthly:'Monthly', standalone:'Standalone', design_fee:'Design Fee' };
+  // Active invoices with pagination
+  if (active.length) {
+    const totalPages = Math.ceil(active.length / INV_PER_PAGE);
+    if (_invPage > totalPages) _invPage = totalPages;
+    if (_invPage < 1) _invPage = 1;
+    const start = (_invPage - 1) * INV_PER_PAGE;
+    const pageItems = active.slice(start, start + INV_PER_PAGE);
 
-    return `
-    <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditInvoice('${inv.id}')">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany);letter-spacing:0.03em">${escH(inv.number)}</span>
-          <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${statusColor}15;color:${statusColor};border:1px solid ${statusColor}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${statusLabel}</span>
-          <span style="font-size:10px;font-family:var(--font-b);color:var(--text-light)">${typeLabels[inv.type]||inv.type}</span>
-        </div>
-        <span style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${fmt(inv.total)}</span>
+    html += `<div style="display:flex;flex-direction:column;gap:8px">${pageItems.map(inv => renderInvCard(inv)).join('')}</div>`;
+
+    // Pagination controls
+    if (totalPages > 1) {
+      html += `<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;font-family:var(--font-b);font-size:12px">`;
+      if (_invPage > 1) html += `<button class="btn btn-ghost btn-sm" onclick="_invPage--;renderInvoices()" style="font-size:11px">← Prev</button>`;
+      for (let p = 1; p <= totalPages; p++) {
+        html += `<button onclick="_invPage=${p};renderInvoices()" style="font-size:11px;font-family:var(--font-h);font-weight:${p===_invPage?'800':'400'};padding:4px 10px;border-radius:8px;cursor:pointer;border:1px solid ${p===_invPage?'var(--pecan)':'var(--border)'};background:${p===_invPage?'rgba(91,45,34,0.08)':'white'};color:${p===_invPage?'var(--mahogany)':'var(--text-mid)'}">${p}</button>`;
+      }
+      if (_invPage < totalPages) html += `<button class="btn btn-ghost btn-sm" onclick="_invPage++;renderInvoices()" style="font-size:11px">Next →</button>`;
+      html += `</div>`;
+    }
+  }
+
+  // Cancelled invoices in collapsed dropdown
+  if (cancelled.length) {
+    html += `
+    <details style="margin-top:24px">
+      <summary style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);cursor:pointer;user-select:none;padding:8px 0;border-top:1px solid var(--border)">
+        Cancelled Invoices (${cancelled.length})
+      </summary>
+      <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px;opacity:0.7">
+        ${cancelled.map(inv => renderInvCard(inv)).join('')}
       </div>
-      <div style="display:flex;align-items:center;gap:12px;margin-top:6px;font-size:11px;font-family:var(--font-b);color:var(--text-mid)">
-        ${proj ? '<span>'+escH(proj.name)+'</span>' : ''}
-        ${client ? '<span>· '+escH(client.name)+'</span>' : ''}
-        ${inv.phase ? '<span>· '+escH(inv.phase)+'</span>' : ''}
-        ${inv.sentDate ? '<span>· Sent: '+escH(inv.sentDate)+'</span>' : ''}
-        ${inv.dueDate ? '<span>· Due: '+escH(inv.dueDate)+'</span>' : ''}
-        ${inv.status === 'partial' ? '<span style="color:var(--russet)">· Outstanding: '+fmt(due)+'</span>' : ''}
-      </div>
-      <div style="margin-top:6px;font-size:10px;color:var(--text-light);font-family:var(--font-b)">
-        ${inv.lineItems.length} item${inv.lineItems.length!==1?'s':''}
-        ${inv.files?.length ? ' · '+inv.files.length+' attachment'+(inv.files.length!==1?'s':'') : ''}
-      </div>
-    </div>`;
-  }).join('')}</div>`;
+    </details>`;
+  }
+
+  body.innerHTML = html;
 }
 
 function openEditInvoice(invId) {
