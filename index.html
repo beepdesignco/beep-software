@@ -8936,6 +8936,9 @@ function renderInvoiceBuilder() {
         <button class="btn btn-danger btn-sm" onclick="deleteDraft()">Delete Draft</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
         <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
+    } else if (inv.status === 'paid' || inv.status === 'partial') {
+      actions.innerHTML = `
+        <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
     } else {
       actions.innerHTML = `
         <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
@@ -9030,6 +9033,92 @@ function saveInvoiceFromBuilder(status) {
   save();
   showView('invoices');
   toast('Invoice ' + inv.number + (status === 'sent' ? ' saved & marked sent.' : ' draft saved.'));
+}
+
+function processInvoicePaidAutomations(inv) {
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  let updatedCount = 0;
+
+  // Update proposal items to ready_for_ordering
+  (inv.lineItems||[]).forEach(line => {
+    if (line.proposalItemId) {
+      (prop.spaces||[]).forEach(sp => {
+        const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
+        if (item && item.status === 'invoiced') { item.status = 'ready_for_ordering'; updatedCount++; }
+      });
+    }
+  });
+  // Backup: check _invoiceIds
+  (prop.spaces||[]).forEach(sp => {
+    (sp.items||[]).forEach(item => {
+      if (item._invoiceIds?.includes(inv.id) && item.status === 'invoiced') {
+        item.status = 'ready_for_ordering'; updatedCount++;
+      }
+    });
+  });
+
+  if (updatedCount) {
+    if (!prop.notifications) prop.notifications = [];
+    prop.notifications.push({
+      id: uid(),
+      type: 'invoice_paid',
+      invoiceId: inv.id,
+      invoiceNumber: inv.number,
+      message: 'Invoice ' + inv.number + ' paid — ' + updatedCount + ' item' + (updatedCount!==1?'s':'') + ' ready for ordering',
+      timestamp: new Date().toISOString(),
+      read: false,
+    });
+  }
+}
+
+function revertToSent() {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  if (!confirm('Revert this invoice to "Sent" status? Payment data will be cleared and item statuses will revert to "Invoiced".')) return;
+
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+
+  // Revert linked proposal items from ready_for_ordering back to invoiced
+  if (prop) {
+    const allLineItems = inv.lineItems || [];
+    allLineItems.forEach(line => {
+      if (line.proposalItemId) {
+        (prop.spaces||[]).forEach(sp => {
+          const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
+          if (item && item.status === 'ready_for_ordering') item.status = 'invoiced';
+        });
+      }
+    });
+    // Also check _invoiceIds backup
+    (prop.spaces||[]).forEach(sp => {
+      (sp.items||[]).forEach(item => {
+        if (item._invoiceIds?.includes(inv.id) && item.status === 'ready_for_ordering') {
+          item.status = 'invoiced';
+        }
+      });
+    });
+
+    if (!prop.notifications) prop.notifications = [];
+    prop.notifications.push({
+      id: uid(),
+      type: 'invoice_reverted',
+      invoiceId: inv.id,
+      invoiceNumber: inv.number,
+      message: 'Invoice ' + inv.number + ' reverted to Sent — items set back to "Invoiced"',
+      timestamp: new Date().toISOString(),
+      read: false,
+    });
+  }
+
+  // Clear payments and revert status
+  inv.payments = [];
+  inv.status = 'sent';
+  save();
+  renderInvoiceBuilder();
+  toast('Invoice ' + inv.number + ' reverted to Sent status.');
 }
 
 function cancelInvoice() {
