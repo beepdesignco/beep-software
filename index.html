@@ -7991,7 +7991,7 @@ function addExpenseToInvoice(expId, checked) {
     qty: 1,
     price: price,
     taxable: isBillable,
-    trackInPM: false,
+    trackInPM: !!exp.trackInPM,
     manual: true,
   });
   renderInvLineItems();
