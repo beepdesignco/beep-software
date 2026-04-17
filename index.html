@@ -1448,11 +1448,7 @@ tr:hover .row-btns { opacity:1; }
           <div class="page-title" id="invb-title">Invoice</div>
           <div class="page-sub" id="invb-subtitle"></div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
-          <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
-          <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>
-        </div>
+        <div style="display:flex;gap:8px;align-items:center" id="invb-actions"></div>
       </div>
       <div class="contacts-body" id="invb-body"><!-- rendered by JS --></div>
     </div>
@@ -8929,6 +8925,60 @@ function renderInvoiceBuilder() {
   renderInvLineItems();
   renderInvFiles();
   recalcInvoice();
+
+  // Set action buttons based on invoice status
+  const actions = $c('invb-actions');
+  if (actions) {
+    if (inv.status === 'cancelled') {
+      actions.innerHTML = '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
+    } else if (inv.status === 'draft') {
+      actions.innerHTML = `
+        <button class="btn btn-danger btn-sm" onclick="deleteDraft()">Delete Draft</button>
+        <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
+        <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
+    } else {
+      actions.innerHTML = `
+        <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
+        <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
+        <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
+    }
+  }
+}
+
+function deleteCurrentInvoice() {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  if (!confirm('Delete invoice ' + inv.number + '? This cannot be undone.')) return;
+
+  // Remove untracked open line items from PM
+  const prop = S.proposals[inv.projectId];
+  if (prop) {
+    prop.spaces.forEach(sp => {
+      sp.items = (sp.items||[]).filter(item => {
+        if (item._invoiceLineId) {
+          const line = (inv.lineItems||[]).find(l => l.id === item._invoiceLineId);
+          if (line && !line.trackInPM) return false;
+        }
+        return true;
+      });
+    });
+  }
+
+  S.invoices = S.invoices.filter(i => i.id !== inv.id);
+  save();
+  showView('invoices');
+  toast('Invoice ' + inv.number + ' deleted.');
+}
+
+function deleteDraft() {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  if (!confirm('Delete this draft? Any tracked open line items that have not been saved will also be deleted.')) return;
+
+  S.invoices = S.invoices.filter(i => i.id !== inv.id);
+  save();
+  showView('invoices');
+  toast('Draft ' + inv.number + ' deleted.');
 }
 
 function saveInvoiceFromBuilder(status) {
@@ -9114,6 +9164,7 @@ function processInvoiceSentAutomations(inv) {
 
 let _invPage = 1;
 const INV_PER_PAGE = 20;
+let _invDeleteSelection = new Set();
 
 function renderInvCard(inv) {
   const proj = S.projects.find(p => p.id === inv.projectId);
@@ -9217,13 +9268,13 @@ function renderInvoices() {
         Cancelled Invoices (${cancelled.length})
       </summary>
       <div style="padding-top:8px">
-        <div id="inv-delete-bar" style="display:none;margin-bottom:10px">
-          <button class="btn btn-danger btn-sm" onclick="deleteSelectedInvoices()" id="inv-delete-btn">Delete</button>
+        <div id="inv-delete-bar" style="display:${_invDeleteSelection.size?'':'none'};margin-bottom:10px">
+          <button class="btn btn-danger btn-sm" onclick="deleteSelectedInvoices()" id="inv-delete-btn">${_invDeleteSelection.size > 1 ? 'Delete (' + _invDeleteSelection.size + ')' : 'Delete'}</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;opacity:0.7">
           ${cancelled.map(inv => `
           <div style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" value="${inv.id}" class="inv-del-cb" onchange="updateDeleteBar()" style="accent-color:var(--russet);width:15px;height:15px;flex-shrink:0;cursor:pointer">
+            <input type="checkbox" value="${inv.id}" class="inv-del-cb" ${_invDeleteSelection.has(inv.id)?'checked':''} onchange="updateDeleteBar()" style="accent-color:var(--russet);width:15px;height:15px;flex-shrink:0;cursor:pointer">
             <div style="flex:1">${renderInvCard(inv)}</div>
           </div>`).join('')}
         </div>
@@ -9235,19 +9286,26 @@ function renderInvoices() {
 }
 
 function updateDeleteBar() {
-  const checked = $a('.inv-del-cb:checked');
+  // Sync checkboxes with persistent set
+  $a('.inv-del-cb').forEach(cb => {
+    if (cb.checked) _invDeleteSelection.add(cb.value);
+    else _invDeleteSelection.delete(cb.value);
+  });
+  const count = _invDeleteSelection.size;
   const bar = $c('inv-delete-bar');
   const btn = $c('inv-delete-btn');
-  if (checked.length) {
-    bar.style.display = '';
-    btn.textContent = checked.length === 1 ? 'Delete' : 'Delete (' + checked.length + ')';
-  } else {
-    bar.style.display = 'none';
+  if (bar && btn) {
+    if (count) {
+      bar.style.display = '';
+      btn.textContent = count === 1 ? 'Delete' : 'Delete (' + count + ')';
+    } else {
+      bar.style.display = 'none';
+    }
   }
 }
 
 function deleteSelectedInvoices() {
-  const checked = [...$a('.inv-del-cb:checked')].map(cb => cb.value);
+  const checked = [..._invDeleteSelection];
   if (!checked.length) return;
   if (!confirm('Delete ' + checked.length + ' cancelled invoice' + (checked.length !== 1 ? 's' : '') + '? This cannot be undone.')) return;
 
@@ -9274,6 +9332,7 @@ function deleteSelectedInvoices() {
     S.invoices = S.invoices.filter(i => i.id !== invId);
   });
 
+  _invDeleteSelection.clear();
   save();
   renderInvoices();
   toast(checked.length + ' invoice' + (checked.length !== 1 ? 's' : '') + ' deleted.');
