@@ -1385,6 +1385,7 @@ tr:hover .row-btns { opacity:1; }
             <option value="partial">Partially Paid</option>
             <option value="paid">Paid</option>
             <option value="overdue">Overdue</option>
+            <option value="cancelled">Cancelled</option>
           </select>
           <select class="fi" id="inv-filter-type" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px">
             <option value="">All Types</option>
@@ -1448,6 +1449,7 @@ tr:hover .row-btns { opacity:1; }
           <div class="page-sub" id="invb-subtitle"></div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
           <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
           <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>
         </div>
@@ -2343,7 +2345,9 @@ const STAGES = [
 const STATUSES = [
   { v:'proposed',           l:'Proposed' },
   { v:'approved',           l:'Approved' },
+  { v:'billable',           l:'Billable' },
   { v:'invoiced',           l:'Invoiced' },
+  { v:'pending_status',     l:'Pending Status' },
   { v:'ready_for_ordering', l:'Ready for Ordering' },
   { v:'ordered',            l:'Ordered' },
   { v:'payment_processed',  l:'Payment Processed' },
@@ -2372,7 +2376,9 @@ function getShippingStatusLabel(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)|
 const DEFAULT_STATUS_COLORS = {
   proposed:           '#8a8a8a',
   approved:           '#2d7a4a',
+  billable:           '#b33333',
   invoiced:           '#2d5a8a',
+  pending_status:     '#c47a20',
   ready_for_ordering: '#6a5a2d',
   ordered:            '#2d5a8a',
   payment_processed:  '#2d7a4a',
@@ -3400,6 +3406,12 @@ function renderPMItemCard(item, sp, pid) {
           ${flags}
         </div>
         ${item.contact ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${escH(item.contact)}</div>` : ''}
+        ${(() => {
+          const linkedInvs = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === item.id));
+          return linkedInvs.length ? '<div style="margin-top:3px">' + linkedInvs.map(inv =>
+            '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);background:rgba(150,61,39,0.08);padding:1px 6px;border-radius:6px;margin-right:3px">' + escH(inv.number) + '</span>'
+          ).join('') + '</div>' : '';
+        })()}
       </div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
@@ -4002,6 +4014,12 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
           ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
         </div>
         <div style="font-size:12px;color:var(--text-mid);font-family:var(--font-b)">${escH(sp.name||'')}${item.contact ? ' · '+escH(item.contact) : ''}</div>
+        ${(() => {
+          const linkedInvs = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
+          return linkedInvs.length ? '<div style="margin-top:4px">' + linkedInvs.map(inv =>
+            '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-family:var(--font-b);color:var(--russet);background:rgba(150,61,39,0.08);padding:2px 8px;border-radius:8px;margin-right:4px">' + escH(inv.number) + (inv.phase?' · '+escH(inv.phase):'') + '</span>'
+          ).join('') + '</div>' : '';
+        })()}
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--font-h);font-weight:800;font-size:22px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
@@ -8767,22 +8785,40 @@ function renderInvoiceBuilder() {
         <button class="btn btn-ghost btn-sm" onclick="toggleAllInvItems()" style="font-size:10px">Select All / None</button>
       </div>
       <div id="inv-proposal-items" style="max-height:250px;overflow-y:auto">`;
+    // Collect eligible items (billable, approved, proposed) + already-selected
+    const invoiceableStatuses = ['billable','approved','proposed'];
+    const eligibleItems = [];
     prop.spaces.forEach(sp => {
       (sp.items||[]).forEach(item => {
-        const clientPrice = getItemClient(item, inv.projectId);
-        const qty = parseFloat(item.qty)||1;
-        const total = item.type === 'constructed' ? clientPrice : clientPrice * qty;
-        const checked = _invSelectedProposalItems.has(item.id);
-        const alreadyInvoiced = item.status === 'invoiced';
-        html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
-          <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
-          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
-          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
-          ${alreadyInvoiced ? '<span style="font-size:9px;color:var(--russet);font-family:var(--font-b)">invoiced</span>' : ''}
-          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
-        </label>`;
+        const isEligible = invoiceableStatuses.includes(item.status) || _invSelectedProposalItems.has(item.id);
+        if (isEligible) eligibleItems.push({ item, sp });
       });
     });
+    // Sort: billable first
+    eligibleItems.sort((a,b) => {
+      if (a.item.status === 'billable' && b.item.status !== 'billable') return -1;
+      if (b.item.status === 'billable' && a.item.status !== 'billable') return 1;
+      return 0;
+    });
+    eligibleItems.forEach(({item, sp}) => {
+      const clientPrice = getItemClient(item, inv.projectId);
+      const qty = parseFloat(item.qty)||1;
+      const total = item.type === 'constructed' ? clientPrice : clientPrice * qty;
+      const checked = _invSelectedProposalItems.has(item.id);
+      const statusColor = getStatusColor(item.status);
+      const statusLabel = STATUSES.find(s=>s.v===item.status)?.l || item.status;
+      html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
+        <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+        <span class="status-dot" style="background:${statusColor};width:6px;height:6px;flex-shrink:0"></span>
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
+        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
+        <span style="font-size:9px;font-family:var(--font-b);color:${statusColor}">${statusLabel}</span>
+        <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
+      </label>`;
+    });
+    if (!eligibleItems.length) {
+      html += '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 4px">No billable, approved, or proposed items.</div>';
+    }
     html += '</div></div>';
   }
 
@@ -8922,6 +8958,44 @@ function saveInvoiceFromBuilder(status) {
   toast('Invoice ' + inv.number + (status === 'sent' ? ' saved & marked sent.' : ' draft saved.'));
 }
 
+function cancelInvoice() {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  if (!confirm('Cancel this invoice? Linked items will be set to "Pending Status".')) return;
+
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+
+  // Revert linked proposal items to "pending_status"
+  if (prop) {
+    (inv.lineItems||[]).forEach(line => {
+      if (line.proposalItemId) {
+        (prop.spaces||[]).forEach(sp => {
+          const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
+          if (item) item.status = 'pending_status';
+        });
+      }
+    });
+
+    // Add notification
+    if (!prop.notifications) prop.notifications = [];
+    prop.notifications.push({
+      id: uid(),
+      type: 'invoice_cancelled',
+      invoiceId: inv.id,
+      invoiceNumber: inv.number,
+      message: 'Invoice ' + inv.number + ' cancelled — items set to "Pending Status"',
+      timestamp: new Date().toISOString(),
+      read: false,
+    });
+  }
+
+  inv.status = 'cancelled';
+  save();
+  showView('invoices');
+  toast('Invoice ' + inv.number + ' cancelled.');
+}
+
 function processInvoiceSentAutomations(inv) {
   const pid = inv.projectId;
   const prop = S.proposals[pid];
@@ -9029,8 +9103,8 @@ function renderInvoices() {
     const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
     const due = inv.total - paid;
     const isOverdue = inv.status === 'sent' && inv.dueDate && new Date(inv.dueDate) < new Date();
-    const statusLabel = inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
-    const statusColor = inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
+    const statusLabel = inv.status === 'cancelled' ? 'Cancelled' : inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
+    const statusColor = inv.status === 'cancelled' ? '#8a8a8a' : inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
     const typeLabels = { phased:'Phased', monthly:'Monthly', standalone:'Standalone', design_fee:'Design Fee' };
 
     return `
