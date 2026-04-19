@@ -4,46 +4,48 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pay Invoice</title>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;700;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --mahogany:#5B2D22; --pecan:#9F6640; --russet:#7A4A10; --cloud:#F3E8D6; --bg:#FAF6EE;
     --border:#e5dcc9; --text-dark:#2a1e15; --text-mid:#6b5a49; --text-light:#a89a85;
+    --font-h: 'Oswald', sans-serif;
+    --font-b: 'Courier New', Courier, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin:0; font-family:'Inter', sans-serif; background:var(--bg); color:var(--text-dark); min-height:100vh; }
+  body { margin:0; font-family:var(--font-b); font-weight:700; background:var(--bg); color:var(--text-dark); min-height:100vh; }
   .brand-bar { background:var(--mahogany); color:var(--cloud); padding:28px 20px 32px; text-align:center; }
   .brand-bar .logo-img { max-height:72px; max-width:240px; display:block; margin:0 auto 12px; }
-  .brand-bar h1 { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:32px; letter-spacing:.06em; color:var(--cloud); text-transform:uppercase; margin:0; }
-  .brand-bar .meta { font-family:'Inter', sans-serif; font-size:12px; color:rgba(243,232,214,.7); margin-top:6px; }
+  .brand-bar h1 { font-family:var(--font-h); font-weight:700; font-size:32px; letter-spacing:.08em; color:var(--cloud); text-transform:uppercase; margin:0; }
+  .brand-bar .meta { font-family:var(--font-b); font-weight:700; font-size:12px; color:rgba(243,232,214,.7); margin-top:6px; }
   .wrap { max-width:720px; margin:0 auto; padding:28px 20px 80px; }
-  h1 { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:30px; letter-spacing:.04em; color:var(--mahogany); text-transform:uppercase; margin:0 0 4px; }
-  .studio-name { font-family:'Inter', sans-serif; font-size:13px; color:var(--text-mid); }
+  h1 { font-family:var(--font-h); font-weight:700; font-size:30px; letter-spacing:.06em; color:var(--mahogany); text-transform:uppercase; margin:0 0 4px; }
+  .studio-name { font-family:var(--font-b); font-weight:700; font-size:13px; color:var(--text-mid); }
   .card { background:white; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; box-shadow: 0 1px 3px rgba(91,45,34,0.04); }
-  .label { font-family:'Cormorant Garamond', serif; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--russet); margin-bottom:6px; }
+  .label { font-family:var(--font-h); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.12em; color:var(--russet); margin-bottom:6px; }
   .row { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; }
   .line-item { padding:10px 0; border-bottom:1px solid var(--border); }
   .line-item:last-child { border-bottom:none; }
   .line-item .top { display:flex; justify-content:space-between; gap:10px; }
-  .line-item .name { font-weight:600; font-size:14px; }
-  .line-item .desc { font-size:12px; color:var(--text-mid); margin-top:3px; white-space:pre-wrap; }
+  .line-item .name { font-weight:700; font-size:14px; }
+  .line-item .desc { font-size:12px; color:var(--text-mid); margin-top:3px; white-space:pre-wrap; font-weight:400; }
   .line-item .amount { font-weight:700; font-size:14px; color:var(--pecan); white-space:nowrap; }
-  .line-item .qty-price { font-size:11px; color:var(--text-light); }
+  .line-item .qty-price { font-size:11px; color:var(--text-light); font-weight:400; }
   .totals .row { font-size:13px; }
-  .totals .total-row { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:20px; color:var(--mahogany); border-top:2px solid var(--pecan); padding-top:10px; margin-top:10px; text-transform:uppercase; letter-spacing:.04em; }
+  .totals .total-row { font-family:var(--font-h); font-weight:700; font-size:22px; color:var(--mahogany); border-top:2px solid var(--pecan); padding-top:10px; margin-top:10px; text-transform:uppercase; letter-spacing:.06em; }
   .paid { color:#1a6e3a; }
   .due  { color:#c47a20; font-weight:700; }
   .methods { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   @media (max-width:520px) { .methods { grid-template-columns:1fr; } }
   .method-btn { background:white; border:1px solid var(--border); border-radius:10px; padding:18px 20px; cursor:pointer; text-align:left; transition:.15s; font-family:inherit; color:inherit; }
   .method-btn:hover { border-color:var(--pecan); background:rgba(159,102,64,0.04); }
-  .method-btn .title { font-family:'Cormorant Garamond', serif; font-weight:800; font-size:16px; color:var(--mahogany); text-transform:uppercase; letter-spacing:.03em; }
-  .method-btn .sub { font-size:12px; color:var(--text-mid); margin-top:4px; }
-  .method-btn .fee { font-size:11px; color:var(--text-light); margin-top:2px; }
+  .method-btn .title { font-family:var(--font-h); font-weight:700; font-size:16px; color:var(--mahogany); text-transform:uppercase; letter-spacing:.06em; }
+  .method-btn .sub { font-size:12px; color:var(--text-mid); margin-top:4px; font-weight:400; }
+  .method-btn .fee { font-size:11px; color:var(--text-light); margin-top:2px; font-weight:400; }
   .method-btn:disabled { opacity:.5; cursor:not-allowed; }
   .primary { background:var(--mahogany); color:white; border:none; padding:12px 28px; border-radius:8px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; margin-top:16px; }
   .primary:hover { background:#3e1f17; }
-  .info-box { background:rgba(91,45,34,.04); border:1px solid var(--border); border-radius:8px; padding:16px 20px; white-space:pre-wrap; font-family:'Inter', sans-serif; font-size:13px; line-height:1.6; color:var(--text-dark); }
+  .info-box { background:rgba(91,45,34,.04); border:1px solid var(--border); border-radius:8px; padding:16px 20px; white-space:pre-wrap; font-family:var(--font-b); font-weight:700; font-size:13px; line-height:1.6; color:var(--text-dark); }
   .status-banner { padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:16px; }
   .status-success { background:rgba(26,110,58,.08); border:1px solid rgba(26,110,58,.3); color:#1a6e3a; }
   .status-cancel { background:rgba(196,122,32,.08); border:1px solid rgba(196,122,32,.3); color:#c47a20; }
