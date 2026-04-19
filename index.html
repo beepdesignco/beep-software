@@ -12697,15 +12697,20 @@ async function exportInvoicePDF(invId) {
     headerYOffset = lh + 8;
   }
 
-  // Three-column header. Each column is independent and we reconcile at the bottom.
+  // Stenograph-receipt style: Courier throughout, explicit cell grid, no oversized accents.
   const headerTop = margin + headerYOffset;
   const rightEdge = pageW - margin;
 
-  // ── Left column: studio name + contact block
+  // Outer document border
+  doc.setDrawColor(...TEXT_DARK);
+  doc.setLineWidth(0.75);
+  // We'll draw the outer border at the end once we know the content height.
+
+  // ── Left column: studio name + contact block (all Courier)
   doc.setTextColor(...MAHOGANY);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
-  doc.text((studio.name || 'Studio').toUpperCase(), margin, headerTop + 14);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(16);
+  doc.text((studio.name || 'Studio').toUpperCase(), margin, headerTop + 14, { charSpace: 1 });
 
   doc.setFont('courier', 'bold');
   doc.setFontSize(8);
@@ -12717,21 +12722,20 @@ async function exportInvoicePDF(invId) {
 
   // ── Center column: "I N V O I C E" + project name
   const centerX = pageW / 2;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(18);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(14);
   doc.setTextColor(...TEXT_DARK);
-  doc.text('INVOICE', centerX, headerTop + 16, { align: 'center', charSpace: 6 });
-  let centerY = headerTop + 38;
+  doc.text('INVOICE', centerX, headerTop + 14, { align: 'center', charSpace: 4 });
+  let centerY = headerTop + 34;
   if (proj) {
     doc.setFont('courier', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(...TEXT_DARK);
-    const projName = (proj.name || '').toUpperCase();
-    doc.text(projName, centerX, centerY, { align: 'center', charSpace: 1.5 });
+    doc.text((proj.name || '').toUpperCase(), centerX, centerY, { align: 'center', charSpace: 1 });
     centerY += 14;
   }
 
-  // ── Right column: project address (top), then client block (bold name, contact below)
+  // ── Right column: project address, then client
   doc.setFont('courier', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(...TEXT_MID);
@@ -12739,14 +12743,13 @@ async function exportInvoicePDF(invId) {
   if (proj) {
     const projAddrLines = [proj.street, [proj.city, proj.state].filter(Boolean).join(', '), proj.zip].filter(Boolean);
     projAddrLines.forEach(a => { doc.text(a, rightEdge, rightY, { align: 'right' }); rightY += 11; });
-    if (projAddrLines.length) rightY += 6;
+    if (projAddrLines.length) rightY += 4;
   }
   if (client) {
-    doc.setFont('helvetica', 'bold');
+    doc.setFont('courier', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(...TEXT_DARK);
-    if (client.name) { doc.text(client.name, rightEdge, rightY, { align: 'right' }); rightY += 13; }
-    doc.setFont('courier', 'bold');
+    if (client.name) { doc.text(client.name, rightEdge, rightY, { align: 'right' }); rightY += 12; }
     doc.setFontSize(8);
     doc.setTextColor(...TEXT_MID);
     if (client.email) { doc.text(client.email, rightEdge, rightY, { align: 'right' }); rightY += 11; }
@@ -12754,13 +12757,13 @@ async function exportInvoicePDF(invId) {
   }
 
   // ── Divider under header
-  let cursorY = Math.max(leftY, centerY, rightY, headerTop + 80) + 14;
+  let cursorY = Math.max(leftY, centerY, rightY, headerTop + 80) + 10;
   doc.setDrawColor(...TEXT_DARK);
   doc.setLineWidth(0.5);
   doc.line(margin, cursorY, rightEdge, cursorY);
-  cursorY += 18;
+  cursorY += 16;
 
-  // ── Meta row: each column has LABEL above VALUE so nothing overlaps
+  // ── Meta row as a single bordered table row with vertical separators
   const statusLabel = inv.status === 'paid' ? 'PAID' : inv.status === 'partial' ? 'PARTIAL' : inv.status === 'cancelled' ? 'CANCELLED' : inv.status === 'draft' ? 'DRAFT' : 'SENT';
   const metaParts = [
     ['PAGE',    '1 / 1'],
@@ -12769,21 +12772,32 @@ async function exportInvoicePDF(invId) {
     ['INVOICE', inv.number || '—'],
     ['STATUS',  statusLabel],
   ];
-  const metaSpacing = (rightEdge - margin) / metaParts.length;
-  metaParts.forEach(([label, val], i) => {
-    const x = margin + i * metaSpacing;
-    doc.setFont('helvetica', 'bold');
+  const metaCellW = (rightEdge - margin) / metaParts.length;
+  const metaRowH = 34;
+  // Cell borders + content
+  for (let i = 0; i < metaParts.length; i++) {
+    const cellX = margin + i * metaCellW;
+    // Top + bottom borders for the row (top already drawn as divider)
+    doc.setLineWidth(0.5);
+    doc.line(cellX, cursorY + metaRowH, cellX + metaCellW, cursorY + metaRowH);
+    // Vertical separators (skip first so we don't double-draw the left edge)
+    if (i > 0) {
+      doc.setLineWidth(0.3);
+      doc.setDrawColor(...BORDER);
+      doc.line(cellX, cursorY, cellX, cursorY + metaRowH);
+      doc.setDrawColor(...TEXT_DARK);
+    }
+    // Label
+    doc.setFont('courier', 'bold');
     doc.setFontSize(7);
     doc.setTextColor(...TEXT_LIGHT);
-    doc.text(label, x, cursorY, { charSpace: 1.5 });
-    doc.setFont('courier', 'bold');
+    doc.text(metaParts[i][0], cellX + 8, cursorY + 12, { charSpace: 1 });
+    // Value
     doc.setFontSize(9);
     doc.setTextColor(...TEXT_DARK);
-    doc.text(String(val), x, cursorY + 12);
-  });
-  cursorY += 24;
-  doc.line(margin, cursorY, rightEdge, cursorY);
-  cursorY += 20;
+    doc.text(String(metaParts[i][1]), cellX + 8, cursorY + 26);
+  }
+  cursorY += metaRowH + 16;
 
   // ── Line items table
   const body = (inv.lineItems||[]).map(l => {
@@ -12794,97 +12808,83 @@ async function exportInvoicePDF(invId) {
     return [namePlusDesc, qty.toString(), fmt(price), (l.taxable ? 'Y' : ''), fmt(total)];
   });
 
+  // Line items with visible column grid
   doc.autoTable({
     startY: cursorY,
     head: [['DESCRIPTION', 'QTY', 'AMOUNT']],
     body: body.length ? body.map(r => [r[0], r[1], r[4]]) : [['—', '', fmt(0)]],
     margin: { left: margin, right: margin },
-    theme: 'plain',
-    styles: { font: 'courier', fontStyle: 'bold', fontSize: 10, cellPadding: { top: 14, bottom: 14, left: 0, right: 12 }, textColor: TEXT_DARK, lineColor: TEXT_DARK, lineWidth: 0 },
-    headStyles: { fillColor: [251, 247, 239], textColor: TEXT_DARK, fontStyle: 'bold', font: 'helvetica', fontSize: 9, halign: 'left', lineWidth: { top: 0.5, bottom: 0.5 }, lineColor: TEXT_DARK, cellPadding: { top: 10, bottom: 10, left: 0, right: 12 } },
-    bodyStyles: { lineWidth: { bottom: 0.3 }, lineColor: BORDER },
+    theme: 'grid',
+    styles: {
+      font: 'courier', fontStyle: 'bold', fontSize: 10,
+      cellPadding: { top: 10, bottom: 10, left: 10, right: 10 },
+      textColor: TEXT_DARK,
+      lineColor: TEXT_DARK,
+      lineWidth: 0.3,
+    },
+    headStyles: {
+      fillColor: [251, 247, 239],
+      textColor: TEXT_DARK,
+      fontStyle: 'bold', font: 'courier', fontSize: 9,
+      halign: 'left',
+      lineWidth: 0.5,
+      lineColor: TEXT_DARK,
+      cellPadding: { top: 10, bottom: 10, left: 10, right: 10 },
+    },
     columnStyles: {
       0: { cellWidth: 'auto' },
       1: { cellWidth: 70, halign: 'right' },
-      2: { cellWidth: 100, halign: 'right', fontStyle: 'bold' },
+      2: { cellWidth: 100, halign: 'right' },
     },
   });
 
-  cursorY = doc.lastAutoTable.finalY + 24;
+  cursorY = doc.lastAutoTable.finalY + 14;
 
-  // ── Totals block — 3 columns (Rate / Amount / Total) with proper vertical spacing
-  doc.setDrawColor(...TEXT_DARK);
-  doc.setLineWidth(0.5);
-  doc.line(margin, cursorY, rightEdge, cursorY);
-  cursorY += 18;
-
+  // ── Totals block — same cell-grid as line items; no oversized accents
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
-  const tableWidth = rightEdge - margin;
-  const col1X = margin;
-  const col2X = margin + tableWidth * 0.35;
-  const col3EndX = rightEdge;
-
-  // Column headers (row 1)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(...TEXT_LIGHT);
-  doc.text('RATE',    col1X, cursorY, { charSpace: 1.5 });
-  doc.text('AMOUNT',  col2X, cursorY, { charSpace: 1.5 });
-  doc.text('TOTAL',   col3EndX, cursorY, { align: 'right', charSpace: 1.5 });
-
-  // Row 2 = col headers + big total (on its own baseline well below the column labels)
-  cursorY += 18;
   const subtotalGross = (inv.subtotal||0) + (inv.freight||0) - (inv.discount||0);
 
-  // Col 1 (Rate) — tax rate, freight, discount listed as key/value pairs
-  let ry1 = cursorY;
-  doc.setFont('courier', 'bold');
-  doc.setFontSize(9);
-  if (inv.taxRate) {
-    doc.setTextColor(...TEXT_MID); doc.text('TAX', col1X, ry1);
-    doc.setTextColor(...TEXT_DARK); doc.text(inv.taxRate + '%', col1X + 80, ry1); ry1 += 13;
-  }
-  if (inv.freight) {
-    doc.setTextColor(...TEXT_MID); doc.text('Freight', col1X, ry1);
-    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.freight), col1X + 80, ry1); ry1 += 13;
-  }
-  if (inv.discount) {
-    doc.setTextColor(...TEXT_MID); doc.text('Discount', col1X, ry1);
-    doc.setTextColor(...TEXT_DARK); doc.text('-' + fmt(inv.discount), col1X + 80, ry1); ry1 += 13;
-  }
+  const totalsRows = [];
+  totalsRows.push(['Subtotal', fmt(subtotalGross)]);
+  if (inv.freight) totalsRows.push(['Freight', fmt(inv.freight)]);
+  if (inv.discount) totalsRows.push(['Discount', '-' + fmt(inv.discount)]);
+  if (inv.tax) totalsRows.push([`Tax${inv.taxRate?' ('+inv.taxRate+'%)':''}`, fmt(inv.tax)]);
+  if (inv.ccFee) totalsRows.push([`CC Fee${inv.ccFeePct?' ('+inv.ccFeePct+'%)':''}`, fmt(inv.ccFee)]);
+  totalsRows.push(['TOTAL', fmt(inv.total||0)]);
+  if (paid > 0) totalsRows.push(['Paid', fmt(paid)]);
+  if (paid > 0) totalsRows.push([due > 0.01 ? 'Amount Due' : 'Balance', fmt(due)]);
 
-  // Col 2 (Amount) — subtotal + tax
-  let ry2 = cursorY;
-  doc.setTextColor(...TEXT_MID); doc.text('Subtotal', col2X, ry2);
-  doc.setTextColor(...TEXT_DARK); doc.text(fmt(subtotalGross), col2X + 90, ry2); ry2 += 13;
-  if (inv.tax) {
-    doc.setTextColor(...TEXT_MID); doc.text('Tax', col2X, ry2);
-    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.tax), col2X + 90, ry2); ry2 += 13;
-  }
+  doc.autoTable({
+    startY: cursorY,
+    body: totalsRows,
+    margin: { left: margin + (rightEdge - margin) * 0.45, right: margin },
+    theme: 'grid',
+    styles: {
+      font: 'courier', fontStyle: 'bold', fontSize: 10,
+      cellPadding: { top: 8, bottom: 8, left: 10, right: 10 },
+      textColor: TEXT_DARK,
+      lineColor: TEXT_DARK,
+      lineWidth: 0.3,
+    },
+    columnStyles: {
+      0: { cellWidth: 'auto' },
+      1: { cellWidth: 120, halign: 'right' },
+    },
+    didParseCell: (data) => {
+      const lbl = (data.row.raw && data.row.raw[0]) || '';
+      if (lbl === 'TOTAL') {
+        data.cell.styles.fillColor = [251, 247, 239];
+        data.cell.styles.fontSize = 11;
+      } else if (lbl === 'Paid') {
+        data.cell.styles.textColor = [21, 110, 58];
+      } else if (lbl === 'Amount Due' || lbl === 'Balance') {
+        data.cell.styles.textColor = due > 0.01 ? [179, 51, 51] : [21, 110, 58];
+      }
+    },
+  });
 
-  // Col 3 (big Total + optional Paid/Balance below)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.setTextColor(...MAHOGANY);
-  doc.text(fmt(inv.total||0), col3EndX, cursorY + 4, { align: 'right' });
-  let ry3 = cursorY + 22;
-
-  if (paid > 0) {
-    doc.setFont('courier', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(21, 110, 58);
-    doc.text('Paid', col3EndX - 90, ry3);
-    doc.text(fmt(paid), col3EndX, ry3, { align: 'right' });
-    ry3 += 13;
-
-    doc.setTextColor(due > 0.01 ? 179 : 21, due > 0.01 ? 51 : 110, due > 0.01 ? 51 : 58);
-    doc.text(due > 0.01 ? 'Amount Due' : 'Balance', col3EndX - 90, ry3);
-    doc.text(fmt(due), col3EndX, ry3, { align: 'right' });
-    ry3 += 13;
-  }
-
-  cursorY = Math.max(ry1, ry2, ry3) + 10;
+  cursorY = doc.lastAutoTable.finalY + 16;
 
   // ── Payment history
   if ((inv.payments||[]).length) {
