@@ -12,8 +12,12 @@
   }
   * { box-sizing: border-box; }
   body { margin:0; font-family:'Inter', sans-serif; background:var(--bg); color:var(--text-dark); min-height:100vh; }
-  .wrap { max-width:720px; margin:0 auto; padding:40px 20px 80px; }
-  h1 { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:34px; letter-spacing:.04em; color:var(--mahogany); text-transform:uppercase; margin:0 0 4px; }
+  .brand-bar { background:var(--mahogany); color:var(--cloud); padding:28px 20px 32px; text-align:center; }
+  .brand-bar .logo-img { max-height:72px; max-width:240px; display:block; margin:0 auto 12px; }
+  .brand-bar h1 { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:32px; letter-spacing:.06em; color:var(--cloud); text-transform:uppercase; margin:0; }
+  .brand-bar .meta { font-family:'Inter', sans-serif; font-size:12px; color:rgba(243,232,214,.7); margin-top:6px; }
+  .wrap { max-width:720px; margin:0 auto; padding:28px 20px 80px; }
+  h1 { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:30px; letter-spacing:.04em; color:var(--mahogany); text-transform:uppercase; margin:0 0 4px; }
   .studio-name { font-family:'Inter', sans-serif; font-size:13px; color:var(--text-mid); }
   .card { background:white; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; box-shadow: 0 1px 3px rgba(91,45,34,0.04); }
   .label { font-family:'Cormorant Garamond', serif; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--russet); margin-bottom:6px; }
@@ -53,6 +57,7 @@
 <script src="../supabase-config.js"></script>
 </head>
 <body>
+<div id="brand-bar" style="display:none"></div>
 <div class="wrap" id="root">
   <div class="loading">Loading invoice…</div>
 </div>
@@ -88,6 +93,19 @@ function render(d) {
   const isPaid = invoice.amount_due <= 0.01;
   const ccFee = invoice.cc_fee_pct || 3.5;
   const cardTotal = invoice.amount_due * (1 + ccFee / 100);
+
+  // Brand bar with logo (if uploaded) + studio name
+  const bar = document.getElementById('brand-bar');
+  if (bar) {
+    const metaParts = [si.address1, si.address2, si.email, si.phone].filter(Boolean);
+    bar.className = 'brand-bar';
+    bar.style.display = 'block';
+    bar.innerHTML = `
+      ${studio.logo_url ? `<img class="logo-img" src="${escH(studio.logo_url)}" alt="${escH(studio.name)}">` : ''}
+      <h1>${escH(studio.name || 'Studio')}</h1>
+      ${metaParts.length ? `<div class="meta">${metaParts.map(escH).join(' · ')}</div>` : ''}
+    `;
+  }
 
   let statusBanner = '';
   if (isPaid) {
@@ -156,12 +174,6 @@ function render(d) {
     </div>`;
 
   document.getElementById('root').innerHTML = `
-    <div style="margin-bottom:24px">
-      <h1>${escH(studio.name || 'Studio')}</h1>
-      ${si.address1 ? `<div class="studio-name">${escH(si.address1)}${si.address2?' · '+escH(si.address2):''}</div>` : ''}
-      ${si.email || si.phone ? `<div class="studio-name">${si.email?escH(si.email):''}${si.phone?' · '+escH(si.phone):''}</div>` : ''}
-    </div>
-
     ${statusBanner}
 
     <div class="card">

@@ -34,12 +34,20 @@ Deno.serve(async (req) => {
     if (error || !inv) return json({ error: 'Invoice not found.' }, 404);
     if (inv.status === 'cancelled') return json({ error: 'This invoice has been cancelled.' }, 410);
 
-    // Pull studio info (name, address, email, website, check_mailing_address, wire_instructions)
+    // Pull studio info (name, address, email, website, check_mailing_address, wire_instructions, logo)
     const { data: studio } = await sb
       .from('studios')
       .select('id, name, studio_info')
       .eq('id', inv.studio_id)
       .single();
+
+    // If a logo is attached, sign a URL for it (valid 1 hour)
+    let logoUrl = null;
+    const logoPath = (studio?.studio_info as any)?.logo?.storagePath;
+    if (logoPath) {
+      const { data: signed } = await sb.storage.from('files').createSignedUrl(logoPath, 3600);
+      logoUrl = signed?.signedUrl || null;
+    }
 
     const { data: project } = inv.project_id
       ? await sb.from('projects').select('id, name').eq('id', inv.project_id).maybeSingle()
@@ -86,6 +94,7 @@ Deno.serve(async (req) => {
       studio: {
         name: studio?.name || 'Studio',
         info: studio?.studio_info || {},
+        logo_url: logoUrl,
       },
       project: project ? { name: project.name } : null,
       client: client ? { name: client.name, email: client.email } : null,

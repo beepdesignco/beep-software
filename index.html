@@ -1662,6 +1662,14 @@ tr:hover .row-btns { opacity:1; }
             <div class="fg"><label class="fl">Email</label><input type="text" class="fi" id="as-studio-email" onchange="saveStudioField('email',this.value.trim())"></div>
           </div>
           <div class="fg"><label class="fl">Website</label><input type="text" class="fi" id="as-studio-website" onchange="saveStudioField('website',this.value.trim())"></div>
+          <div class="fg" style="margin-top:12px">
+            <label class="fl">Logo <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— PNG/SVG, ideally transparent background, shown on payment pages + PDFs</span></label>
+            <div id="as-studio-logo-preview" style="margin-top:6px"></div>
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0;margin-top:4px">
+              <span id="as-studio-logo-btn-text">+ Upload Logo</span>
+              <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" style="display:none" onchange="handleStudioLogoUpload(this)">
+            </label>
+          </div>
           <div class="fg" style="margin-top:8px"><label class="fl">Check Mailing Address <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown when a client chooses to pay by check</span></label>
             <textarea class="fi" id="as-studio-check-addr" style="min-height:64px;resize:vertical" onchange="saveStudioField('checkMailingAddress',this.value.trim())" placeholder="Beep Design&#10;123 Main St&#10;New Orleans, LA 70130"></textarea>
           </div>
@@ -9365,6 +9373,61 @@ function loadStudioSettings() {
     const el = $c(id);
     if (el) el.value = s[key] || '';
   });
+  renderStudioLogoPreview();
+}
+
+function renderStudioLogoPreview() {
+  const el = $c('as-studio-logo-preview');
+  const btn = $c('as-studio-logo-btn-text');
+  if (!el) return;
+  const s = getStudio();
+  const logo = s.logo;
+  if (logo && logo.storagePath) {
+    el.innerHTML = `<div id="studio-logo-thumb" style="width:120px;height:120px;border:1px solid var(--border);border-radius:var(--r);background:rgba(91,45,34,0.03);display:flex;align-items:center;justify-content:center;overflow:hidden"><span style="font-size:11px;color:var(--text-light)">Loading…</span></div>
+      <button class="btn btn-ghost btn-sm" onclick="removeStudioLogo()" style="font-size:10px;margin-top:4px;padding:4px 8px">Remove logo</button>`;
+    if (btn) btn.textContent = '↻ Replace Logo';
+    // fetch signed url
+    getFileSignedUrl(logo.storagePath).then(url => {
+      const thumb = document.getElementById('studio-logo-thumb');
+      if (thumb) thumb.innerHTML = `<img src="${url}" style="max-width:100%;max-height:100%;object-fit:contain">`;
+    }).catch(e => {
+      const thumb = document.getElementById('studio-logo-thumb');
+      if (thumb) thumb.innerHTML = `<span style="font-size:10px;color:#b33">${escH(e.message)}</span>`;
+    });
+  } else {
+    el.innerHTML = '';
+    if (btn) btn.textContent = '+ Upload Logo';
+  }
+}
+
+async function handleStudioLogoUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  if (file.size > 5 * 1024 * 1024) { toast('Logo too large (max 5MB).'); return; }
+
+  const s = getStudio();
+  const oldPath = s.logo?.storagePath;
+  try {
+    const record = await uploadFile(file, 'studio', AUTH.studio.id);
+    s.logo = record;
+    save();
+    renderStudioLogoPreview();
+    if (oldPath && oldPath !== record.storagePath) deleteStoredFile(oldPath);
+    toast('Logo updated.');
+  } catch (e) {
+    toast('Upload failed: ' + e.message);
+  }
+}
+
+async function removeStudioLogo() {
+  if (!confirm('Remove the studio logo?')) return;
+  const s = getStudio();
+  const oldPath = s.logo?.storagePath;
+  delete s.logo;
+  save();
+  renderStudioLogoPreview();
+  if (oldPath) deleteStoredFile(oldPath);
 }
 
 function saveStudioField(key, val) {
@@ -12579,7 +12642,7 @@ function deletePayment() {
 
 // ─── PDF EXPORT ───────────────────────────────────────
 
-function exportInvoicePDF(invId) {
+async function exportInvoicePDF(invId) {
   const inv = (S.invoices||[]).find(i => i.id === invId);
   if (!inv) { toast('Invoice not found.'); return; }
   if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded. Check your connection and retry.'); return; }
@@ -12601,16 +12664,48 @@ function exportInvoicePDF(invId) {
   const TEXT_LIGHT = [160, 150, 140];
   const BORDER = [220, 210, 198];
 
-  // ── Header: studio block (left) + INVOICE label (right)
+  // ── Header: optional logo, then studio block (left) + INVOICE label (right)
+  let logoDataUrl = null;
+  let logoDims = null;
+  if (studio.logo?.storagePath) {
+    try {
+      const url = await getFileSignedUrl(studio.logo.storagePath);
+      const r = await fetch(url);
+      const blob = await r.blob();
+      logoDataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+      logoDims = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ w: img.width, h: img.height });
+        img.onerror = () => resolve(null);
+        img.src = logoDataUrl;
+      });
+    } catch (e) { console.warn('[pdf logo]', e); }
+  }
+
+  let headerYOffset = 0;
+  if (logoDataUrl && logoDims) {
+    const maxLogoH = 56;
+    const maxLogoW = 180;
+    const scale = Math.min(maxLogoH / logoDims.h, maxLogoW / logoDims.w);
+    const lw = logoDims.w * scale;
+    const lh = logoDims.h * scale;
+    try { doc.addImage(logoDataUrl, 'PNG', margin, margin - 6, lw, lh); } catch(e) { console.warn(e); }
+    headerYOffset = lh + 8;
+  }
+
   doc.setTextColor(...MAHOGANY);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(22);
-  doc.text(studio.name || 'Studio', margin, margin + 6);
+  doc.text(studio.name || 'Studio', margin, margin + 6 + headerYOffset);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(...TEXT_MID);
-  let y = margin + 22;
+  let y = margin + 22 + headerYOffset;
   [studio.address1, studio.address2, studio.phone, studio.email, studio.website].forEach(line => {
     if (line) { doc.text(line, margin, y); y += 11; }
   });
@@ -12631,7 +12726,7 @@ function exportInvoicePDF(invId) {
   doc.text(statusLabel, pageW - margin, margin + 42, { align: 'right' });
 
   // ── Divider
-  let cursorY = Math.max(y, margin + 60) + 10;
+  let cursorY = Math.max(y, margin + 60 + headerYOffset) + 10;
   doc.setDrawColor(...BORDER);
   doc.setLineWidth(0.5);
   doc.line(margin, cursorY, pageW - margin, cursorY);
