@@ -2670,7 +2670,8 @@ tr:hover .row-btns { opacity:1; }
     <div id="send-inv-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-send-invoice')">Cancel</button>
-      <button class="btn btn-primary" onclick="sendInvoiceEmail()">Send</button>
+      <button class="btn btn-ghost" onclick="copyLinkAndMarkSent()" id="send-inv-copy-btn">Copy Link &amp; Mark Sent</button>
+      <button class="btn btn-primary" onclick="sendInvoiceEmail()">Send by Email</button>
     </div>
   </div>
 </div>
@@ -12388,12 +12389,12 @@ function renderInvoiceBuilder() {
   const actions = $c('invb-actions');
   if (actions) {
     const pdfBtn = `<button class="btn btn-ghost btn-sm" onclick="exportInvoicePDF('${inv.id}')">Export PDF</button>`;
-    const canSendBtn = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid');
-    const linkBtn = canSendBtn
+    const alreadySent = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid');
+    const linkBtn = alreadySent
       ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
       : '';
-    const sendBtn = canSendBtn
-      ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}')">Email Invoice</button>`
+    const resendBtn = alreadySent
+      ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}')">Send Invoice</button>`
       : '';
     if (inv.status === 'cancelled') {
       actions.innerHTML = pdfBtn + '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
@@ -12402,21 +12403,21 @@ function renderInvoiceBuilder() {
         ${pdfBtn}
         <button class="btn btn-danger btn-sm" onclick="deleteDraft()">Delete Draft</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
-        <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
+        <button class="btn btn-primary btn-sm" onclick="openSendInvoiceFromBuilder()">Send Invoice</button>`;
     } else if (inv.status === 'paid' || inv.status === 'partial') {
       actions.innerHTML = `
         ${pdfBtn}
         ${linkBtn}
-        ${sendBtn}
+        ${resendBtn}
         <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
     } else {
+      // sent
       actions.innerHTML = `
         ${pdfBtn}
         ${linkBtn}
-        ${sendBtn}
+        ${resendBtn}
         <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
-        <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
-        <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
+        <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save Changes</button>`;
     }
   }
 }
@@ -12563,6 +12564,7 @@ function buildInvoiceEmailText({ inv, studio, payUrl, message }) {
 }
 
 let _sendInvId = null;
+let _sendMarkSentOnSuccess = false;
 
 // ── Email template variable substitution
 // Known tokens: {client.name} {client.firstName} {client.email} {client.phone}
@@ -12638,10 +12640,11 @@ function getAllEmailTemplates() {
   return [...DEFAULT_EMAIL_TEMPLATES, ...custom];
 }
 
-function openSendInvoiceModal(invoiceId) {
+function openSendInvoiceModal(invoiceId, opts = {}) {
   const inv = (S.invoices||[]).find(i => i.id === invoiceId);
   if (!inv) return;
   _sendInvId = invoiceId;
+  _sendMarkSentOnSuccess = !!opts.markSentOnSuccess && (inv.status === 'draft');
   const client = (S.clients||[]).find(c => c.id === inv.clientId);
 
   const sel = $c('send-inv-template');
@@ -12651,6 +12654,10 @@ function openSendInvoiceModal(invoiceId) {
       tpls.map(t => `<option value="${t.id}">${escH(t.name)}</option>`).join('');
     sel.value = 'builtin-new-invoice';
   }
+
+  // Adjust the "Copy Link" button label based on whether a status transition will happen
+  const copyBtn = $c('send-inv-copy-btn');
+  if (copyBtn) copyBtn.textContent = _sendMarkSentOnSuccess ? 'Copy Link & Mark Sent' : 'Copy Payment Link';
 
   $c('send-inv-to').value = client?.email || '';
   $c('send-inv-error').style.display = 'none';
@@ -12728,12 +12735,45 @@ async function sendInvoiceEmail() {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Send failed.');
-    closeModal('modal-send-invoice');
-    toast('Invoice sent to ' + toEmail);
+    // If this was the draft-send flow, transition to sent now that the email is out
+    if (_sendMarkSentOnSuccess) {
+      markInvoiceSent(inv.id);
+      closeModal('modal-send-invoice');
+      showView('invoices');
+      toast('Invoice ' + inv.number + ' sent to ' + toEmail);
+    } else {
+      closeModal('modal-send-invoice');
+      toast('Invoice sent to ' + toEmail);
+    }
   } catch (e) {
     showSendInvErr(e?.message || 'Send failed.');
   } finally {
-    btn.disabled = false; btn.textContent = 'Send';
+    btn.disabled = false; btn.textContent = 'Send by Email';
+  }
+}
+
+async function copyLinkAndMarkSent() {
+  const inv = (S.invoices||[]).find(i => i.id === _sendInvId);
+  if (!inv) return;
+  // Ensure payment_token exists
+  if (!inv.paymentToken) {
+    try {
+      const token = crypto.randomUUID();
+      const { error } = await sb.from('invoices').update({ payment_token: token }).eq('id', inv.id);
+      if (error) throw error;
+      inv.paymentToken = token;
+    } catch (e) { showSendInvErr('Could not prepare payment link: ' + e.message); return; }
+  }
+  const url = `${location.origin}/pay/?t=${encodeURIComponent(inv.paymentToken)}`;
+  try { await navigator.clipboard.writeText(url); } catch {}
+  if (_sendMarkSentOnSuccess) {
+    markInvoiceSent(inv.id);
+    closeModal('modal-send-invoice');
+    showView('invoices');
+    toast('Link copied. Invoice ' + inv.number + ' marked sent.');
+  } else {
+    closeModal('modal-send-invoice');
+    toast('Link copied: ' + url);
   }
 }
 
@@ -12804,7 +12844,8 @@ function deleteDraft() {
   toast('Draft ' + inv.number + ' deleted.');
 }
 
-function saveInvoiceFromBuilder(status) {
+function saveInvoiceFromBuilder(status, opts = {}) {
+  const { navigate = true } = opts;
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
 
@@ -12886,8 +12927,35 @@ function saveInvoiceFromBuilder(status) {
   }
 
   save();
-  showView('invoices');
-  toast('Invoice ' + inv.number + (status === 'sent' ? ' saved & marked sent.' : ' draft saved.'));
+  if (navigate) {
+    showView('invoices');
+    toast('Invoice ' + inv.number + (status === 'sent' ? ' saved & marked sent.' : ' draft saved.'));
+  }
+}
+
+// Flip a draft invoice to 'sent' and run all automations. Used after a successful email send
+// or manual link copy.
+function markInvoiceSent(invId) {
+  const inv = (S.invoices||[]).find(i => i.id === invId);
+  if (!inv) return;
+  if (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid') return; // already sent
+  inv.status = 'sent';
+  if (!inv.sentDate) inv.sentDate = new Date().toISOString().slice(0, 10);
+  processInvoiceSentAutomations(inv);
+  save();
+}
+
+// Kick off the send flow from the invoice builder (draft or edited sent invoice):
+//   - validate line items
+//   - commit builder form values to the invoice (without navigating away)
+//   - open the Send Invoice modal; on success, transition to 'sent' if currently draft
+function openSendInvoiceFromBuilder() {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  if (!_invLineItems.length) { toast('Add at least one line item.'); return; }
+  // Persist current builder values to the invoice so the email reflects them
+  saveInvoiceFromBuilder(inv.status === 'draft' ? 'draft' : inv.status, { navigate: false });
+  openSendInvoiceModal(inv.id, { markSentOnSuccess: inv.status === 'draft' });
 }
 
 function processInvoicePaidAutomations(inv) {
