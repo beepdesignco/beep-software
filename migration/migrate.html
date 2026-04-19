@@ -1,0 +1,623 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BEEP HQ — Data Migration</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #222; }
+  h1 { margin-bottom: 4px; }
+  .sub { color: #666; margin-bottom: 30px; }
+  .step { background: #fafafa; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .step h2 { margin-top: 0; font-size: 16px; }
+  button { background: #5B2D22; color: white; border: 0; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input { padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; width: 260px; margin-right: 8px; }
+  .log { background: #111; color: #0f0; font-family: Menlo, monospace; font-size: 12px; padding: 12px; border-radius: 6px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }
+  .log .ok { color: #7f7; }
+  .log .err { color: #f77; }
+  .log .info { color: #ccc; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0; }
+  .stat { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 10px; text-align: center; }
+  .stat .n { font-size: 20px; font-weight: 700; color: #5B2D22; }
+  .stat .l { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.06em; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .warn { background: #fff3cd; border: 1px solid #ffeaa7; padding: 12px; border-radius: 6px; margin: 10px 0; font-size: 13px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="../supabase-config.js"></script>
+</head>
+<body>
+<h1>BEEP HQ — Data Migration</h1>
+<div class="sub">One-time: reads your current localStorage blob and inserts it into Supabase under your Beep Design studio.</div>
+
+<div class="step">
+  <h2>1 · Sign in</h2>
+  <div class="row" id="auth-row">
+    <input type="email" id="email" placeholder="your email" autocomplete="email">
+    <input type="password" id="password" placeholder="password" autocomplete="current-password">
+    <button id="login-btn">Sign in</button>
+    <span id="auth-status" style="font-size: 13px; color: #666"></span>
+  </div>
+</div>
+
+<div class="step">
+  <h2>2 · Load current data from this browser</h2>
+  <div class="warn">You must open this page in the browser that has your BEEP HQ data — typically the one where you open <code>file:///Users/baylorpillow/Desktop/index.html</code>. <b>If you're opening this page instead of that one, localStorage will be empty and there's nothing to migrate.</b></div>
+  <div class="row">
+    <button id="load-btn" disabled>Load localStorage</button>
+    <span id="load-status" style="font-size: 13px; color: #666"></span>
+  </div>
+  <div class="stats" id="stats" style="display:none"></div>
+</div>
+
+<div class="step">
+  <h2>3 · Migrate</h2>
+  <div class="row">
+    <button id="migrate-btn" disabled>Run migration</button>
+    <span style="font-size: 13px; color: #666">Inserts everything in dependency order. Safe to rerun after a failure — checks for existing rows.</span>
+  </div>
+  <div class="log" id="log" style="display:none"></div>
+</div>
+
+<script>
+const { createClient } = window.supabase;
+const sb = createClient(window.BEEP_SUPABASE_CONFIG.url, window.BEEP_SUPABASE_CONFIG.anonKey);
+
+let S = null;
+let studioId = null;
+let userId = null;
+// Map of legacy (uid) string IDs → new Postgres UUIDs, so cross-entity references stay linked.
+const idMap = new Map();
+function newId(oldId) {
+  if (oldId && idMap.has(oldId)) return idMap.get(oldId);
+  const id = crypto.randomUUID();
+  if (oldId) idMap.set(oldId, id);
+  return id;
+}
+function lookupId(oldId) {
+  if (!oldId) return null;
+  return idMap.get(oldId) || null;
+}
+
+const logEl = () => document.getElementById('log');
+function log(msg, cls) {
+  const el = logEl();
+  el.style.display = 'block';
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+function info(m) { log(m, 'info'); }
+function ok(m)   { log('✓ ' + m, 'ok'); }
+function err(m)  { log('✗ ' + m, 'err'); }
+
+function parseMoney(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return v;
+  const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? null : n;
+}
+function toDateOrNull(v) {
+  if (!v) return null;
+  // Already ISO date? Just take the first 10 chars.
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+  return null;
+}
+function toTsOrNow(v) {
+  if (!v) return new Date().toISOString();
+  try { return new Date(v).toISOString(); } catch { return new Date().toISOString(); }
+}
+
+// ─── Sign in ──────────────────────────────────────────
+document.getElementById('login-btn').addEventListener('click', async () => {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  document.getElementById('auth-status').textContent = 'Signing in…';
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) {
+    document.getElementById('auth-status').textContent = 'Error: ' + error.message;
+    return;
+  }
+  userId = data.user.id;
+  // Look up the studio this user owns
+  const { data: studios, error: sErr } = await sb.from('studios').select('id, name').eq('owner_user_id', userId).limit(1);
+  if (sErr || !studios?.length) {
+    document.getElementById('auth-status').textContent = 'Signed in but no studio found for this user. Did you run bootstrap.sql?';
+    return;
+  }
+  studioId = studios[0].id;
+  document.getElementById('auth-status').textContent = `Signed in as ${email} · studio: ${studios[0].name} (${studioId.slice(0,8)}…)`;
+  document.getElementById('load-btn').disabled = false;
+});
+
+// ─── Load localStorage ────────────────────────────────
+document.getElementById('load-btn').addEventListener('click', () => {
+  const raw = localStorage.getItem('beep_hq_v1');
+  if (!raw) {
+    document.getElementById('load-status').textContent = 'No data found — open this page in the same browser as your BEEP HQ install.';
+    return;
+  }
+  try { S = JSON.parse(raw); }
+  catch (e) { document.getElementById('load-status').textContent = 'Parse error: ' + e.message; return; }
+
+  document.getElementById('load-status').textContent = `Loaded (${(raw.length / 1024).toFixed(1)} KB)`;
+
+  // Preview stats
+  const stats = [
+    ['Clients',    (S.clients||[]).length],
+    ['Contacts',   (S.contacts||[]).length],
+    ['Projects',   (S.projects||[]).length],
+    ['Proposals',  Object.keys(S.proposals||{}).length],
+    ['Invoices',   (S.invoices||[]).length],
+    ['Expenses',   (S.expenses||[]).length],
+    ['Documents',  (S.documents||[]).length],
+    ['Time',       (S.timeEntries||[]).length],
+  ];
+  const statsEl = document.getElementById('stats');
+  statsEl.style.display = 'grid';
+  statsEl.innerHTML = stats.map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+  document.getElementById('migrate-btn').disabled = false;
+});
+
+// ─── Migrate ──────────────────────────────────────────
+document.getElementById('migrate-btn').addEventListener('click', async () => {
+  document.getElementById('migrate-btn').disabled = true;
+  logEl().innerHTML = '';
+  info('Starting migration to studio ' + studioId);
+
+  try {
+    await migrateSettings();
+    await migrateClients();
+    await migrateContacts();
+    await migrateProjects();
+    await migrateProposals();
+    await migrateExpenses();
+    await migrateInvoices();
+    await migrateDocuments();
+    await migrateTimeEntries();
+    await verifyBarNero();
+    ok('MIGRATION COMPLETE');
+  } catch (e) {
+    err('Migration halted: ' + (e?.message || e));
+    console.error(e);
+  } finally {
+    document.getElementById('migrate-btn').disabled = false;
+  }
+});
+
+async function migrateSettings() {
+  info('Updating studio settings…');
+  const settings = {
+    qty_units:       S.qtyUnits || [],
+    task_statuses:   S.taskStatuses || [],
+    payment_cards:   S.paymentCards || [],
+    status_colors:   S.statusColors || {},
+    categories:      S.categories || [],
+  };
+  const studio_info = S.studio || {};
+  const { error } = await sb.from('studios').update({ settings, studio_info }).eq('id', studioId);
+  if (error) throw new Error('settings: ' + error.message);
+  ok('Settings updated');
+}
+
+async function migrateClients() {
+  const rows = (S.clients || []).map(c => ({
+    id: newId(c.id),
+    studio_id: studioId,
+    name: c.name || '—',
+    email: c.email || null,
+    phone: c.phone || null,
+    address: c.address || null,
+    notes: c.notes || null,
+    created_by_user_id: userId,
+  }));
+  if (!rows.length) return ok('Clients: 0');
+  const { error } = await sb.from('clients').insert(rows);
+  if (error) throw new Error('clients: ' + error.message);
+  ok(`Clients: ${rows.length}`);
+}
+
+async function migrateContacts() {
+  const rows = (S.contacts || []).map(c => ({
+    id: newId(c.id),
+    studio_id: studioId,
+    client_id: c.clientId ? lookupId(c.clientId) : null,
+    name: c.name || '—',
+    email: c.email || null,
+    phone: c.phone || null,
+    company: c.company || null,
+    role: c.role || null,
+    notes: c.notes || null,
+    created_by_user_id: userId,
+  }));
+  if (!rows.length) return ok('Contacts: 0');
+  const { error } = await sb.from('contacts').insert(rows);
+  if (error) throw new Error('contacts: ' + error.message);
+  ok(`Contacts: ${rows.length}`);
+}
+
+async function migrateProjects() {
+  const rows = (S.projects || []).map(p => ({
+    id: newId(p.id),
+    studio_id: studioId,
+    client_id: p.clientId ? lookupId(p.clientId) : null,
+    name: p.name || '—',
+    stage: p.stage || null,
+    type: p.type || null,
+    street: p.street || null,
+    city: p.city || null,
+    state: p.state || null,
+    zip: p.zip || null,
+    markup_pct: parseMoney(p.markupPct) ?? 25,
+    tax_rate: parseMoney(p.taxRate) ?? 0,
+    tax_freight: !!p.taxFreight,
+    address_book: p.addressBook || {},
+    quick_references: p.quickReferences || [],
+    settings: p.settings || {},
+    notifications: p.notifications || [],
+    created_by_user_id: userId,
+    created_at: toTsOrNow(p.created),
+  }));
+  if (!rows.length) return ok('Projects: 0');
+  const { error } = await sb.from('projects').insert(rows);
+  if (error) throw new Error('projects: ' + error.message);
+  ok(`Projects: ${rows.length}`);
+
+  // project_contacts junction
+  const pcRows = [];
+  (S.projects || []).forEach(p => {
+    (p.linkedContacts || []).forEach((lc, idx) => {
+      pcRows.push({
+        project_id: lookupId(p.id),
+        contact_id: lookupId(lc.contactId),
+        role: lc.role || null,
+        starred: !!lc.starred,
+        notes: lc.notes || null,
+        sort_order: idx,
+      });
+    });
+  });
+  if (pcRows.length) {
+    const { error: e2 } = await sb.from('project_contacts').insert(pcRows);
+    if (e2) throw new Error('project_contacts: ' + e2.message);
+    ok(`Project-contact links: ${pcRows.length}`);
+  }
+}
+
+async function migrateProposals() {
+  const spaceRows = [], itemRows = [], compRows = [], estimateRows = [];
+  Object.entries(S.proposals || {}).forEach(([projectOldId, prop]) => {
+    const project_id = lookupId(projectOldId);
+    if (!project_id) return;
+    (prop.spaces || []).forEach((sp, spIdx) => {
+      const spaceId = newId(sp.id);
+      spaceRows.push({
+        id: spaceId,
+        project_id,
+        name: sp.name || 'Space',
+        sort_order: spIdx,
+      });
+      (sp.items || []).forEach((it, itIdx) => {
+        const itemId = newId(it.id);
+        itemRows.push({
+          id: itemId,
+          space_id: spaceId,
+          type: it.type || 'readymade',
+          name: it.name || '—',
+          item_code: it.itemCode || null,
+          contact: it.contact || null,
+          room: it.room || null,
+          status: it.status || 'proposed',
+          status_flags: it.statusFlags || [],
+          net_price: parseMoney(it.netPrice),
+          qty: parseMoney(it.qty) ?? 1,
+          qty_unit: it.qtyUnit || null,
+          category: it.category || null,
+          notes: it.notes || null,
+          description: it.description || null,
+          due_date: toDateOrNull(it.dueDate),
+          invoice_phase: it.invoicePhase || null,
+          allowance: !!it.allowance,
+          tax_exempt: !!it.taxExempt,
+          bill_cost_only: !!it.billCostOnly,
+          adjust_markup: it.adjustMarkup ?? null,
+          group_components: !!it.groupComponents,
+          additional_charges: (it.additionalCharges || []).map(ac => ({ ...ac, amount: parseMoney(ac.amount) })),
+          cost_actual: parseMoney(it.costActual),
+          actual_freight: parseMoney(it.actualFreight),
+          additional_costs: (it.additionalCosts || []).map(ac => ({ ...ac, amount: parseMoney(ac.amount) })),
+          invoice_ids: (it._invoiceIds || []).map(lookupId).filter(Boolean),
+          expense_id: it._expenseId ? lookupId(it._expenseId) : null,  // resolved after expenses insert; set null here, patched later
+          invoice_line_id: it._invoiceLineId || null,
+          invoice_number: it._invoiceNumber || null,
+          files: it.files || [],
+          links: it.links || [],
+          tracking_numbers: it.trackingNumbers || [],
+          activity_log: it.activityLog || [],
+          sort_order: itIdx,
+          created_by_user_id: userId,
+        });
+        (it.components || []).forEach((c, cIdx) => {
+          compRows.push({
+            id: newId(c.id),
+            item_id: itemId,
+            name: c.name || null,
+            component_type: c.componentType || null,
+            contact: c.contact || null,
+            net_cost: parseMoney(c.netCost),
+            qty: parseMoney(c.qty) ?? 1,
+            qty_unit: c.qtyUnit || null,
+            status: c.status || 'proposed',
+            due_date: toDateOrNull(c.dueDate),
+            invoice_phase: c.invoicePhase || null,
+            description: c.description || null,
+            note: c.note || null,
+            allowance: !!c.allowance,
+            tax_exempt: !!c.taxExempt,
+            bill_cost_only: !!c.billCostOnly,
+            adjust_markup: c.adjustMarkup ?? null,
+            cost_actual: parseMoney(c.costActual),
+            actual_freight: parseMoney(c.actualFreight),
+            additional_costs: (c.additionalCosts || []).map(ac => ({ ...ac, amount: parseMoney(ac.amount) })),
+            files: c.files || [],
+            links: c.links || [],
+            tracking_numbers: c.trackingNumbers || [],
+            activity_log: c.activityLog || [],
+            sort_order: cIdx,
+          });
+        });
+      });
+    });
+    (prop.estimates || []).forEach(est => {
+      estimateRows.push({
+        id: newId(est.id),
+        project_id,
+        name: est.name || null,
+        freight: parseMoney(est.freight) ?? 0,
+        freight_taxable: !!est.freightTaxable,
+        hours: parseMoney(est.hours) ?? 0,
+        hourly_rate: parseMoney(est.hourlyRate) ?? 0,
+        receiving: parseMoney(est.receiving) ?? 0,
+        storage: parseMoney(est.storage) ?? 0,
+        tariffs_pct: parseMoney(est.tariffsPct) ?? 0,
+        custom_lines: est.customLines || [],
+        snapshot: est.snapshot || {},
+        created_by_user_id: userId,
+      });
+    });
+  });
+
+  if (spaceRows.length) {
+    const { error } = await sb.from('proposal_spaces').insert(spaceRows);
+    if (error) throw new Error('proposal_spaces: ' + error.message);
+  }
+  if (itemRows.length) {
+    // chunk large inserts to stay under any row-size limits
+    const CHUNK = 200;
+    for (let i = 0; i < itemRows.length; i += CHUNK) {
+      const { error } = await sb.from('proposal_items').insert(itemRows.slice(i, i + CHUNK));
+      if (error) throw new Error('proposal_items: ' + error.message);
+    }
+  }
+  if (compRows.length) {
+    const { error } = await sb.from('proposal_components').insert(compRows);
+    if (error) throw new Error('proposal_components: ' + error.message);
+  }
+  if (estimateRows.length) {
+    const { error } = await sb.from('estimates').insert(estimateRows);
+    if (error) throw new Error('estimates: ' + error.message);
+  }
+  ok(`Proposal spaces: ${spaceRows.length}, items: ${itemRows.length}, components: ${compRows.length}, estimates: ${estimateRows.length}`);
+}
+
+async function migrateExpenses() {
+  const rows = (S.expenses || []).map(e => ({
+    id: newId(e.id),
+    studio_id: studioId,
+    project_id: e.projectId ? lookupId(e.projectId) : null,
+    name: e.name || '—',
+    cost: parseMoney(e.cost),
+    date: toDateOrNull(e.date),
+    card: e.card || null,
+    expense_type: e.expenseType || 'nonbillable',
+    category: e.category || null,
+    notes: e.notes || null,
+    track_in_pm: !!e.trackInPM,
+    receipt_path: null, // base64 receipts handled in a later phase (move to Supabase Storage)
+    resolved: !!e.resolved,
+    status: e.status || null,
+    resolved_invoice_id: null, // patched after invoices insert
+    resolved_invoice_number: e.resolvedInvoiceNumber || null,
+    created_by_user_id: userId,
+    created_at: toTsOrNow(e.created),
+  }));
+  if (!rows.length) return ok('Expenses: 0');
+  const { error } = await sb.from('expenses').insert(rows);
+  if (error) throw new Error('expenses: ' + error.message);
+  ok(`Expenses: ${rows.length}`);
+
+  // Patch proposal_items.expense_id for items that reference an expense
+  const patches = [];
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => {
+      (sp.items || []).forEach(it => {
+        if (it._expenseId) {
+          patches.push({ item: lookupId(it.id), exp: lookupId(it._expenseId) });
+        }
+      });
+    });
+  });
+  for (const { item, exp } of patches) {
+    if (!item || !exp) continue;
+    await sb.from('proposal_items').update({ expense_id: exp }).eq('id', item);
+  }
+  if (patches.length) ok(`Item→expense links patched: ${patches.length}`);
+}
+
+async function migrateInvoices() {
+  const invRows = [], lineRows = [], payRows = [];
+  (S.invoices || []).forEach(inv => {
+    const invId = newId(inv.id);
+    invRows.push({
+      id: invId,
+      studio_id: studioId,
+      project_id: inv.projectId ? lookupId(inv.projectId) : null,
+      client_id: inv.clientId ? lookupId(inv.clientId) : null,
+      number: inv.number || 'BE-?',
+      type: inv.type || null,
+      status: inv.status || 'draft',
+      phase: inv.phase || null,
+      sent_date: toDateOrNull(inv.sentDate),
+      due_date: toDateOrNull(inv.dueDate),
+      notes: inv.notes || null,
+      subtotal: parseMoney(inv.subtotal) ?? 0,
+      freight: parseMoney(inv.freight) ?? 0,
+      freight_taxable: !!inv.freightTaxable,
+      discount_type: inv.discountType || null,
+      discount_value: parseMoney(inv.discountValue) ?? 0,
+      discount: parseMoney(inv.discount) ?? 0,
+      cc_fee_pct: parseMoney(inv.ccFeePct) ?? 0,
+      cc_fee: parseMoney(inv.ccFee) ?? 0,
+      tax_rate: parseMoney(inv.taxRate) ?? 0,
+      tax: parseMoney(inv.tax) ?? 0,
+      total: parseMoney(inv.total) ?? 0,
+      files: inv.files || [],
+      created_by_user_id: userId,
+      created_at: toTsOrNow(inv.created),
+    });
+    (inv.lineItems || []).forEach((l, idx) => {
+      lineRows.push({
+        id: newId(l.id),
+        invoice_id: invId,
+        name: l.name || null,
+        qty: parseMoney(l.qty) ?? 1,
+        price: parseMoney(l.price) ?? 0,
+        taxable: !!l.taxable,
+        track_in_pm: !!l.trackInPM,
+        manual: !!l.manual,
+        proposal_item_id: l.proposalItemId ? lookupId(l.proposalItemId) : null,
+        expense_id: l._expenseId ? lookupId(l._expenseId) : null,
+        sort_order: idx,
+      });
+    });
+    (inv.payments || []).forEach(p => {
+      payRows.push({
+        id: newId(p.id),
+        invoice_id: invId,
+        date: toDateOrNull(p.date) || new Date().toISOString().slice(0,10),
+        amount: parseMoney(p.amount) ?? 0,
+        method: p.method || null,
+        notes: p.notes || null,
+        created_by_user_id: userId,
+      });
+    });
+  });
+  if (invRows.length) {
+    const { error } = await sb.from('invoices').insert(invRows);
+    if (error) throw new Error('invoices: ' + error.message);
+  }
+  if (lineRows.length) {
+    const { error } = await sb.from('invoice_line_items').insert(lineRows);
+    if (error) throw new Error('invoice_line_items: ' + error.message);
+  }
+  if (payRows.length) {
+    const { error } = await sb.from('invoice_payments').insert(payRows);
+    if (error) throw new Error('invoice_payments: ' + error.message);
+  }
+  ok(`Invoices: ${invRows.length}, line items: ${lineRows.length}, payments: ${payRows.length}`);
+
+  // Patch expenses.resolved_invoice_id now that invoices exist
+  const expPatches = (S.expenses || []).filter(e => e.resolvedInvoiceId).map(e => ({
+    exp: lookupId(e.id), inv: lookupId(e.resolvedInvoiceId),
+  }));
+  for (const { exp, inv } of expPatches) {
+    if (!exp || !inv) continue;
+    await sb.from('expenses').update({ resolved_invoice_id: inv }).eq('id', exp);
+  }
+  if (expPatches.length) ok(`Expense→invoice links patched: ${expPatches.length}`);
+}
+
+async function migrateDocuments() {
+  const docRows = [], verRows = [];
+  (S.documents || []).forEach(d => {
+    const docId = newId(d.id);
+    docRows.push({
+      id: docId,
+      studio_id: studioId,
+      project_id: d.projectId ? lookupId(d.projectId) : null,
+      template_id: d.template || d.templateId || 'material_schedule',
+      title: d.title || '—',
+      current_version_id: null, // patched below
+      created_by_user_id: userId,
+      created_at: toTsOrNow(d.created),
+    });
+    (d.versions || []).forEach(v => {
+      verRows.push({
+        id: newId(v.id),
+        document_id: docId,
+        version_letter: v.letter || 'A',
+        revision_number: v.revision ?? 0,
+        data: v.data || {},
+        files: v.files || [],
+        created_by_user_id: userId,
+        created_at: toTsOrNow(v.created),
+      });
+    });
+  });
+  if (docRows.filter(r => r.project_id === null).length > 0) {
+    info(`Note: ${docRows.filter(r => r.project_id === null).length} document(s) had no project link and will be skipped (schema requires project_id).`);
+  }
+  const insertableDocs = docRows.filter(r => r.project_id !== null);
+  if (insertableDocs.length) {
+    const { error } = await sb.from('documents').insert(insertableDocs);
+    if (error) throw new Error('documents: ' + error.message);
+  }
+  if (verRows.length) {
+    const { error } = await sb.from('document_versions').insert(verRows);
+    if (error) throw new Error('document_versions: ' + error.message);
+  }
+  // Patch documents.current_version_id
+  for (const d of S.documents || []) {
+    if (d.currentVersionId) {
+      await sb.from('documents').update({ current_version_id: lookupId(d.currentVersionId) }).eq('id', lookupId(d.id));
+    }
+  }
+  ok(`Documents: ${insertableDocs.length}, versions: ${verRows.length}`);
+}
+
+async function migrateTimeEntries() {
+  const rows = (S.timeEntries || []).map(t => ({
+    id: newId(t.id),
+    studio_id: studioId,
+    user_id: userId,
+    project_id: t.projectId ? lookupId(t.projectId) : null,
+    description: t.description || null,
+    started_at: toTsOrNow(t.startedAt),
+    ended_at: t.endedAt ? toTsOrNow(t.endedAt) : null,
+    duration_seconds: t.durationSeconds ?? null,
+    billable: t.billable !== false,
+  }));
+  if (!rows.length) return ok('Time entries: 0');
+  const { error } = await sb.from('time_entries').insert(rows);
+  if (error) throw new Error('time_entries: ' + error.message);
+  ok(`Time entries: ${rows.length}`);
+}
+
+async function verifyBarNero() {
+  info('Verifying Bar Nero / Mea Culpa project…');
+  const { data, error } = await sb.from('projects')
+    .select('id, name, proposal_spaces(id, name, proposal_items(id, name))')
+    .eq('studio_id', studioId)
+    .ilike('name', '%Bar Nero%Mea Culpa%');
+  if (error) { err('Verification query failed: ' + error.message); return; }
+  if (!data || !data.length) { err('Bar Nero / Mea Culpa project not found.'); return; }
+  const p = data[0];
+  ok(`Bar Nero / Mea Culpa: ${p.proposal_spaces.length} space(s), ${p.proposal_spaces.reduce((s,sp) => s + sp.proposal_items.length, 0)} item(s)`);
+  p.proposal_spaces.forEach(sp => info(`  · Space: "${sp.name}" — ${sp.proposal_items.length} items`));
+}
+</script>
+</body>
+</html>
