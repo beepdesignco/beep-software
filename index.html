@@ -1662,6 +1662,9 @@ tr:hover .row-btns { opacity:1; }
             <div class="fg"><label class="fl">Email</label><input type="text" class="fi" id="as-studio-email" onchange="saveStudioField('email',this.value.trim())"></div>
           </div>
           <div class="fg"><label class="fl">Website</label><input type="text" class="fi" id="as-studio-website" onchange="saveStudioField('website',this.value.trim())"></div>
+          <div class="fg" style="margin-top:8px"><label class="fl">Check Mailing Address <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown on invoice payment page when a client chooses to pay by check</span></label>
+            <textarea class="fi" id="as-studio-check-addr" style="min-height:64px;resize:vertical" onchange="saveStudioField('checkMailingAddress',this.value.trim())" placeholder="Beep Design&#10;123 Main St&#10;New Orleans, LA 70130"></textarea>
+          </div>
         </div>
 
         <div id="settab-team" class="settings-panel" style="display:none;max-width:780px">
@@ -3390,12 +3393,14 @@ function dbInvoiceToS(inv) {
     lineItems: (inv.invoice_line_items || []).slice().sort((a,b) => (a.sort_order||0) - (b.sort_order||0)).map(l => ({
       id: l.id,
       name: l.name || '',
+      description: l.description || '',
       qty: Number(l.qty || 1),
       price: Number(l.price || 0),
       taxable: !!l.taxable,
       trackInPM: !!l.track_in_pm,
       manual: !!l.manual,
       proposalItemId: l.proposal_item_id || null,
+      proposalComponentId: l.proposal_component_id || null,
       _expenseId: l.expense_id || null,
     })),
     payments: (inv.invoice_payments || []).map(p => ({
@@ -3675,9 +3680,12 @@ function invoiceToDB(inv, studioId) {
 function invLineItemToDB(l) {
   return {
     id: l.id, invoice_id: l._invoiceId, name: l.name || null,
+    description: l.description || null,
     qty: Number(l.qty || 1), price: Number(l.price || 0),
     taxable: !!l.taxable, track_in_pm: !!l.trackInPM, manual: !!l.manual,
-    proposal_item_id: l.proposalItemId || null, expense_id: l._expenseId || null,
+    proposal_item_id: l.proposalItemId || null,
+    proposal_component_id: l.proposalComponentId || null,
+    expense_id: l._expenseId || null,
     sort_order: l._sortOrder || 0,
   };
 }
@@ -9293,7 +9301,7 @@ function getStudio() {
 
 function loadStudioSettings() {
   const s = getStudio();
-  const map = { 'as-studio-name':'name', 'as-studio-addr1':'address1', 'as-studio-addr2':'address2', 'as-studio-phone':'phone', 'as-studio-email':'email', 'as-studio-website':'website' };
+  const map = { 'as-studio-name':'name', 'as-studio-addr1':'address1', 'as-studio-addr2':'address2', 'as-studio-phone':'phone', 'as-studio-email':'email', 'as-studio-website':'website', 'as-studio-check-addr':'checkMailingAddress' };
   Object.entries(map).forEach(([id, key]) => {
     const el = $c(id);
     if (el) el.value = s[key] || '';
@@ -11295,6 +11303,14 @@ function renderDocuments() {
 let _invLineItems = [];
 let _invFiles = [];
 let _invSelectedProposalItems = new Set();
+let _invSelectedComponents = new Map(); // itemId -> Set<compId>
+let _invExpandedItems = new Set();        // itemIds whose component list is expanded in the picker
+
+function calcComponentClient(comp, item, pid) {
+  const net = parse$(comp.netCost) * (parseFloat(comp.qty)||1);
+  const markup = componentEffectiveMarkup(comp, item, pid) / 100;
+  return net * (1 + markup);
+}
 
 function getNextInvoiceNumber() {
   const all = S.invoices || [];
@@ -11319,6 +11335,8 @@ function openNewInvoiceModal() {
   _invLineItems = [];
   _invFiles = [];
   _invSelectedProposalItems = new Set();
+  _invSelectedComponents = new Map();
+  _invExpandedItems = new Set();
 
   $c('inv-project').innerHTML = '<option value="">— Select project —</option>' +
     S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
@@ -11402,6 +11420,11 @@ function getItemFreightClient(item, pid) {
 
 function toggleInvProposalItem(pid, spId, itemId, checked) {
   if (checked) {
+    // Clear any component-level selections for this item (whole-item supersedes)
+    if (_invSelectedComponents.has(itemId)) {
+      _invLineItems = _invLineItems.filter(l => !(l.proposalItemId === itemId && l.proposalComponentId));
+      _invSelectedComponents.delete(itemId);
+    }
     _invSelectedProposalItems.add(itemId);
     const prop = S.proposals[pid];
     const sp = prop?.spaces.find(s => s.id === spId);
@@ -11414,6 +11437,7 @@ function toggleInvProposalItem(pid, spId, itemId, checked) {
         proposalItemId: itemId,
         spaceId: spId,
         name: item.name,
+        description: item.description || '',
         qty: item.type === 'constructed' ? 1 : qty,
         price: item.type === 'constructed' ? nonFreight : nonFreight / qty,
         taxable: !item.taxExempt,
@@ -11423,11 +11447,57 @@ function toggleInvProposalItem(pid, spId, itemId, checked) {
     // Freight items are handled by recalcInvFreight
   } else {
     _invSelectedProposalItems.delete(itemId);
-    _invLineItems = _invLineItems.filter(l => l.proposalItemId !== itemId);
+    _invLineItems = _invLineItems.filter(l => l.proposalItemId !== itemId || l.proposalComponentId);
   }
   recalcInvFreight();
-  renderInvLineItems();
+  renderInvoiceBuilder();
   recalcInvoice();
+}
+
+function toggleInvProposalComponent(pid, spId, itemId, compId, checked) {
+  const prop = S.proposals[pid];
+  const sp = prop?.spaces.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  const comp = item?.components?.find(c => c.id === compId);
+  if (!item || !comp) return;
+
+  if (checked) {
+    // Clear whole-item selection if present (components supersede)
+    if (_invSelectedProposalItems.has(itemId)) {
+      _invSelectedProposalItems.delete(itemId);
+      _invLineItems = _invLineItems.filter(l => !(l.proposalItemId === itemId && !l.proposalComponentId));
+    }
+    if (!_invSelectedComponents.has(itemId)) _invSelectedComponents.set(itemId, new Set());
+    _invSelectedComponents.get(itemId).add(compId);
+
+    const client = calcComponentClient(comp, item, pid);
+    const cQty = parseFloat(comp.qty)||1;
+    _invLineItems.push({
+      id: uid(),
+      proposalItemId: itemId,
+      proposalComponentId: compId,
+      spaceId: spId,
+      name: (item.name || 'Item') + ' — ' + (comp.name || comp.componentType || 'Component'),
+      description: comp.description || '',
+      qty: cQty,
+      price: cQty ? client / cQty : client,
+      taxable: !item.taxExempt && !comp.taxExempt,
+      trackInPM: false,
+    });
+  } else {
+    _invSelectedComponents.get(itemId)?.delete(compId);
+    if (_invSelectedComponents.get(itemId)?.size === 0) _invSelectedComponents.delete(itemId);
+    _invLineItems = _invLineItems.filter(l => !(l.proposalItemId === itemId && l.proposalComponentId === compId));
+  }
+  recalcInvFreight();
+  renderInvoiceBuilder();
+  recalcInvoice();
+}
+
+function toggleInvItemExpand(itemId) {
+  if (_invExpandedItems.has(itemId)) _invExpandedItems.delete(itemId);
+  else _invExpandedItems.add(itemId);
+  renderInvoiceBuilder();
 }
 
 function recalcInvFreight() {
@@ -11490,29 +11560,45 @@ function removeInvLine(idx) {
 function renderInvLineItems() {
   $c('inv-line-items').innerHTML = _invLineItems.map((l, i) => {
     const isProposal = !!l.proposalItemId;
+    const descExpanded = !!(l.description || l._descOpen);
     return `
-    <div style="display:flex;align-items:flex-end;gap:6px;margin-bottom:4px;padding:6px 8px;background:${isProposal?'rgba(91,45,34,0.02)':'transparent'};border-radius:var(--rs)">
-      <div class="fg" style="flex:2">
-        ${i===0?'<label class="fl">Name</label>':''}
-        <input type="text" class="fi" value="${escH(l.name||'')}" onchange="_invLineItems[${i}].name=this.value" style="font-size:12px;padding:5px 8px">
+    <div style="padding:8px 8px 4px;margin-bottom:6px;background:${isProposal?'rgba(91,45,34,0.02)':'transparent'};border-radius:var(--rs)">
+      <div style="display:flex;align-items:flex-end;gap:6px">
+        <div class="fg" style="flex:2">
+          ${i===0?'<label class="fl">Name</label>':''}
+          <input type="text" class="fi" value="${escH(l.name||'')}" onchange="_invLineItems[${i}].name=this.value" style="font-size:12px;padding:5px 8px">
+        </div>
+        <div class="fg" style="max-width:65px">
+          ${i===0?'<label class="fl">Qty</label>':''}
+          <input type="number" class="fi" value="${l.qty||1}" min="0.25" step="0.25" onchange="_invLineItems[${i}].qty=parseFloat(this.value)||1;recalcInvoice()" style="font-size:12px;padding:5px 8px;text-align:center">
+        </div>
+        <div class="fg" style="max-width:100px">
+          ${i===0?'<label class="fl">Price</label>':''}
+          <input type="text" class="fi" value="${l.price||''}" onchange="_invLineItems[${i}].price=parse$(this.value);recalcInvoice()" style="font-size:12px;padding:5px 8px">
+        </div>
+        <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
+          <input type="checkbox" ${l.taxable?'checked':''} onchange="_invLineItems[${i}].taxable=this.checked;recalcInvoice()" style="accent-color:var(--russet);width:11px;height:11px"> Tax
+        </label>
+        ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
+          <input type="checkbox" ${l.trackInPM?'checked':''} onchange="_invLineItems[${i}].trackInPM=this.checked" style="accent-color:var(--russet);width:11px;height:11px"> Track
+        </label>` : ''}
+        <button onclick="toggleInvLineDesc(${i})" title="${descExpanded?'Hide description':'Add description'}" style="font-size:14px;background:none;border:none;cursor:pointer;color:${descExpanded?'var(--russet)':'var(--text-light)'};padding:${i===0?'10':'4'}px 2px">≡</button>
+        <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${i===0?'10':'4'}px 2px">✕</button>
       </div>
-      <div class="fg" style="max-width:65px">
-        ${i===0?'<label class="fl">Qty</label>':''}
-        <input type="number" class="fi" value="${l.qty||1}" min="0.25" step="0.25" onchange="_invLineItems[${i}].qty=parseFloat(this.value)||1;recalcInvoice()" style="font-size:12px;padding:5px 8px;text-align:center">
-      </div>
-      <div class="fg" style="max-width:100px">
-        ${i===0?'<label class="fl">Price</label>':''}
-        <input type="text" class="fi" value="${l.price||''}" onchange="_invLineItems[${i}].price=parse$(this.value);recalcInvoice()" style="font-size:12px;padding:5px 8px">
-      </div>
-      <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
-        <input type="checkbox" ${l.taxable?'checked':''} onchange="_invLineItems[${i}].taxable=this.checked;recalcInvoice()" style="accent-color:var(--russet);width:11px;height:11px"> Tax
-      </label>
-      ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
-        <input type="checkbox" ${l.trackInPM?'checked':''} onchange="_invLineItems[${i}].trackInPM=this.checked" style="accent-color:var(--russet);width:11px;height:11px"> Track
-      </label>` : ''}
-      <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${i===0?'10':'4'}px 2px">✕</button>
+      ${descExpanded ? `
+      <div style="padding:4px 0 2px;margin-top:4px">
+        <textarea class="fi" placeholder="Description (optional, shown to client only if filled)" onchange="_invLineItems[${i}].description=this.value" style="font-size:11px;padding:5px 8px;width:100%;min-height:32px;resize:vertical">${escH(l.description||'')}</textarea>
+      </div>` : ''}
     </div>`;
   }).join('') || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No line items yet.</div>';
+}
+
+function toggleInvLineDesc(idx) {
+  const l = _invLineItems[idx];
+  if (!l) return;
+  l._descOpen = !(l._descOpen || l.description);
+  if (!l._descOpen) l.description = '';
+  renderInvLineItems();
 }
 
 function recalcInvoice() {
@@ -11647,7 +11733,18 @@ function openInvoiceBuilder(invId) {
   if (!inv) return;
   _invLineItems = JSON.parse(JSON.stringify(inv.lineItems||[]));
   _invFiles = [...(inv.files||[])];
-  _invSelectedProposalItems = new Set(_invLineItems.filter(l=>l.proposalItemId).map(l=>l.proposalItemId));
+  // Whole-item selections = lines that have proposalItemId but NO proposalComponentId
+  _invSelectedProposalItems = new Set(
+    _invLineItems.filter(l => l.proposalItemId && !l.proposalComponentId).map(l => l.proposalItemId)
+  );
+  // Component selections = Map<itemId, Set<compId>>
+  _invSelectedComponents = new Map();
+  _invLineItems.filter(l => l.proposalItemId && l.proposalComponentId).forEach(l => {
+    if (!_invSelectedComponents.has(l.proposalItemId)) _invSelectedComponents.set(l.proposalItemId, new Set());
+    _invSelectedComponents.get(l.proposalItemId).add(l.proposalComponentId);
+  });
+  // Auto-expand any item that has component selections
+  _invExpandedItems = new Set(_invSelectedComponents.keys());
   showView('invoice-builder');
   renderInvoiceBuilder();
 }
@@ -11700,14 +11797,38 @@ function renderInvoiceBuilder() {
       const checked = _invSelectedProposalItems.has(item.id);
       const statusColor = getStatusColor(item.status);
       const statusLabel = STATUSES.find(s=>s.v===item.status)?.l || item.status;
-      html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
-        <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
-        <span class="status-dot" style="background:${statusColor};width:6px;height:6px;flex-shrink:0"></span>
-        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
-        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
-        <span style="font-size:9px;font-family:var(--font-b);color:${statusColor}">${statusLabel}</span>
-        <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
-      </label>`;
+      const isConstructed = item.type === 'constructed' && (item.components||[]).length > 0;
+      const expanded = _invExpandedItems.has(item.id);
+      const hasCompSelections = _invSelectedComponents.has(item.id);
+
+      html += `<div style="border-radius:var(--rs)">
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(91,45,34,0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+          <span class="status-dot" style="background:${statusColor};width:6px;height:6px;flex-shrink:0"></span>
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}${hasCompSelections?' <span style="font-size:9px;color:var(--russet);font-style:italic">(partial)</span>':''}</span>
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
+          <span style="font-size:9px;font-family:var(--font-b);color:${statusColor}">${statusLabel}</span>
+          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
+          ${isConstructed ? `<button type="button" onclick="event.preventDefault();event.stopPropagation();toggleInvItemExpand('${item.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-light);padding:2px 6px;width:20px">${expanded?'▾':'▸'}</button>` : ''}
+        </label>`;
+
+      if (isConstructed && expanded) {
+        const selectedComps = _invSelectedComponents.get(item.id) || new Set();
+        html += '<div style="padding:2px 0 6px 30px;border-left:2px solid var(--border);margin-left:10px">';
+        (item.components||[]).forEach(c => {
+          if (isShippingComp && isShippingComp(c)) return; // freight handled separately
+          const cClient = calcComponentClient(c, item, inv.projectId);
+          const cChecked = selectedComps.has(c.id);
+          const cLabel = (c.name || c.componentType || 'Component');
+          html += `<label style="display:flex;align-items:center;gap:8px;padding:3px 4px;cursor:pointer;border-radius:var(--rs);opacity:${checked?'0.4':'1'}" onmouseenter="this.style.background='rgba(91,45,34,0.02)'" onmouseleave="this.style.background='transparent'">
+            <input type="checkbox" ${cChecked?'checked':''} ${checked?'disabled':''} onchange="toggleInvProposalComponent('${inv.projectId}','${sp.id}','${item.id}','${c.id}',this.checked)" style="accent-color:var(--russet);width:12px;height:12px;flex-shrink:0">
+            <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);flex:1">${escH(cLabel)}${c.contact?` · <span style="color:var(--text-light)">${escH(c.contact)}</span>`:''}</span>
+            <span style="font-size:10px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(cClient)}</span>
+          </label>`;
+        });
+        html += '</div>';
+      }
+      html += '</div>';
     });
     if (!eligibleItems.length) {
       html += '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 4px">No billable, approved, or proposed items.</div>';
@@ -12425,7 +12546,8 @@ function exportInvoicePDF(invId) {
     const qty = parseFloat(l.qty)||1;
     const price = parseFloat(l.price)||0;
     const total = qty * price;
-    return [l.name || '', qty.toString(), fmt(price), (l.taxable ? 'Y' : ''), fmt(total)];
+    const namePlusDesc = l.description ? (l.name || '') + '\n' + l.description : (l.name || '');
+    return [namePlusDesc, qty.toString(), fmt(price), (l.taxable ? 'Y' : ''), fmt(total)];
   });
 
   doc.autoTable({
