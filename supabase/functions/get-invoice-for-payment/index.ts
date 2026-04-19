@@ -50,11 +50,11 @@ Deno.serve(async (req) => {
     }
 
     const { data: project } = inv.project_id
-      ? await sb.from('projects').select('id, name').eq('id', inv.project_id).maybeSingle()
+      ? await sb.from('projects').select('id, name, street, city, state, zip').eq('id', inv.project_id).maybeSingle()
       : { data: null };
 
     const { data: client } = inv.client_id
-      ? await sb.from('clients').select('id, name, email').eq('id', inv.client_id).maybeSingle()
+      ? await sb.from('clients').select('id, name, email, phone, address').eq('id', inv.client_id).maybeSingle()
       : { data: null };
 
     const amountPaid = (inv.invoice_payments || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
@@ -96,8 +96,11 @@ Deno.serve(async (req) => {
         info: studio?.studio_info || {},
         logo_url: logoUrl,
       },
-      project: project ? { name: project.name } : null,
-      client: client ? { name: client.name, email: client.email } : null,
+      project: project ? {
+        name: project.name,
+        address: [project.street, [project.city, project.state].filter(Boolean).join(', '), project.zip].filter(Boolean).join('\n'),
+      } : null,
+      client: client ? { name: client.name, email: client.email, phone: client.phone } : null,
     });
   } catch (e) {
     console.error(e);

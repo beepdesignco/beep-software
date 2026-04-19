@@ -12697,98 +12697,85 @@ async function exportInvoicePDF(invId) {
     headerYOffset = lh + 8;
   }
 
+  // Three-column header: studio (left) / INVOICE + project (center) / project addr + client (right)
   doc.setTextColor(...MAHOGANY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.text(studio.name || 'Studio', margin, margin + 6 + headerYOffset);
+  doc.setFontSize(18);
+  doc.text((studio.name || 'Studio').toUpperCase(), margin, margin + 6 + headerYOffset);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(...TEXT_MID);
-  let y = margin + 22 + headerYOffset;
-  [studio.address1, studio.address2, studio.phone, studio.email, studio.website].forEach(line => {
-    if (line) { doc.text(line, margin, y); y += 11; }
-  });
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(28);
-  doc.setTextColor(...PECAN);
-  doc.text('INVOICE', pageW - margin, margin + 10, { align: 'right' });
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.setTextColor(...TEXT_DARK);
-  doc.text(inv.number || '', pageW - margin, margin + 28, { align: 'right' });
-
-  const statusLabel = inv.status === 'paid' ? 'PAID' : inv.status === 'partial' ? 'PARTIAL' : inv.status === 'cancelled' ? 'CANCELLED' : inv.status === 'draft' ? 'DRAFT' : 'SENT';
+  doc.setFont('courier', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(...TEXT_MID);
-  doc.text(statusLabel, pageW - margin, margin + 42, { align: 'right' });
+  let y = margin + 20 + headerYOffset;
+  [studio.address1, studio.address2, studio.phone, studio.email, studio.website].forEach(line => {
+    if (line) { doc.text(line, margin, y); y += 10; }
+  });
 
-  // ── Divider
-  let cursorY = Math.max(y, margin + 60 + headerYOffset) + 10;
-  doc.setDrawColor(...BORDER);
+  // Center column: INVOICE label + project name
+  const centerX = pageW / 2;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(...TEXT_DARK);
+  doc.text('INVOICE', centerX, margin + 8 + headerYOffset, { align: 'center', charSpace: 4 });
+  if (proj) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.setTextColor(...TEXT_DARK);
+    doc.text((proj.name || '').toUpperCase(), centerX, margin + 26 + headerYOffset, { align: 'center', charSpace: 1 });
+  }
+
+  // Right column: project address + client name/email/phone
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...TEXT_MID);
+  let ry = margin + 6 + headerYOffset;
+  if (proj) {
+    const projAddrLines = [proj.street, [proj.city, proj.state].filter(Boolean).join(', '), proj.zip].filter(Boolean);
+    projAddrLines.forEach(a => { doc.text(a, pageW - margin, ry, { align: 'right' }); ry += 10; });
+    if (projAddrLines.length) ry += 4;
+  }
+  if (client) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_DARK);
+    if (client.name) { doc.text(client.name, pageW - margin, ry, { align: 'right' }); ry += 11; }
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...TEXT_MID);
+    if (client.email) { doc.text(client.email, pageW - margin, ry, { align: 'right' }); ry += 10; }
+    if (client.phone) { doc.text(client.phone, pageW - margin, ry, { align: 'right' }); ry += 10; }
+  }
+
+  // ── Divider under header
+  let cursorY = Math.max(y, ry, margin + 60 + headerYOffset) + 6;
+  doc.setDrawColor(...TEXT_DARK);
   doc.setLineWidth(0.5);
   doc.line(margin, cursorY, pageW - margin, cursorY);
-  cursorY += 18;
+  cursorY += 14;
 
-  // ── Bill To + Meta columns
-  const col1X = margin;
-  const col2X = margin + 220;
-  const col3X = pageW - margin - 200;
-
-  doc.setFont('helvetica', 'bold');
+  // ── Meta row: Page / Issued / Due / Invoice No
+  doc.setFont('courier', 'bold');
   doc.setFontSize(8);
-  doc.setTextColor(...RUSSET);
-  doc.text('BILL TO', col1X, cursorY);
-  doc.text('PROJECT', col2X, cursorY);
-  doc.text('DETAILS', col3X, cursorY);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.setTextColor(...TEXT_DARK);
-  let c1y = cursorY + 14;
-  if (client) {
-    doc.text(client.name || '', col1X, c1y); c1y += 12;
-    doc.setFontSize(9);
-    doc.setTextColor(...TEXT_MID);
-    if (client.address) { doc.text(client.address, col1X, c1y); c1y += 11; }
-    if (client.email) { doc.text(client.email, col1X, c1y); c1y += 11; }
-    if (client.phone) { doc.text(client.phone, col1X, c1y); c1y += 11; }
-  } else {
-    doc.setFontSize(9);
-    doc.setTextColor(...TEXT_LIGHT);
-    doc.text('—', col1X, c1y);
-  }
-
-  doc.setFontSize(10);
-  doc.setTextColor(...TEXT_DARK);
-  let c2y = cursorY + 14;
-  if (proj) {
-    doc.text(proj.name || '', col2X, c2y); c2y += 12;
-    doc.setFontSize(9);
-    doc.setTextColor(...TEXT_MID);
-    const projAddr = [proj.street, [proj.city, proj.zip].filter(Boolean).join(' ')].filter(Boolean);
-    projAddr.forEach(a => { doc.text(a, col2X, c2y); c2y += 11; });
-  }
-
-  doc.setFontSize(9);
   doc.setTextColor(...TEXT_MID);
-  let c3y = cursorY + 14;
-  const metaRows = [
+  const statusLabel = inv.status === 'paid' ? 'PAID' : inv.status === 'partial' ? 'PARTIAL' : inv.status === 'cancelled' ? 'CANCELLED' : inv.status === 'draft' ? 'DRAFT' : 'SENT';
+  const metaParts = [
+    ['Page', '1/1'],
     ['Issued', inv.sentDate || '—'],
     ['Due', inv.dueDate || '—'],
-    inv.phase ? ['Phase', inv.phase] : null,
-  ].filter(Boolean);
-  metaRows.forEach(([label, val]) => {
+    ['Invoice', inv.number || '—'],
+    ['Status', statusLabel],
+  ];
+  const metaSpacing = (pageW - margin*2) / metaParts.length;
+  metaParts.forEach(([label, val], i) => {
+    const x = margin + i * metaSpacing;
     doc.setTextColor(...TEXT_LIGHT);
-    doc.text(label, col3X, c3y);
+    doc.text(label + ':', x, cursorY);
     doc.setTextColor(...TEXT_DARK);
-    doc.text(String(val), pageW - margin, c3y, { align: 'right' });
-    c3y += 12;
+    doc.text(String(val), x + 32, cursorY);
   });
-
-  cursorY = Math.max(c1y, c2y, c3y) + 16;
+  cursorY += 10;
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 14;
 
   // ── Line items table
   const body = (inv.lineItems||[]).map(l => {
@@ -12801,75 +12788,91 @@ async function exportInvoicePDF(invId) {
 
   doc.autoTable({
     startY: cursorY,
-    head: [['Description', 'Qty', 'Price', 'Tax', 'Amount']],
-    body: body.length ? body : [['—', '', '', '', fmt(0)]],
+    head: [['Description', 'Qty', 'Amount']],
+    body: body.length ? body.map(r => [r[0], r[1], r[4]]) : [['—', '', fmt(0)]],
     margin: { left: margin, right: margin },
     theme: 'plain',
-    styles: { font: 'helvetica', fontSize: 9, cellPadding: 6, textColor: TEXT_DARK, lineColor: BORDER, lineWidth: 0.4 },
-    headStyles: { fillColor: [247, 242, 234], textColor: RUSSET, fontStyle: 'bold', fontSize: 8, halign: 'left', lineWidth: 0.4, lineColor: BORDER },
+    styles: { font: 'courier', fontStyle: 'bold', fontSize: 9, cellPadding: 8, textColor: TEXT_DARK, lineColor: TEXT_DARK, lineWidth: 0 },
+    headStyles: { fillColor: [251, 247, 239], textColor: TEXT_DARK, fontStyle: 'bold', font: 'helvetica', fontSize: 9, halign: 'left', lineWidth: { top: 0.5, bottom: 0.5 }, lineColor: TEXT_DARK, cellPadding: 8 },
+    bodyStyles: { lineWidth: { bottom: 0.3 }, lineColor: BORDER },
     columnStyles: {
       0: { cellWidth: 'auto' },
-      1: { cellWidth: 40, halign: 'center' },
-      2: { cellWidth: 70, halign: 'right' },
-      3: { cellWidth: 30, halign: 'center' },
-      4: { cellWidth: 80, halign: 'right', fontStyle: 'bold' },
+      1: { cellWidth: 60, halign: 'right' },
+      2: { cellWidth: 90, halign: 'right', fontStyle: 'bold' },
     },
   });
 
-  cursorY = doc.lastAutoTable.finalY + 16;
+  cursorY = doc.lastAutoTable.finalY + 10;
 
-  // ── Totals block (right aligned)
-  const totalsX = pageW - margin - 220;
-  const labelX = totalsX;
-  const valueX = pageW - margin;
-  const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
-  const due = Math.max(0, (inv.total||0) - paid);
-
-  const totalsRows = [
-    ['Subtotal', fmt(inv.subtotal||0), false],
-    (inv.freight ? ['Freight', fmt(inv.freight), false] : null),
-    (inv.discount ? ['Discount', '-' + fmt(inv.discount), false] : null),
-    [`Tax${inv.taxRate?' ('+inv.taxRate+'%)':''}`, fmt(inv.tax||0), false],
-    (inv.ccFee ? [`CC Fee${inv.ccFeePct?' ('+inv.ccFeePct+'%)':''}`, fmt(inv.ccFee), false] : null),
-  ].filter(Boolean);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  totalsRows.forEach(([label, val]) => {
-    doc.setTextColor(...TEXT_MID);
-    doc.text(label, labelX, cursorY);
-    doc.setTextColor(...TEXT_DARK);
-    doc.text(val, valueX, cursorY, { align: 'right' });
-    cursorY += 14;
-  });
-
-  doc.setDrawColor(...PECAN);
-  doc.setLineWidth(1.2);
-  doc.line(totalsX, cursorY, pageW - margin, cursorY);
+  // ── Totals block — 3 columns (Rate / Amount / Total) matching pay page
+  doc.setDrawColor(...TEXT_DARK);
+  doc.setLineWidth(0.5);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
   cursorY += 14;
 
+  const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+  const due = Math.max(0, (inv.total||0) - paid);
+  const tableWidth = pageW - margin*2;
+  const col1 = margin;
+  const col2 = margin + tableWidth / 3;
+  const col3 = margin + (tableWidth * 2) / 3;
+  const col3EndX = pageW - margin;
+
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
+  doc.setFontSize(9);
+  doc.setTextColor(...TEXT_DARK);
+  doc.text('RATE', col1, cursorY, { charSpace: 1 });
+  doc.text('AMOUNT', col2, cursorY, { charSpace: 1 });
+  doc.text('TOTAL', col3EndX, cursorY, { align: 'right', charSpace: 1 });
+  cursorY += 12;
+
+  const subtotalGross = (inv.subtotal||0) + (inv.freight||0) - (inv.discount||0);
+
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(9);
+  let ry1 = cursorY, ry2 = cursorY, ry3 = cursorY;
+  // Col 1 (Rate)
+  if (inv.taxRate) {
+    doc.setTextColor(...TEXT_MID); doc.text('TAX', col1, ry1);
+    doc.setTextColor(...TEXT_DARK); doc.text(inv.taxRate + '%', col1 + 60, ry1); ry1 += 11;
+  }
+  if (inv.freight) {
+    doc.setTextColor(...TEXT_MID); doc.text('Freight', col1, ry1);
+    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.freight), col1 + 60, ry1); ry1 += 11;
+  }
+  if (inv.discount) {
+    doc.setTextColor(...TEXT_MID); doc.text('Discount', col1, ry1);
+    doc.setTextColor(...TEXT_DARK); doc.text('-' + fmt(inv.discount), col1 + 60, ry1); ry1 += 11;
+  }
+  // Col 2 (Amount)
+  doc.setTextColor(...TEXT_MID); doc.text('Subtotal', col2, ry2);
+  doc.setTextColor(...TEXT_DARK); doc.text(fmt(subtotalGross), col2 + 70, ry2); ry2 += 11;
+  if (inv.tax) {
+    doc.setTextColor(...TEXT_MID); doc.text('Tax', col2, ry2);
+    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.tax), col2 + 70, ry2); ry2 += 11;
+  }
+  // Col 3 (Total — big)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
   doc.setTextColor(...MAHOGANY);
-  doc.text('TOTAL', labelX, cursorY);
-  doc.setTextColor(...PECAN);
-  doc.text(fmt(inv.total||0), valueX, cursorY, { align: 'right' });
-  cursorY += 18;
+  doc.text(fmt(inv.total||0), col3EndX, ry3 + 4, { align: 'right' });
+  ry3 += 22;
 
   if (paid > 0) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(9);
     doc.setTextColor(21, 110, 58);
-    doc.text('Paid', labelX, cursorY);
-    doc.text(fmt(paid), valueX, cursorY, { align: 'right' });
-    cursorY += 14;
+    doc.text('Paid', col3, ry3);
+    doc.text(fmt(paid), col3EndX, ry3, { align: 'right' });
+    ry3 += 12;
 
-    doc.setTextColor(due > 0 ? 196 : 100, due > 0 ? 122 : 90, due > 0 ? 32 : 82);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Outstanding', labelX, cursorY);
-    doc.text(fmt(due), valueX, cursorY, { align: 'right' });
-    cursorY += 18;
+    doc.setTextColor(due > 0 ? 179 : 100, due > 0 ? 51 : 90, due > 0 ? 51 : 82);
+    doc.text(due > 0 ? 'Amount Due' : 'Balance', col3, ry3);
+    doc.text(fmt(due), col3EndX, ry3, { align: 'right' });
+    ry3 += 12;
   }
+
+  cursorY = Math.max(ry1, ry2, ry3) + 6;
 
   // ── Payment history
   if ((inv.payments||[]).length) {

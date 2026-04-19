@@ -14,10 +14,8 @@
   }
   * { box-sizing: border-box; }
   body { margin:0; font-family:var(--font-b); font-weight:700; background:var(--bg); color:var(--text-dark); min-height:100vh; line-height:1.4; }
-  .doc { max-width:820px; margin:24px auto; background:white; border:1px solid var(--border); position:relative; overflow:hidden; }
-  .doc-inner { padding:36px 44px; position:relative; z-index:2; }
-  .watermark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; opacity:.06; pointer-events:none; z-index:1; }
-  .watermark img { max-width:60%; max-height:60%; }
+  .doc { max-width:820px; margin:24px auto; background:white; border:1px solid var(--border); position:relative; }
+  .doc-inner { padding:36px 44px; }
 
   .hdr { display:grid; grid-template-columns:1fr 1fr 1fr; gap:24px; padding-bottom:18px; }
   .hdr .brand .logo-img { max-height:70px; max-width:200px; display:block; margin-bottom:8px; }
@@ -122,12 +120,22 @@ function render(d) {
       <div class="sub">${[si.address1, si.address2, si.phone, si.email, si.website].filter(Boolean).map(escH).join('\n')}</div>
     </div>`;
 
-  const billToHtml = client ? `
-    <div class="right">
-      <div class="bill-name">${escH(client.name || '')}</div>
-      ${client.email ? `<div>${escH(client.email)}</div>` : ''}
-      ${project ? `<div style="margin-top:6px;color:var(--text-light)">${escH(project.name)}</div>` : ''}
-    </div>` : (project ? `<div class="right"><div class="bill-name">${escH(project.name)}</div></div>` : '<div></div>');
+  const centerHtml = `
+    <div class="center">
+      <div class="invoice-label">INVOICE</div>
+      ${project ? `<div class="bill-name" style="font-family:var(--font-h);font-weight:500;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dark)">${escH(project.name)}</div>` : ''}
+    </div>`;
+
+  const projectAddress = project?.address ? escH(project.address) : '';
+  const rightHtml = `
+    <div class="right" style="text-align:right">
+      ${projectAddress ? `<div style="margin-bottom:8px;white-space:pre-wrap">${projectAddress}</div>` : ''}
+      ${client ? `
+        <div class="bill-name" style="font-size:12px">${escH(client.name || '')}</div>
+        ${client.email ? `<div>${escH(client.email)}</div>` : ''}
+        ${client.phone ? `<div>${escH(client.phone)}</div>` : ''}
+      ` : ''}
+    </div>`;
 
   const metaRow = `
     <div class="meta-row">
@@ -209,17 +217,13 @@ function render(d) {
 
   document.getElementById('root').innerHTML = `
     <div class="doc">
-      ${studio.logo_url ? `<div class="watermark"><img src="${escH(studio.logo_url)}" alt=""></div>` : ''}
       <div class="doc-inner">
         ${statusBanner}
 
         <div class="hdr">
           ${brandHtml}
-          <div class="center">
-            <div class="invoice-label">INVOICE</div>
-            ${billToHtml.replace('class="right"', 'class="right" style="text-align:center"')}
-          </div>
-          <div></div>
+          ${centerHtml}
+          ${rightHtml}
         </div>
 
         <hr class="rule-thin">
