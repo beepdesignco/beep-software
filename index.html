@@ -3351,6 +3351,7 @@ function dbProjectToS(p) {
     quickReferences: p.quick_references || [],
     settings: p.settings || {},
     notifications: p.notifications || [],
+    files: p.files || [],
     linkedContacts: (p.project_contacts || []).map(pc => ({
       contactId: pc.contact_id,
       role: pc.role || '',
@@ -3636,6 +3637,7 @@ function projectToDB(p, studioId) {
     quick_references: p.quickReferences || [],
     settings: p.settings || {},
     notifications: p.notifications || [],
+    files: p.files || [],
     deleted_at: null,
   };
 }
@@ -5026,55 +5028,69 @@ function cancelEditNote(noteId) {
   if (actionsEl) actionsEl.style.display = '';
 }
 
-// ── File Upload ──
+// ── File Upload (Supabase Storage) ──
 
-function handleFileUpload(pid, spId, itemId, compId, inputEl) {
+async function handleFileUpload(pid, spId, itemId, compId, inputEl) {
   const files = inputEl.files;
   if (!files || !files.length) return;
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
-
   const target = compId ? (item.components||[]).find(c => c.id === compId) : item;
   if (!target) return;
   if (!target.files) target.files = [];
 
-  [...files].forEach(file => {
+  const entityType = compId ? 'proposal_components' : 'proposal_items';
+  const entityId = compId || itemId;
+
+  for (const file of [...files]) {
     const allowedTypes = ['application/pdf','image/png','image/jpeg','image/jpg'];
     const allowedExts = ['.pdf','.png','.jpg','.jpeg','.dwg'];
     const ext = '.'+file.name.split('.').pop().toLowerCase();
     const allowed = allowedTypes.includes(file.type) || allowedExts.includes(ext);
-    if (!allowed) { toast('Supported: PDF, PNG, JPG, DWG'); return; }
-    if (file.size > 5 * 1024 * 1024) { toast('File too large (max 5MB).'); return; }
-
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      target.files.push({ id: uid(), name: file.name, type: file.type, size: file.size, data: e.target.result, uploaded: new Date().toISOString() });
+    if (!allowed) { toast('Supported: PDF, PNG, JPG, DWG'); continue; }
+    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); continue; }
+    try {
+      const record = await uploadFile(file, entityType, entityId);
+      target.files.push(record);
       save();
       renderProjectDetail();
-    };
-    reader.readAsDataURL(file);
-  });
+    } catch (e) {
+      toast('Upload failed: ' + e.message);
+    }
+  }
   inputEl.value = '';
 }
 
-function removeFile(pid, spId, itemId, compId, fileId) {
+async function removeFile(pid, spId, itemId, compId, fileId) {
   if (!confirm('Remove this file?')) return;
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
   const target = compId ? (item.components||[]).find(c => c.id === compId) : item;
   if (!target || !target.files) return;
+  const toRemove = target.files.find(f => f.id === fileId);
   target.files = target.files.filter(f => f.id !== fileId);
   save();
   renderProjectDetail();
+  if (toRemove?.storagePath) deleteStoredFile(toRemove.storagePath);
 }
 
-function viewFile(fileData) {
-  const w = window.open();
-  if (fileData.type === 'application/pdf') {
-    w.document.write('<iframe src="'+fileData.data+'" style="width:100%;height:100%;border:none"></iframe>');
-  } else {
-    w.document.write('<img src="'+fileData.data+'" style="max-width:100%">');
+async function viewFile(fileRecord) {
+  if (!fileRecord) return;
+  // Legacy base64 fallback
+  if (fileRecord.data) {
+    const w = window.open();
+    if (fileRecord.type === 'application/pdf') {
+      w.document.write('<iframe src="'+fileRecord.data+'" style="width:100%;height:100%;border:none"></iframe>');
+    } else {
+      w.document.write('<img src="'+fileRecord.data+'" style="max-width:100%">');
+    }
+    return;
   }
+  if (!fileRecord.storagePath) { toast('No file path on record.'); return; }
+  try {
+    const url = await getFileSignedUrl(fileRecord.storagePath);
+    window.open(url, '_blank');
+  } catch (e) { toast(e.message || 'File open failed.'); }
 }
 
 // ── Links ──
@@ -5471,7 +5487,7 @@ function removeTaskLink(pid, taskId, idx) {
   renderProjectDetail();
 }
 
-function handleTaskFileUpload(pid, taskId, inputEl) {
+async function handleTaskFileUpload(pid, taskId, inputEl) {
   const files = inputEl.files;
   if (!files || !files.length) return;
   const prop = S.proposals[pid];
@@ -5479,31 +5495,34 @@ function handleTaskFileUpload(pid, taskId, inputEl) {
   if (!task) return;
   if (!task.files) task.files = [];
 
-  [...files].forEach(file => {
+  for (const file of [...files]) {
     const allowedTypes = ['application/pdf','image/png','image/jpeg','image/jpg'];
     const allowedExts = ['.pdf','.png','.jpg','.jpeg','.dwg'];
     const ext = '.'+file.name.split('.').pop().toLowerCase();
-    if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) { toast('Supported: PDF, PNG, JPG, DWG'); return; }
-    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); return; }
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      task.files.push({ id: uid(), name: file.name, displayName: file.name, type: file.type || ext, size: file.size, data: e.target.result, uploaded: new Date().toISOString() });
+    if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) { toast('Supported: PDF, PNG, JPG, DWG'); continue; }
+    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); continue; }
+    try {
+      const record = await uploadFile(file, 'tasks', taskId);
+      task.files.push({ ...record, displayName: record.name });
       save();
       renderProjectDetail();
-    };
-    reader.readAsDataURL(file);
-  });
+    } catch (e) {
+      toast('Upload failed: ' + e.message);
+    }
+  }
   inputEl.value = '';
 }
 
-function removeTaskFile(pid, taskId, fileId) {
+async function removeTaskFile(pid, taskId, fileId) {
   if (!confirm('Remove this file?')) return;
   const prop = S.proposals[pid];
   const task = (prop?.projectTasks||[]).find(t => t.id === taskId);
   if (!task || !task.files) return;
+  const toRemove = task.files.find(f => f.id === fileId);
   task.files = task.files.filter(f => f.id !== fileId);
   save();
   renderProjectDetail();
+  if (toRemove?.storagePath) deleteStoredFile(toRemove.storagePath);
 }
 
 function addTaskNote(pid, taskId) {
@@ -6114,38 +6133,40 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   </div>`;
 }
 
-function handleProjectFileUpload(pid, inputEl) {
+async function handleProjectFileUpload(pid, inputEl) {
   const files = inputEl.files;
   if (!files || !files.length) return;
   const proj = getProject(pid);
   if (!proj) return;
   if (!proj.files) proj.files = [];
 
-  [...files].forEach(file => {
+  for (const file of [...files]) {
     const allowedTypes = ['application/pdf','image/png','image/jpeg','image/jpg'];
     const allowedExts = ['.pdf','.png','.jpg','.jpeg','.dwg'];
     const ext = '.'+file.name.split('.').pop().toLowerCase();
-    if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) { toast('Supported: PDF, PNG, JPG, DWG'); return; }
-    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); return; }
-
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      proj.files.push({ id: uid(), name: file.name, displayName: file.name, type: file.type || ext, size: file.size, data: e.target.result, uploaded: new Date().toISOString(), folders: [] });
+    if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) { toast('Supported: PDF, PNG, JPG, DWG'); continue; }
+    if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB).'); continue; }
+    try {
+      const record = await uploadFile(file, 'projects', pid);
+      proj.files.push({ ...record, displayName: record.name, folders: [] });
       save();
       renderProjectDetail();
-    };
-    reader.readAsDataURL(file);
-  });
+    } catch (e) {
+      toast('Upload failed: ' + e.message);
+    }
+  }
   inputEl.value = '';
 }
 
-function removeProjectFile(pid, fileId) {
+async function removeProjectFile(pid, fileId) {
   if (!confirm('Remove this file?')) return;
   const proj = getProject(pid);
   if (!proj || !proj.files) return;
+  const toRemove = proj.files.find(f => f.id === fileId);
   proj.files = proj.files.filter(f => f.id !== fileId);
   save();
   renderProjectDetail();
+  if (toRemove?.storagePath) deleteStoredFile(toRemove.storagePath);
 }
 
 // ── Folders ──
@@ -11538,22 +11559,34 @@ function recalcInvoice() {
   $c('inv-grand-total').textContent = fmt(total);
 }
 
-function handleInvFileUpload(input) {
-  [...input.files].forEach(f => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      _invFiles.push({ id:uid(), name:f.name, size:f.size, data:e.target.result });
-      renderInvFiles();
-    };
-    reader.readAsDataURL(f);
-  });
+async function handleInvFileUpload(input) {
+  const files = [...input.files];
   input.value = '';
+  if (!_currentInvoiceId) { toast('Save invoice first.'); return; }
+  for (const f of files) {
+    if (f.size > 10 * 1024 * 1024) { toast(`${f.name}: too large (max 10MB).`); continue; }
+    try {
+      const record = await uploadFile(f, 'invoices', _currentInvoiceId);
+      _invFiles.push(record);
+      renderInvFiles();
+    } catch (e) {
+      toast('Upload failed: ' + e.message);
+    }
+  }
+}
+
+async function removeInvFile(idx) {
+  const f = _invFiles[idx];
+  if (!f) return;
+  _invFiles.splice(idx, 1);
+  renderInvFiles();
+  if (f.storagePath) deleteStoredFile(f.storagePath);
 }
 
 function renderInvFiles() {
   $c('inv-files').innerHTML = _invFiles.map((f, i) => `
-    <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:3px 8px;font-size:11px;font-family:var(--font-b);margin-right:4px;margin-bottom:4px">
-      ${escH(f.name)} <button onclick="_invFiles.splice(${i},1);renderInvFiles()" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
+    <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:3px 8px;font-size:11px;font-family:var(--font-b);margin-right:4px;margin-bottom:4px;cursor:pointer" onclick="viewFile(_invFiles[${i}])">
+      ${escH(f.name)} <button onclick="event.stopPropagation();removeInvFile(${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
     </span>
   `).join('');
 }
