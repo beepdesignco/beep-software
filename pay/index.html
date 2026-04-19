@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pay Invoice</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;700;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --mahogany:#5B2D22; --pecan:#9F6640; --russet:#7A4A10; --cloud:#F3E8D6; --bg:#FAF6EE;
+    --border:#e5dcc9; --text-dark:#2a1e15; --text-mid:#6b5a49; --text-light:#a89a85;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Inter', sans-serif; background:var(--bg); color:var(--text-dark); min-height:100vh; }
+  .wrap { max-width:720px; margin:0 auto; padding:40px 20px 80px; }
+  h1 { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:34px; letter-spacing:.04em; color:var(--mahogany); text-transform:uppercase; margin:0 0 4px; }
+  .studio-name { font-family:'Inter', sans-serif; font-size:13px; color:var(--text-mid); }
+  .card { background:white; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; box-shadow: 0 1px 3px rgba(91,45,34,0.04); }
+  .label { font-family:'Cormorant Garamond', serif; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--russet); margin-bottom:6px; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; }
+  .line-item { padding:10px 0; border-bottom:1px solid var(--border); }
+  .line-item:last-child { border-bottom:none; }
+  .line-item .top { display:flex; justify-content:space-between; gap:10px; }
+  .line-item .name { font-weight:600; font-size:14px; }
+  .line-item .desc { font-size:12px; color:var(--text-mid); margin-top:3px; white-space:pre-wrap; }
+  .line-item .amount { font-weight:700; font-size:14px; color:var(--pecan); white-space:nowrap; }
+  .line-item .qty-price { font-size:11px; color:var(--text-light); }
+  .totals .row { font-size:13px; }
+  .totals .total-row { font-family:'Cormorant Garamond', serif; font-weight:900; font-size:20px; color:var(--mahogany); border-top:2px solid var(--pecan); padding-top:10px; margin-top:10px; text-transform:uppercase; letter-spacing:.04em; }
+  .paid { color:#1a6e3a; }
+  .due  { color:#c47a20; font-weight:700; }
+  .methods { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:520px) { .methods { grid-template-columns:1fr; } }
+  .method-btn { background:white; border:1px solid var(--border); border-radius:10px; padding:18px 20px; cursor:pointer; text-align:left; transition:.15s; font-family:inherit; color:inherit; }
+  .method-btn:hover { border-color:var(--pecan); background:rgba(159,102,64,0.04); }
+  .method-btn .title { font-family:'Cormorant Garamond', serif; font-weight:800; font-size:16px; color:var(--mahogany); text-transform:uppercase; letter-spacing:.03em; }
+  .method-btn .sub { font-size:12px; color:var(--text-mid); margin-top:4px; }
+  .method-btn .fee { font-size:11px; color:var(--text-light); margin-top:2px; }
+  .method-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .primary { background:var(--mahogany); color:white; border:none; padding:12px 28px; border-radius:8px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; margin-top:16px; }
+  .primary:hover { background:#3e1f17; }
+  .info-box { background:rgba(91,45,34,.04); border:1px solid var(--border); border-radius:8px; padding:16px 20px; white-space:pre-wrap; font-family:'Inter', sans-serif; font-size:13px; line-height:1.6; color:var(--text-dark); }
+  .status-banner { padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:16px; }
+  .status-success { background:rgba(26,110,58,.08); border:1px solid rgba(26,110,58,.3); color:#1a6e3a; }
+  .status-cancel { background:rgba(196,122,32,.08); border:1px solid rgba(196,122,32,.3); color:#c47a20; }
+  .status-paid { background:rgba(26,110,58,.08); border:1px solid rgba(26,110,58,.3); color:#1a6e3a; font-weight:700; }
+  .loading, .error { text-align:center; padding:60px 20px; color:var(--text-mid); font-size:14px; }
+  .error { color:#b33; }
+  .footer { text-align:center; font-size:11px; color:var(--text-light); margin-top:24px; }
+  a { color:var(--russet); }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="../supabase-config.js"></script>
+</head>
+<body>
+<div class="wrap" id="root">
+  <div class="loading">Loading invoice…</div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get('t');
+const status = params.get('status');
+
+const SB_URL = window.BEEP_SUPABASE_CONFIG?.url;
+const SB_KEY = window.BEEP_SUPABASE_CONFIG?.anonKey;
+
+function fmt(n) { return '$' + (Number(n)||0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function escH(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function loadInvoice() {
+  if (!token) { document.getElementById('root').innerHTML = '<div class="error">Missing payment link token.</div>'; return; }
+  try {
+    const r = await fetch(`${SB_URL}/functions/v1/get-invoice-for-payment?t=${encodeURIComponent(token)}`, {
+      headers: { 'Authorization': 'Bearer ' + SB_KEY, 'apikey': SB_KEY },
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not load invoice.');
+    render(data);
+  } catch (e) {
+    document.getElementById('root').innerHTML = `<div class="error">${escH(e.message)}</div>`;
+  }
+}
+
+function render(d) {
+  const { invoice, studio, project, client } = d;
+  const si = studio.info || {};
+  const isPaid = invoice.amount_due <= 0.01;
+  const ccFee = invoice.cc_fee_pct || 3.5;
+  const cardTotal = invoice.amount_due * (1 + ccFee / 100);
+
+  let statusBanner = '';
+  if (isPaid) {
+    statusBanner = '<div class="status-banner status-paid">✓ This invoice has been paid in full. Thank you.</div>';
+  } else if (status === 'success') {
+    statusBanner = '<div class="status-banner status-success">Payment submitted. It may take a moment to reflect below.</div>';
+  } else if (status === 'cancel') {
+    statusBanner = '<div class="status-banner status-cancel">Payment cancelled. You can try again below.</div>';
+  }
+
+  const itemsHtml = invoice.line_items.map(l => {
+    const total = (l.qty || 1) * (l.price || 0);
+    return `<div class="line-item">
+      <div class="top">
+        <div>
+          <div class="name">${escH(l.name)}</div>
+          ${l.description ? `<div class="desc">${escH(l.description)}</div>` : ''}
+          <div class="qty-price">${l.qty||1} × ${fmt(l.price||0)}${l.taxable?' · taxable':''}</div>
+        </div>
+        <div class="amount">${fmt(total)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const paymentsHtml = (invoice.payments||[]).length ? `
+    <div class="card">
+      <div class="label">Payments Received</div>
+      ${invoice.payments.map(p => `<div class="row"><span>${escH(p.date)}${p.method?' · '+escH(p.method):''}</span><span class="paid">${fmt(p.amount)}</span></div>`).join('')}
+    </div>` : '';
+
+  const methodsHtml = isPaid ? '' : `
+    <div class="card">
+      <div class="label" style="margin-bottom:14px">Choose how to pay</div>
+      <div class="methods">
+        <button class="method-btn" onclick="pay('ach')">
+          <div class="title">ACH Bank Transfer</div>
+          <div class="sub">Direct from your bank account</div>
+          <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
+        </button>
+        <button class="method-btn" onclick="pay('card')">
+          <div class="title">Credit / Debit Card</div>
+          <div class="sub">Processing fee passed to you</div>
+          <div class="fee">+${ccFee}% card fee · ${fmt(cardTotal)} total</div>
+        </button>
+        ${si.wireInstructions ? `<button class="method-btn" onclick="showWire()">
+          <div class="title">Wire Transfer</div>
+          <div class="sub">Direct bank wire</div>
+          <div class="fee" style="color:#1a6e3a">No processing fee · ${fmt(invoice.amount_due)}</div>
+        </button>` : ''}
+        ${si.checkMailingAddress ? `<button class="method-btn" onclick="showCheck()">
+          <div class="title">Mail a Check</div>
+          <div class="sub">Pay by mail</div>
+          <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
+        </button>` : ''}
+      </div>
+      <div id="wire-panel" style="display:none;margin-top:16px">
+        <div class="label">Wire Instructions</div>
+        <div class="info-box">${escH(si.wireInstructions || '')}</div>
+        <div class="footer" style="text-align:left;margin-top:8px">Include invoice ${escH(invoice.number||'')} in the memo.</div>
+      </div>
+      <div id="check-panel" style="display:none;margin-top:16px">
+        <div class="label">Mail Check To</div>
+        <div class="info-box">${escH(si.checkMailingAddress || '')}</div>
+        <div class="footer" style="text-align:left;margin-top:8px">Include invoice ${escH(invoice.number||'')} in the memo. Your invoice will be marked paid once the check is received.</div>
+      </div>
+    </div>`;
+
+  document.getElementById('root').innerHTML = `
+    <div style="margin-bottom:24px">
+      <h1>${escH(studio.name || 'Studio')}</h1>
+      ${si.address1 ? `<div class="studio-name">${escH(si.address1)}${si.address2?' · '+escH(si.address2):''}</div>` : ''}
+      ${si.email || si.phone ? `<div class="studio-name">${si.email?escH(si.email):''}${si.phone?' · '+escH(si.phone):''}</div>` : ''}
+    </div>
+
+    ${statusBanner}
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px">
+        <div>
+          <div class="label">Invoice</div>
+          <div style="font-family:'Cormorant Garamond', serif; font-weight:900; font-size:24px; color:var(--mahogany)">${escH(invoice.number)}</div>
+          ${project ? `<div style="font-size:13px;color:var(--text-mid);margin-top:3px">${escH(project.name)}</div>` : ''}
+        </div>
+        <div style="text-align:right">
+          ${invoice.sent_date ? `<div style="font-size:12px;color:var(--text-mid)">Issued ${escH(invoice.sent_date)}</div>` : ''}
+          ${invoice.due_date  ? `<div style="font-size:12px;color:var(--text-mid)">Due ${escH(invoice.due_date)}</div>` : ''}
+        </div>
+      </div>
+      ${client ? `<div style="font-size:13px;color:var(--text-mid);margin-bottom:10px">Billed to: <strong>${escH(client.name)}</strong></div>` : ''}
+      <div>${itemsHtml}</div>
+    </div>
+
+    <div class="card totals">
+      <div class="row"><span>Subtotal</span><span>${fmt(invoice.subtotal)}</span></div>
+      ${invoice.freight ? `<div class="row"><span>Freight</span><span>${fmt(invoice.freight)}</span></div>` : ''}
+      ${invoice.discount ? `<div class="row"><span>Discount</span><span>-${fmt(invoice.discount)}</span></div>` : ''}
+      ${invoice.tax ? `<div class="row"><span>Tax${invoice.tax_rate?' ('+invoice.tax_rate+'%)':''}</span><span>${fmt(invoice.tax)}</span></div>` : ''}
+      <div class="row total-row"><span>Total</span><span>${fmt(invoice.total)}</span></div>
+      ${invoice.amount_paid > 0 ? `<div class="row" style="margin-top:6px"><span class="paid">Paid</span><span class="paid">${fmt(invoice.amount_paid)}</span></div>` : ''}
+      ${!isPaid ? `<div class="row"><span class="due">Amount Due</span><span class="due">${fmt(invoice.amount_due)}</span></div>` : ''}
+    </div>
+
+    ${paymentsHtml}
+
+    ${methodsHtml}
+
+    <div class="footer">
+      Questions? Email <a href="mailto:${escH(si.email || '')}">${escH(si.email || '')}</a>
+    </div>
+  `;
+}
+
+function showWire() {
+  document.getElementById('wire-panel').style.display = '';
+  document.getElementById('check-panel').style.display = 'none';
+}
+
+function showCheck() {
+  document.getElementById('check-panel').style.display = '';
+  document.getElementById('wire-panel').style.display = 'none';
+}
+
+async function pay(method) {
+  try {
+    const r = await fetch(`${SB_URL}/functions/v1/create-checkout-session`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + SB_KEY, 'apikey': SB_KEY },
+      body: JSON.stringify({ token, method, origin: location.origin }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not start checkout.');
+    window.location = data.url;
+  } catch (e) { alert(e.message); }
+}
+
+loadInvoice();
+</script>
+</body>
+</html>

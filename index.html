@@ -1662,8 +1662,11 @@ tr:hover .row-btns { opacity:1; }
             <div class="fg"><label class="fl">Email</label><input type="text" class="fi" id="as-studio-email" onchange="saveStudioField('email',this.value.trim())"></div>
           </div>
           <div class="fg"><label class="fl">Website</label><input type="text" class="fi" id="as-studio-website" onchange="saveStudioField('website',this.value.trim())"></div>
-          <div class="fg" style="margin-top:8px"><label class="fl">Check Mailing Address <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown on invoice payment page when a client chooses to pay by check</span></label>
+          <div class="fg" style="margin-top:8px"><label class="fl">Check Mailing Address <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown when a client chooses to pay by check</span></label>
             <textarea class="fi" id="as-studio-check-addr" style="min-height:64px;resize:vertical" onchange="saveStudioField('checkMailingAddress',this.value.trim())" placeholder="Beep Design&#10;123 Main St&#10;New Orleans, LA 70130"></textarea>
+          </div>
+          <div class="fg" style="margin-top:8px"><label class="fl">Wire Transfer Instructions <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown when a client chooses to pay by wire (bank, routing #, account #)</span></label>
+            <textarea class="fi" id="as-studio-wire" style="min-height:80px;resize:vertical" onchange="saveStudioField('wireInstructions',this.value.trim())" placeholder="Bank: Chase&#10;Routing #: 021000021&#10;Account #: 1234567890&#10;Account Holder: Beep Design LLC"></textarea>
           </div>
         </div>
 
@@ -3388,6 +3391,8 @@ function dbInvoiceToS(inv) {
     taxRate: Number(inv.tax_rate || 0),
     tax: Number(inv.tax || 0),
     total: Number(inv.total || 0),
+    paymentToken: inv.payment_token || null,
+    stripeCheckoutSessionId: inv.stripe_checkout_session_id || null,
     files: inv.files || [],
     created: inv.created_at,
     lineItems: (inv.invoice_line_items || []).slice().sort((a,b) => (a.sort_order||0) - (b.sort_order||0)).map(l => ({
@@ -9306,7 +9311,7 @@ function getStudio() {
 
 function loadStudioSettings() {
   const s = getStudio();
-  const map = { 'as-studio-name':'name', 'as-studio-addr1':'address1', 'as-studio-addr2':'address2', 'as-studio-phone':'phone', 'as-studio-email':'email', 'as-studio-website':'website', 'as-studio-check-addr':'checkMailingAddress' };
+  const map = { 'as-studio-name':'name', 'as-studio-addr1':'address1', 'as-studio-addr2':'address2', 'as-studio-phone':'phone', 'as-studio-email':'email', 'as-studio-website':'website', 'as-studio-check-addr':'checkMailingAddress', 'as-studio-wire':'wireInstructions' };
   Object.entries(map).forEach(([id, key]) => {
     const el = $c(id);
     if (el) el.value = s[key] || '';
@@ -11980,6 +11985,9 @@ function renderInvoiceBuilder() {
   const actions = $c('invb-actions');
   if (actions) {
     const pdfBtn = `<button class="btn btn-ghost btn-sm" onclick="exportInvoicePDF('${inv.id}')">Export PDF</button>`;
+    const linkBtn = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid')
+      ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
+      : '';
     if (inv.status === 'cancelled') {
       actions.innerHTML = pdfBtn + '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
     } else if (inv.status === 'draft') {
@@ -11991,14 +11999,41 @@ function renderInvoiceBuilder() {
     } else if (inv.status === 'paid' || inv.status === 'partial') {
       actions.innerHTML = `
         ${pdfBtn}
+        ${linkBtn}
         <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
     } else {
       actions.innerHTML = `
         ${pdfBtn}
+        ${linkBtn}
         <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
         <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
     }
+  }
+}
+
+async function copyPaymentLink(invoiceId) {
+  const inv = (S.invoices||[]).find(i => i.id === invoiceId);
+  if (!inv) return;
+  // Lazily generate + persist a token if not yet set (fetch fresh from DB to handle race)
+  let token = inv.paymentToken;
+  if (!token) {
+    try {
+      token = crypto.randomUUID();
+      const { error } = await sb.from('invoices').update({ payment_token: token }).eq('id', invoiceId);
+      if (error) throw error;
+      inv.paymentToken = token;
+    } catch (e) {
+      toast('Could not generate link: ' + (e?.message || e));
+      return;
+    }
+  }
+  const url = `${location.origin}/pay/?t=${encodeURIComponent(token)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('Payment link copied: ' + url);
+  } catch {
+    prompt('Copy this payment link:', url);
   }
 }
 
