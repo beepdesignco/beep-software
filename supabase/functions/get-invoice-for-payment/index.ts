@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
 
     const { data: inv, error } = await sb
       .from('invoices')
-      .select('id, number, type, status, phase, sent_date, due_date, notes, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method)')
+      .select('id, number, type, status, phase, sent_date, due_date, notes, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method)')
       .eq('payment_token', token)
       .is('deleted_at', null)
       .single();
@@ -43,10 +43,25 @@ Deno.serve(async (req) => {
 
     // If a logo is attached, sign a URL for it (valid 1 hour)
     let logoUrl = null;
-    const logoPath = (studio?.studio_info as any)?.logo?.storagePath;
+    const studioInfo = (studio?.studio_info as any) || {};
+    const logoPath = studioInfo.logo?.storagePath;
     if (logoPath) {
       const { data: signed } = await sb.storage.from('files').createSignedUrl(logoPath, 3600);
       logoUrl = signed?.signedUrl || null;
+    }
+
+    // Resolve watermark based on invoice.watermark_mode + studio defaults
+    let watermarkUrl = null;
+    let watermarkOpacity = (studioInfo.watermarkOpacity || 5) / 100;
+    const mode = (inv as any).watermark_mode || 'default';
+    const on = mode === 'on' || (mode === 'default' && !!studioInfo.watermarkDefaultOn);
+    if (on) {
+      const list = studioInfo.watermarks || [];
+      const wm = list.find((w: any) => w.id === studioInfo.defaultWatermarkId) || list[0];
+      if (wm?.storagePath) {
+        const { data: signedWm } = await sb.storage.from('files').createSignedUrl(wm.storagePath, 3600);
+        watermarkUrl = signedWm?.signedUrl || null;
+      }
     }
 
     const { data: project } = inv.project_id
@@ -95,6 +110,8 @@ Deno.serve(async (req) => {
         name: studio?.name || 'Studio',
         info: studio?.studio_info || {},
         logo_url: logoUrl,
+        watermark_url: watermarkUrl,
+        watermark_opacity: watermarkOpacity,
       },
       project: project ? {
         name: project.name,

@@ -1663,12 +1663,31 @@ tr:hover .row-btns { opacity:1; }
           </div>
           <div class="fg"><label class="fl">Website</label><input type="text" class="fi" id="as-studio-website" onchange="saveStudioField('website',this.value.trim())"></div>
           <div class="fg" style="margin-top:12px">
-            <label class="fl">Logo <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— PNG/SVG, ideally transparent background, shown on payment pages + PDFs</span></label>
+            <label class="fl">Logo <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— PNG/JPG, ideally transparent background, shown on payment pages + PDFs (SVG not supported on PDF)</span></label>
             <div id="as-studio-logo-preview" style="margin-top:6px"></div>
             <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0;margin-top:4px">
               <span id="as-studio-logo-btn-text">+ Upload Logo</span>
-              <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" style="display:none" onchange="handleStudioLogoUpload(this)">
+              <input type="file" accept=".png,.jpg,.jpeg,.webp" style="display:none" onchange="handleStudioLogoUpload(this)">
             </label>
+          </div>
+
+          <div class="fg" style="margin-top:12px">
+            <label class="fl">Watermarks <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— faded image centered behind invoice content on pay page + PDFs</span></label>
+            <div id="as-studio-watermarks-list" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px"></div>
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0;margin-top:4px">
+              <span>+ Add Watermark</span>
+              <input type="file" accept=".png,.jpg,.jpeg,.webp" style="display:none" onchange="handleStudioWatermarkUpload(this)">
+            </label>
+            <div class="frow" style="margin-top:10px;align-items:center;gap:12px">
+              <div class="fg" style="max-width:140px">
+                <label class="fl">Default Opacity</label>
+                <input type="number" class="fi" id="as-watermark-opacity" min="1" max="30" step="1" onchange="saveStudioField('watermarkOpacity', parseInt(this.value,10) || 5)">
+              </div>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark);padding-top:14px">
+                <input type="checkbox" id="as-watermark-default-on" onchange="saveStudioField('watermarkDefaultOn', this.checked)" style="accent-color:var(--russet);width:14px;height:14px">
+                Show watermark on new invoices by default
+              </label>
+            </div>
           </div>
           <div class="fg" style="margin-top:8px"><label class="fl">Check Mailing Address <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown when a client chooses to pay by check</span></label>
             <textarea class="fi" id="as-studio-check-addr" style="min-height:64px;resize:vertical" onchange="saveStudioField('checkMailingAddress',this.value.trim())" placeholder="Beep Design&#10;123 Main St&#10;New Orleans, LA 70130"></textarea>
@@ -3401,6 +3420,7 @@ function dbInvoiceToS(inv) {
     total: Number(inv.total || 0),
     paymentToken: inv.payment_token || null,
     stripeCheckoutSessionId: inv.stripe_checkout_session_id || null,
+    watermarkMode: inv.watermark_mode || 'default',
     files: inv.files || [],
     created: inv.created_at,
     lineItems: (inv.invoice_line_items || []).slice().sort((a,b) => (a.sort_order||0) - (b.sort_order||0)).map(l => ({
@@ -3687,7 +3707,9 @@ function invoiceToDB(inv, studioId) {
     discount: Number(inv.discount || 0),
     cc_fee_pct: Number(inv.ccFeePct || 0), cc_fee: Number(inv.ccFee || 0),
     tax_rate: Number(inv.taxRate || 0), tax: Number(inv.tax || 0), total: Number(inv.total || 0),
-    files: inv.files || [], deleted_at: null,
+    files: inv.files || [],
+    watermark_mode: inv.watermarkMode || 'default',
+    deleted_at: null,
   };
 }
 function invLineItemToDB(l) {
@@ -9374,6 +9396,7 @@ function loadStudioSettings() {
     if (el) el.value = s[key] || '';
   });
   renderStudioLogoPreview();
+  renderStudioWatermarks();
 }
 
 function renderStudioLogoPreview() {
@@ -9428,6 +9451,80 @@ async function removeStudioLogo() {
   save();
   renderStudioLogoPreview();
   if (oldPath) deleteStoredFile(oldPath);
+}
+
+// ── Watermarks ──
+
+function renderStudioWatermarks() {
+  const list = $c('as-studio-watermarks-list');
+  const opEl = $c('as-watermark-opacity');
+  const defEl = $c('as-watermark-default-on');
+  if (!list) return;
+  const s = getStudio();
+  if (!s.watermarks) s.watermarks = [];
+  if (opEl)  opEl.value  = s.watermarkOpacity != null ? s.watermarkOpacity : 5;
+  if (defEl) defEl.checked = !!s.watermarkDefaultOn;
+
+  if (!s.watermarks.length) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic">No watermarks yet.</div>';
+    return;
+  }
+  list.innerHTML = s.watermarks.map(w => `
+    <div id="wm-${w.id}" style="position:relative;width:100px;height:100px;border:1px solid ${s.defaultWatermarkId===w.id?'var(--russet)':'var(--border)'};border-radius:var(--r);background:rgba(91,45,34,0.03);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer" onclick="setDefaultWatermark('${w.id}')" title="Click to make default">
+      <span style="font-size:10px;color:var(--text-light)">…</span>
+      ${s.defaultWatermarkId===w.id ? '<div style="position:absolute;top:2px;left:4px;font-size:8px;font-family:var(--font-h);font-weight:700;color:var(--russet);text-transform:uppercase;letter-spacing:0.05em">Default</div>' : ''}
+      <button onclick="event.stopPropagation();removeStudioWatermark('${w.id}')" title="Remove" style="position:absolute;top:2px;right:2px;background:rgba(255,255,255,0.9);border:1px solid var(--border);border-radius:10px;width:16px;height:16px;font-size:10px;cursor:pointer;line-height:1;padding:0">✕</button>
+    </div>`).join('');
+
+  s.watermarks.forEach(w => {
+    if (!w.storagePath) return;
+    getFileSignedUrl(w.storagePath).then(url => {
+      const el = document.getElementById('wm-' + w.id);
+      if (!el) return;
+      const span = el.querySelector('span');
+      if (span) span.remove();
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;opacity:' + ((s.watermarkOpacity||5) / 10 + 0.3);
+      el.insertBefore(img, el.firstChild);
+    }).catch(()=>{});
+  });
+}
+
+async function handleStudioWatermarkUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  if (file.size > 5 * 1024 * 1024) { toast('Watermark too large (max 5MB).'); return; }
+  try {
+    const record = await uploadFile(file, 'studio', AUTH.studio.id);
+    const s = getStudio();
+    if (!s.watermarks) s.watermarks = [];
+    s.watermarks.push(record);
+    if (!s.defaultWatermarkId) s.defaultWatermarkId = record.id;
+    if (s.watermarkOpacity == null) s.watermarkOpacity = 5;
+    save();
+    renderStudioWatermarks();
+    toast('Watermark added.');
+  } catch (e) { toast('Upload failed: ' + e.message); }
+}
+
+async function removeStudioWatermark(id) {
+  if (!confirm('Remove this watermark?')) return;
+  const s = getStudio();
+  const watermark = (s.watermarks || []).find(w => w.id === id);
+  s.watermarks = (s.watermarks || []).filter(w => w.id !== id);
+  if (s.defaultWatermarkId === id) s.defaultWatermarkId = s.watermarks[0]?.id || null;
+  save();
+  renderStudioWatermarks();
+  if (watermark?.storagePath) deleteStoredFile(watermark.storagePath);
+}
+
+function setDefaultWatermark(id) {
+  const s = getStudio();
+  s.defaultWatermarkId = s.defaultWatermarkId === id ? null : id;
+  save();
+  renderStudioWatermarks();
 }
 
 function saveStudioField(key, val) {
@@ -12101,6 +12198,23 @@ function renderInvoiceBuilder() {
       </label>
       <div id="inv-files" style="margin-top:4px"></div>
     </div>
+    ${(() => {
+      const s = getStudio();
+      const hasWm = (s.watermarks||[]).length > 0;
+      if (!hasWm) return '';
+      const opts = [
+        { v: 'default', l: 'Use studio default' + (s.watermarkDefaultOn ? ' (on)' : ' (off)') },
+        { v: 'on',  l: 'Show watermark' },
+        { v: 'off', l: 'Hide watermark' },
+      ];
+      const cur = inv.watermarkMode || 'default';
+      return `<div class="fg" style="margin-top:8px">
+        <label class="fl">Watermark</label>
+        <select class="fi fsel" onchange="setInvWatermarkMode('${inv.id}', this.value)" style="max-width:280px">
+          ${opts.map(o => `<option value="${o.v}" ${cur===o.v?'selected':''}>${escH(o.l)}</option>`).join('')}
+        </select>
+      </div>`;
+    })()}
   </div>`;
 
   html += '</div>';
@@ -12183,6 +12297,25 @@ function renderInvoiceBuilder() {
         <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
     }
   }
+}
+
+function setInvWatermarkMode(invoiceId, mode) {
+  const inv = (S.invoices||[]).find(i => i.id === invoiceId);
+  if (!inv) return;
+  inv.watermarkMode = mode; // 'default' | 'on' | 'off'
+  save();
+}
+
+// Resolves whether a watermark should be shown for a given invoice, and which one.
+function resolveInvoiceWatermark(inv) {
+  const s = getStudio();
+  const list = s.watermarks || [];
+  if (!list.length) return null;
+  const mode = inv?.watermarkMode || 'default';
+  const on = mode === 'on' || (mode === 'default' && !!s.watermarkDefaultOn);
+  if (!on) return null;
+  const wm = list.find(w => w.id === s.defaultWatermarkId) || list[0];
+  return wm ? { watermark: wm, opacityPct: s.watermarkOpacity || 5 } : null;
 }
 
 async function copyPaymentLink(invoiceId) {
@@ -12664,10 +12797,48 @@ async function exportInvoicePDF(invId) {
   const TEXT_LIGHT = [160, 150, 140];
   const BORDER = [220, 210, 198];
 
+  console.log('[pdf] studio:', studio, 'resolvedWatermark:', resolveInvoiceWatermark(inv));
+
+  // ── Watermark: faded image centered on the page (behind content)
+  const wmResolved = resolveInvoiceWatermark(inv);
+  if (wmResolved?.watermark?.storagePath) {
+    try {
+      const wmUrl = await getFileSignedUrl(wmResolved.watermark.storagePath);
+      const wmResp = await fetch(wmUrl);
+      if (wmResp.ok) {
+        const wmBlob = await wmResp.blob();
+        const wmMime = (wmBlob.type || '').toLowerCase();
+        if (!wmMime.includes('svg')) {
+          const wmFormat = wmMime.includes('jpeg') || wmMime.includes('jpg') ? 'JPEG' : wmMime.includes('webp') ? 'WEBP' : 'PNG';
+          const wmData = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(wmBlob); });
+          const wmDims = await new Promise(res => { const im = new Image(); im.onload = () => res({w:im.width,h:im.height}); im.onerror = () => res(null); im.src = wmData; });
+          if (wmDims) {
+            const target = Math.min(pageW, pageH) * 0.55;
+            const scale = Math.min(target / wmDims.w, target / wmDims.h);
+            const w = wmDims.w * scale, h = wmDims.h * scale;
+            const x = (pageW - w) / 2, y = (pageH - h) / 2;
+            const opacity = Math.max(0.01, Math.min(0.3, (wmResolved.opacityPct || 5) / 100));
+            if (doc.setGState && doc.GState) {
+              doc.setGState(new doc.GState({ opacity }));
+              doc.addImage(wmData, wmFormat, x, y, w, h);
+              doc.setGState(new doc.GState({ opacity: 1 }));
+            } else {
+              // Fallback: just draw at full opacity (older jsPDF without GState)
+              doc.addImage(wmData, wmFormat, x, y, w, h);
+            }
+          }
+        }
+      }
+    } catch (e) { console.warn('[pdf watermark] skipped:', e); }
+  }
+
   // ── Header: optional logo (PDF supports PNG/JPEG/WebP; SVG is not supported by jsPDF)
   let logoDataUrl = null;
   let logoDims = null;
   let logoFormat = 'PNG';
+  if (!studio.logo?.storagePath) {
+    console.warn('[pdf logo] no logo on studio.logo.storagePath — upload in App Settings → Studio Info');
+  }
   if (studio.logo?.storagePath) {
     try {
       const url = await getFileSignedUrl(studio.logo.storagePath);
