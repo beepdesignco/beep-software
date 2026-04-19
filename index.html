@@ -12655,7 +12655,7 @@ async function exportInvoicePDF(invId) {
 
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const margin = 48;
+  const margin = 64;
   const MAHOGANY = [91, 45, 34];
   const PECAN = [159, 102, 64];
   const RUSSET = [122, 74, 16];
@@ -12697,85 +12697,93 @@ async function exportInvoicePDF(invId) {
     headerYOffset = lh + 8;
   }
 
-  // Three-column header: studio (left) / INVOICE + project (center) / project addr + client (right)
+  // Three-column header. Each column is independent and we reconcile at the bottom.
+  const headerTop = margin + headerYOffset;
+  const rightEdge = pageW - margin;
+
+  // ── Left column: studio name + contact block
   doc.setTextColor(...MAHOGANY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(18);
-  doc.text((studio.name || 'Studio').toUpperCase(), margin, margin + 6 + headerYOffset);
+  doc.setFontSize(20);
+  doc.text((studio.name || 'Studio').toUpperCase(), margin, headerTop + 14);
 
   doc.setFont('courier', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(...TEXT_MID);
-  let y = margin + 20 + headerYOffset;
+  let leftY = headerTop + 30;
   [studio.address1, studio.address2, studio.phone, studio.email, studio.website].forEach(line => {
-    if (line) { doc.text(line, margin, y); y += 10; }
+    if (line) { doc.text(line, margin, leftY); leftY += 11; }
   });
 
-  // Center column: INVOICE label + project name
+  // ── Center column: "I N V O I C E" + project name
   const centerX = pageW / 2;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
+  doc.setFontSize(18);
   doc.setTextColor(...TEXT_DARK);
-  doc.text('INVOICE', centerX, margin + 8 + headerYOffset, { align: 'center', charSpace: 4 });
+  doc.text('INVOICE', centerX, headerTop + 16, { align: 'center', charSpace: 6 });
+  let centerY = headerTop + 38;
   if (proj) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11);
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(10);
     doc.setTextColor(...TEXT_DARK);
-    doc.text((proj.name || '').toUpperCase(), centerX, margin + 26 + headerYOffset, { align: 'center', charSpace: 1 });
+    const projName = (proj.name || '').toUpperCase();
+    doc.text(projName, centerX, centerY, { align: 'center', charSpace: 1.5 });
+    centerY += 14;
   }
 
-  // Right column: project address + client name/email/phone
+  // ── Right column: project address (top), then client block (bold name, contact below)
   doc.setFont('courier', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(...TEXT_MID);
-  let ry = margin + 6 + headerYOffset;
+  let rightY = headerTop + 14;
   if (proj) {
     const projAddrLines = [proj.street, [proj.city, proj.state].filter(Boolean).join(', '), proj.zip].filter(Boolean);
-    projAddrLines.forEach(a => { doc.text(a, pageW - margin, ry, { align: 'right' }); ry += 10; });
-    if (projAddrLines.length) ry += 4;
+    projAddrLines.forEach(a => { doc.text(a, rightEdge, rightY, { align: 'right' }); rightY += 11; });
+    if (projAddrLines.length) rightY += 6;
   }
   if (client) {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
+    doc.setFontSize(10);
     doc.setTextColor(...TEXT_DARK);
-    if (client.name) { doc.text(client.name, pageW - margin, ry, { align: 'right' }); ry += 11; }
+    if (client.name) { doc.text(client.name, rightEdge, rightY, { align: 'right' }); rightY += 13; }
     doc.setFont('courier', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(...TEXT_MID);
-    if (client.email) { doc.text(client.email, pageW - margin, ry, { align: 'right' }); ry += 10; }
-    if (client.phone) { doc.text(client.phone, pageW - margin, ry, { align: 'right' }); ry += 10; }
+    if (client.email) { doc.text(client.email, rightEdge, rightY, { align: 'right' }); rightY += 11; }
+    if (client.phone) { doc.text(client.phone, rightEdge, rightY, { align: 'right' }); rightY += 11; }
   }
 
   // ── Divider under header
-  let cursorY = Math.max(y, ry, margin + 60 + headerYOffset) + 6;
+  let cursorY = Math.max(leftY, centerY, rightY, headerTop + 80) + 14;
   doc.setDrawColor(...TEXT_DARK);
   doc.setLineWidth(0.5);
-  doc.line(margin, cursorY, pageW - margin, cursorY);
-  cursorY += 14;
+  doc.line(margin, cursorY, rightEdge, cursorY);
+  cursorY += 18;
 
-  // ── Meta row: Page / Issued / Due / Invoice No
-  doc.setFont('courier', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(...TEXT_MID);
+  // ── Meta row: each column has LABEL above VALUE so nothing overlaps
   const statusLabel = inv.status === 'paid' ? 'PAID' : inv.status === 'partial' ? 'PARTIAL' : inv.status === 'cancelled' ? 'CANCELLED' : inv.status === 'draft' ? 'DRAFT' : 'SENT';
   const metaParts = [
-    ['Page', '1/1'],
-    ['Issued', inv.sentDate || '—'],
-    ['Due', inv.dueDate || '—'],
-    ['Invoice', inv.number || '—'],
-    ['Status', statusLabel],
+    ['PAGE',    '1 / 1'],
+    ['ISSUED',  inv.sentDate || '—'],
+    ['DUE',     inv.dueDate || '—'],
+    ['INVOICE', inv.number || '—'],
+    ['STATUS',  statusLabel],
   ];
-  const metaSpacing = (pageW - margin*2) / metaParts.length;
+  const metaSpacing = (rightEdge - margin) / metaParts.length;
   metaParts.forEach(([label, val], i) => {
     const x = margin + i * metaSpacing;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
     doc.setTextColor(...TEXT_LIGHT);
-    doc.text(label + ':', x, cursorY);
+    doc.text(label, x, cursorY, { charSpace: 1.5 });
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(9);
     doc.setTextColor(...TEXT_DARK);
-    doc.text(String(val), x + 32, cursorY);
+    doc.text(String(val), x, cursorY + 12);
   });
-  cursorY += 10;
-  doc.line(margin, cursorY, pageW - margin, cursorY);
-  cursorY += 14;
+  cursorY += 24;
+  doc.line(margin, cursorY, rightEdge, cursorY);
+  cursorY += 20;
 
   // ── Line items table
   const body = (inv.lineItems||[]).map(l => {
@@ -12788,91 +12796,95 @@ async function exportInvoicePDF(invId) {
 
   doc.autoTable({
     startY: cursorY,
-    head: [['Description', 'Qty', 'Amount']],
+    head: [['DESCRIPTION', 'QTY', 'AMOUNT']],
     body: body.length ? body.map(r => [r[0], r[1], r[4]]) : [['—', '', fmt(0)]],
     margin: { left: margin, right: margin },
     theme: 'plain',
-    styles: { font: 'courier', fontStyle: 'bold', fontSize: 9, cellPadding: 8, textColor: TEXT_DARK, lineColor: TEXT_DARK, lineWidth: 0 },
-    headStyles: { fillColor: [251, 247, 239], textColor: TEXT_DARK, fontStyle: 'bold', font: 'helvetica', fontSize: 9, halign: 'left', lineWidth: { top: 0.5, bottom: 0.5 }, lineColor: TEXT_DARK, cellPadding: 8 },
+    styles: { font: 'courier', fontStyle: 'bold', fontSize: 10, cellPadding: { top: 14, bottom: 14, left: 0, right: 12 }, textColor: TEXT_DARK, lineColor: TEXT_DARK, lineWidth: 0 },
+    headStyles: { fillColor: [251, 247, 239], textColor: TEXT_DARK, fontStyle: 'bold', font: 'helvetica', fontSize: 9, halign: 'left', lineWidth: { top: 0.5, bottom: 0.5 }, lineColor: TEXT_DARK, cellPadding: { top: 10, bottom: 10, left: 0, right: 12 } },
     bodyStyles: { lineWidth: { bottom: 0.3 }, lineColor: BORDER },
     columnStyles: {
       0: { cellWidth: 'auto' },
-      1: { cellWidth: 60, halign: 'right' },
-      2: { cellWidth: 90, halign: 'right', fontStyle: 'bold' },
+      1: { cellWidth: 70, halign: 'right' },
+      2: { cellWidth: 100, halign: 'right', fontStyle: 'bold' },
     },
   });
 
-  cursorY = doc.lastAutoTable.finalY + 10;
+  cursorY = doc.lastAutoTable.finalY + 24;
 
-  // ── Totals block — 3 columns (Rate / Amount / Total) matching pay page
+  // ── Totals block — 3 columns (Rate / Amount / Total) with proper vertical spacing
   doc.setDrawColor(...TEXT_DARK);
   doc.setLineWidth(0.5);
-  doc.line(margin, cursorY, pageW - margin, cursorY);
-  cursorY += 14;
+  doc.line(margin, cursorY, rightEdge, cursorY);
+  cursorY += 18;
 
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
-  const tableWidth = pageW - margin*2;
-  const col1 = margin;
-  const col2 = margin + tableWidth / 3;
-  const col3 = margin + (tableWidth * 2) / 3;
-  const col3EndX = pageW - margin;
+  const tableWidth = rightEdge - margin;
+  const col1X = margin;
+  const col2X = margin + tableWidth * 0.35;
+  const col3EndX = rightEdge;
 
+  // Column headers (row 1)
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(...TEXT_DARK);
-  doc.text('RATE', col1, cursorY, { charSpace: 1 });
-  doc.text('AMOUNT', col2, cursorY, { charSpace: 1 });
-  doc.text('TOTAL', col3EndX, cursorY, { align: 'right', charSpace: 1 });
-  cursorY += 12;
+  doc.setFontSize(8);
+  doc.setTextColor(...TEXT_LIGHT);
+  doc.text('RATE',    col1X, cursorY, { charSpace: 1.5 });
+  doc.text('AMOUNT',  col2X, cursorY, { charSpace: 1.5 });
+  doc.text('TOTAL',   col3EndX, cursorY, { align: 'right', charSpace: 1.5 });
 
+  // Row 2 = col headers + big total (on its own baseline well below the column labels)
+  cursorY += 18;
   const subtotalGross = (inv.subtotal||0) + (inv.freight||0) - (inv.discount||0);
 
+  // Col 1 (Rate) — tax rate, freight, discount listed as key/value pairs
+  let ry1 = cursorY;
   doc.setFont('courier', 'bold');
   doc.setFontSize(9);
-  let ry1 = cursorY, ry2 = cursorY, ry3 = cursorY;
-  // Col 1 (Rate)
   if (inv.taxRate) {
-    doc.setTextColor(...TEXT_MID); doc.text('TAX', col1, ry1);
-    doc.setTextColor(...TEXT_DARK); doc.text(inv.taxRate + '%', col1 + 60, ry1); ry1 += 11;
+    doc.setTextColor(...TEXT_MID); doc.text('TAX', col1X, ry1);
+    doc.setTextColor(...TEXT_DARK); doc.text(inv.taxRate + '%', col1X + 80, ry1); ry1 += 13;
   }
   if (inv.freight) {
-    doc.setTextColor(...TEXT_MID); doc.text('Freight', col1, ry1);
-    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.freight), col1 + 60, ry1); ry1 += 11;
+    doc.setTextColor(...TEXT_MID); doc.text('Freight', col1X, ry1);
+    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.freight), col1X + 80, ry1); ry1 += 13;
   }
   if (inv.discount) {
-    doc.setTextColor(...TEXT_MID); doc.text('Discount', col1, ry1);
-    doc.setTextColor(...TEXT_DARK); doc.text('-' + fmt(inv.discount), col1 + 60, ry1); ry1 += 11;
+    doc.setTextColor(...TEXT_MID); doc.text('Discount', col1X, ry1);
+    doc.setTextColor(...TEXT_DARK); doc.text('-' + fmt(inv.discount), col1X + 80, ry1); ry1 += 13;
   }
-  // Col 2 (Amount)
-  doc.setTextColor(...TEXT_MID); doc.text('Subtotal', col2, ry2);
-  doc.setTextColor(...TEXT_DARK); doc.text(fmt(subtotalGross), col2 + 70, ry2); ry2 += 11;
+
+  // Col 2 (Amount) — subtotal + tax
+  let ry2 = cursorY;
+  doc.setTextColor(...TEXT_MID); doc.text('Subtotal', col2X, ry2);
+  doc.setTextColor(...TEXT_DARK); doc.text(fmt(subtotalGross), col2X + 90, ry2); ry2 += 13;
   if (inv.tax) {
-    doc.setTextColor(...TEXT_MID); doc.text('Tax', col2, ry2);
-    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.tax), col2 + 70, ry2); ry2 += 11;
+    doc.setTextColor(...TEXT_MID); doc.text('Tax', col2X, ry2);
+    doc.setTextColor(...TEXT_DARK); doc.text(fmt(inv.tax), col2X + 90, ry2); ry2 += 13;
   }
-  // Col 3 (Total — big)
+
+  // Col 3 (big Total + optional Paid/Balance below)
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(18);
+  doc.setFontSize(22);
   doc.setTextColor(...MAHOGANY);
-  doc.text(fmt(inv.total||0), col3EndX, ry3 + 4, { align: 'right' });
-  ry3 += 22;
+  doc.text(fmt(inv.total||0), col3EndX, cursorY + 4, { align: 'right' });
+  let ry3 = cursorY + 22;
 
   if (paid > 0) {
     doc.setFont('courier', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(21, 110, 58);
-    doc.text('Paid', col3, ry3);
+    doc.text('Paid', col3EndX - 90, ry3);
     doc.text(fmt(paid), col3EndX, ry3, { align: 'right' });
-    ry3 += 12;
+    ry3 += 13;
 
-    doc.setTextColor(due > 0 ? 179 : 100, due > 0 ? 51 : 90, due > 0 ? 51 : 82);
-    doc.text(due > 0 ? 'Amount Due' : 'Balance', col3, ry3);
+    doc.setTextColor(due > 0.01 ? 179 : 21, due > 0.01 ? 51 : 110, due > 0.01 ? 51 : 58);
+    doc.text(due > 0.01 ? 'Amount Due' : 'Balance', col3EndX - 90, ry3);
     doc.text(fmt(due), col3EndX, ry3, { align: 'right' });
-    ry3 += 12;
+    ry3 += 13;
   }
 
-  cursorY = Math.max(ry1, ry2, ry3) + 6;
+  cursorY = Math.max(ry1, ry2, ry3) + 10;
 
   // ── Payment history
   if ((inv.payments||[]).length) {
