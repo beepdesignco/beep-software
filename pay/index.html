@@ -8,59 +8,79 @@
 <style>
   :root {
     --mahogany:#5B2D22; --pecan:#9F6640; --russet:#7A4A10; --cloud:#F3E8D6; --bg:#FAF6EE;
-    --border:#e5dcc9; --text-dark:#2a1e15; --text-mid:#6b5a49; --text-light:#a89a85;
-    --font-h: 'Oswald', sans-serif;
-    --font-b: 'Courier New', Courier, monospace;
+    --border:#bfb19a; --rule:#2a1e15; --text-dark:#1a1108; --text-mid:#4a3a2a; --text-light:#8a7a68;
+    --font-h:'Oswald', sans-serif;
+    --font-b:'Courier New', Courier, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin:0; font-family:var(--font-b); font-weight:700; background:var(--bg); color:var(--text-dark); min-height:100vh; }
-  .brand-bar { background:var(--mahogany); color:var(--cloud); padding:28px 20px 32px; text-align:center; }
-  .brand-bar .logo-img { max-height:72px; max-width:240px; display:block; margin:0 auto 12px; }
-  .brand-bar h1 { font-family:var(--font-h); font-weight:700; font-size:32px; letter-spacing:.08em; color:var(--cloud); text-transform:uppercase; margin:0; }
-  .brand-bar .meta { font-family:var(--font-b); font-weight:700; font-size:12px; color:rgba(243,232,214,.7); margin-top:6px; }
-  .wrap { max-width:720px; margin:0 auto; padding:28px 20px 80px; }
-  h1 { font-family:var(--font-h); font-weight:700; font-size:30px; letter-spacing:.06em; color:var(--mahogany); text-transform:uppercase; margin:0 0 4px; }
-  .studio-name { font-family:var(--font-b); font-weight:700; font-size:13px; color:var(--text-mid); }
-  .card { background:white; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; box-shadow: 0 1px 3px rgba(91,45,34,0.04); }
-  .label { font-family:var(--font-h); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.12em; color:var(--russet); margin-bottom:6px; }
-  .row { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; }
-  .line-item { padding:10px 0; border-bottom:1px solid var(--border); }
-  .line-item:last-child { border-bottom:none; }
-  .line-item .top { display:flex; justify-content:space-between; gap:10px; }
-  .line-item .name { font-weight:700; font-size:14px; }
-  .line-item .desc { font-size:12px; color:var(--text-mid); margin-top:3px; white-space:pre-wrap; font-weight:400; }
-  .line-item .amount { font-weight:700; font-size:14px; color:var(--pecan); white-space:nowrap; }
-  .line-item .qty-price { font-size:11px; color:var(--text-light); font-weight:400; }
-  .totals .row { font-size:13px; }
-  .totals .total-row { font-family:var(--font-h); font-weight:700; font-size:22px; color:var(--mahogany); border-top:2px solid var(--pecan); padding-top:10px; margin-top:10px; text-transform:uppercase; letter-spacing:.06em; }
-  .paid { color:#1a6e3a; }
-  .due  { color:#c47a20; font-weight:700; }
+  body { margin:0; font-family:var(--font-b); font-weight:700; background:var(--bg); color:var(--text-dark); min-height:100vh; line-height:1.4; }
+  .doc { max-width:820px; margin:24px auto; background:white; border:1px solid var(--border); position:relative; overflow:hidden; }
+  .doc-inner { padding:36px 44px; position:relative; z-index:2; }
+  .watermark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; opacity:.06; pointer-events:none; z-index:1; }
+  .watermark img { max-width:60%; max-height:60%; }
+
+  .hdr { display:grid; grid-template-columns:1fr 1fr 1fr; gap:24px; padding-bottom:18px; }
+  .hdr .brand .logo-img { max-height:70px; max-width:200px; display:block; margin-bottom:8px; }
+  .hdr .brand .name { font-family:var(--font-h); font-weight:600; font-size:22px; color:var(--mahogany); text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+  .hdr .brand .sub  { font-size:11px; color:var(--text-mid); line-height:1.6; white-space:pre-wrap; }
+  .hdr .center { text-align:center; }
+  .hdr .center .invoice-label { font-family:var(--font-h); font-weight:600; font-size:18px; letter-spacing:.2em; color:var(--text-dark); margin-bottom:14px; }
+  .hdr .right { font-size:11px; color:var(--text-mid); line-height:1.6; }
+  .hdr .right .bill-name { font-weight:700; color:var(--text-dark); font-size:12px; margin-bottom:2px; }
+
+  .rule { border:0; border-top:1px solid var(--rule); margin:0; }
+  .rule-thin { border:0; border-top:1px solid var(--border); margin:0; }
+
+  .meta-row { display:flex; flex-wrap:wrap; justify-content:space-between; gap:16px; padding:8px 0; font-size:11px; color:var(--text-mid); }
+  .meta-row span strong { color:var(--text-dark); font-weight:700; }
+
+  .table { width:100%; border-collapse:collapse; margin-top:0; }
+  .table th { font-family:var(--font-h); font-weight:500; font-size:11px; letter-spacing:.12em; text-transform:uppercase; text-align:left; color:var(--text-dark); padding:10px 14px 10px 0; border-bottom:1px solid var(--rule); border-top:1px solid var(--rule); background:rgba(91,45,34,.02); }
+  .table th.qty, .table th.amt { text-align:right; width:90px; }
+  .table td { padding:12px 14px 12px 0; font-size:12px; border-bottom:1px solid var(--border); vertical-align:top; }
+  .table td.qty { text-align:right; color:var(--text-mid); }
+  .table td.amt { text-align:right; font-weight:700; }
+  .table td .desc { font-size:11px; color:var(--text-mid); margin-top:4px; font-weight:400; white-space:pre-wrap; }
+  .table td .nor { font-size:10px; color:var(--text-light); font-weight:400; margin-left:6px; }
+
+  .totals-block { display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; padding:18px 0 8px; border-top:1px solid var(--rule); }
+  .totals-block .col-label { font-family:var(--font-h); font-weight:500; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-dark); margin-bottom:6px; }
+  .totals-block .row { display:flex; justify-content:space-between; font-size:12px; padding:3px 0; color:var(--text-mid); }
+  .totals-block .row strong { color:var(--text-dark); }
+  .totals-block .total-cell { text-align:right; }
+  .totals-block .total-cell .big { font-family:var(--font-h); font-weight:700; font-size:26px; color:var(--mahogany); letter-spacing:.04em; }
+  .totals-block .total-cell .lbl { font-family:var(--font-h); font-weight:500; font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-dark); margin-bottom:2px; }
+
+  .paid-stamp { color:#1a6e3a; font-weight:700; }
+  .due-stamp  { color:#b33; font-weight:700; }
+
+  .status-banner { font-size:12px; padding:10px 14px; margin-bottom:16px; border:1px solid; }
+  .status-success { background:rgba(26,110,58,.06); border-color:rgba(26,110,58,.3); color:#1a6e3a; }
+  .status-cancel  { background:rgba(196,122,32,.06); border-color:rgba(196,122,32,.3); color:#c47a20; }
+  .status-paid    { background:rgba(26,110,58,.06); border-color:rgba(26,110,58,.3); color:#1a6e3a; font-weight:700; }
+
+  .pay-section { margin-top:28px; border:1px solid var(--rule); padding:20px 24px; }
+  .pay-section .lbl { font-family:var(--font-h); font-weight:500; font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-dark); margin-bottom:14px; }
   .methods { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  @media (max-width:520px) { .methods { grid-template-columns:1fr; } }
-  .method-btn { background:white; border:1px solid var(--border); border-radius:10px; padding:18px 20px; cursor:pointer; text-align:left; transition:.15s; font-family:inherit; color:inherit; }
-  .method-btn:hover { border-color:var(--pecan); background:rgba(159,102,64,0.04); }
-  .method-btn .title { font-family:var(--font-h); font-weight:700; font-size:16px; color:var(--mahogany); text-transform:uppercase; letter-spacing:.06em; }
-  .method-btn .sub { font-size:12px; color:var(--text-mid); margin-top:4px; font-weight:400; }
+  @media (max-width:560px) { .methods { grid-template-columns:1fr; } .hdr { grid-template-columns:1fr; gap:12px; } .hdr .center { text-align:left; } }
+  .method-btn { background:white; border:1px solid var(--border); padding:16px 18px; cursor:pointer; text-align:left; font-family:inherit; color:inherit; transition:.15s; }
+  .method-btn:hover { border-color:var(--mahogany); background:rgba(91,45,34,.03); }
+  .method-btn .title { font-family:var(--font-h); font-weight:600; font-size:14px; color:var(--mahogany); text-transform:uppercase; letter-spacing:.08em; }
+  .method-btn .sub { font-size:11px; color:var(--text-mid); margin-top:3px; font-weight:400; }
   .method-btn .fee { font-size:11px; color:var(--text-light); margin-top:2px; font-weight:400; }
-  .method-btn:disabled { opacity:.5; cursor:not-allowed; }
-  .primary { background:var(--mahogany); color:white; border:none; padding:12px 28px; border-radius:8px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; margin-top:16px; }
-  .primary:hover { background:#3e1f17; }
-  .info-box { background:rgba(91,45,34,.04); border:1px solid var(--border); border-radius:8px; padding:16px 20px; white-space:pre-wrap; font-family:var(--font-b); font-weight:700; font-size:13px; line-height:1.6; color:var(--text-dark); }
-  .status-banner { padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:16px; }
-  .status-success { background:rgba(26,110,58,.08); border:1px solid rgba(26,110,58,.3); color:#1a6e3a; }
-  .status-cancel { background:rgba(196,122,32,.08); border:1px solid rgba(196,122,32,.3); color:#c47a20; }
-  .status-paid { background:rgba(26,110,58,.08); border:1px solid rgba(26,110,58,.3); color:#1a6e3a; font-weight:700; }
-  .loading, .error { text-align:center; padding:60px 20px; color:var(--text-mid); font-size:14px; }
-  .error { color:#b33; }
-  .footer { text-align:center; font-size:11px; color:var(--text-light); margin-top:24px; }
+  .info-box { background:rgba(91,45,34,.03); border:1px solid var(--border); padding:14px 18px; white-space:pre-wrap; font-family:var(--font-b); font-weight:700; font-size:12px; line-height:1.6; color:var(--text-dark); margin-top:12px; }
+
+  .footer { text-align:center; font-size:10px; color:var(--text-light); margin:24px auto; max-width:820px; padding:0 44px; line-height:1.6; font-weight:400; }
   a { color:var(--russet); }
+
+  .loading, .error { text-align:center; padding:80px 20px; color:var(--text-mid); font-size:13px; }
+  .error { color:#b33; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="../supabase-config.js"></script>
 </head>
 <body>
-<div id="brand-bar" style="display:none"></div>
-<div class="wrap" id="root">
+<div id="root">
   <div class="loading">Loading invoice…</div>
 </div>
 
@@ -94,53 +114,67 @@ function render(d) {
   const si = studio.info || {};
   const isPaid = invoice.amount_due <= 0.01;
   const ccFee = invoice.cc_fee_pct || 3.5;
-  const cardTotal = invoice.amount_due * (1 + ccFee / 100);
 
-  // Brand bar with logo (if uploaded) + studio name
-  const bar = document.getElementById('brand-bar');
-  if (bar) {
-    const metaParts = [si.address1, si.address2, si.email, si.phone].filter(Boolean);
-    bar.className = 'brand-bar';
-    bar.style.display = 'block';
-    bar.innerHTML = `
+  const brandHtml = `
+    <div class="brand">
       ${studio.logo_url ? `<img class="logo-img" src="${escH(studio.logo_url)}" alt="${escH(studio.name)}">` : ''}
-      <h1>${escH(studio.name || 'Studio')}</h1>
-      ${metaParts.length ? `<div class="meta">${metaParts.map(escH).join(' · ')}</div>` : ''}
-    `;
-  }
-
-  let statusBanner = '';
-  if (isPaid) {
-    statusBanner = '<div class="status-banner status-paid">✓ This invoice has been paid in full. Thank you.</div>';
-  } else if (status === 'success') {
-    statusBanner = '<div class="status-banner status-success">Payment submitted. It may take a moment to reflect below.</div>';
-  } else if (status === 'cancel') {
-    statusBanner = '<div class="status-banner status-cancel">Payment cancelled. You can try again below.</div>';
-  }
-
-  const itemsHtml = invoice.line_items.map(l => {
-    const total = (l.qty || 1) * (l.price || 0);
-    return `<div class="line-item">
-      <div class="top">
-        <div>
-          <div class="name">${escH(l.name)}</div>
-          ${l.description ? `<div class="desc">${escH(l.description)}</div>` : ''}
-          <div class="qty-price">${l.qty||1} × ${fmt(l.price||0)}${l.taxable?' · taxable':''}</div>
-        </div>
-        <div class="amount">${fmt(total)}</div>
-      </div>
+      <div class="name">${escH(studio.name || 'Studio')}</div>
+      <div class="sub">${[si.address1, si.address2, si.phone, si.email, si.website].filter(Boolean).map(escH).join('\n')}</div>
     </div>`;
+
+  const billToHtml = client ? `
+    <div class="right">
+      <div class="bill-name">${escH(client.name || '')}</div>
+      ${client.email ? `<div>${escH(client.email)}</div>` : ''}
+      ${project ? `<div style="margin-top:6px;color:var(--text-light)">${escH(project.name)}</div>` : ''}
+    </div>` : (project ? `<div class="right"><div class="bill-name">${escH(project.name)}</div></div>` : '<div></div>');
+
+  const metaRow = `
+    <div class="meta-row">
+      <span>Page No: <strong>1/1</strong></span>
+      ${invoice.sent_date ? `<span>Issued: <strong>${escH(invoice.sent_date)}</strong></span>` : ''}
+      ${invoice.due_date  ? `<span>Due: <strong>${escH(invoice.due_date)}</strong></span>` : ''}
+      <span>Invoice No: <strong>${escH(invoice.number || '')}</strong></span>
+    </div>`;
+
+  const itemsBody = invoice.line_items.map(l => {
+    const total = (l.qty || 1) * (l.price || 0);
+    return `<tr>
+      <td>
+        <div><strong>${escH(l.name)}</strong>${l.taxable ? ' <span class="nor">&lt;TAX&gt;</span>' : ''}</div>
+        ${l.description ? `<div class="desc">${escH(l.description)}</div>` : ''}
+        <div class="desc">${l.qty || 1} × ${fmt(l.price || 0)}</div>
+      </td>
+      <td class="qty">${l.qty || 1}</td>
+      <td class="amt">${fmt(total)}</td>
+    </tr>`;
   }).join('');
 
+  const taxAmount = Number(invoice.tax || 0);
+  const subtotal = Number(invoice.subtotal || 0) + Number(invoice.freight || 0) - Number(invoice.discount || 0);
+
+  let statusBanner = '';
+  if (isPaid) statusBanner = '<div class="status-banner status-paid">✓ This invoice has been paid in full. Thank you.</div>';
+  else if (status === 'success') statusBanner = '<div class="status-banner status-success">Payment submitted. It may take a moment to reflect below.</div>';
+  else if (status === 'cancel')  statusBanner = '<div class="status-banner status-cancel">Payment cancelled. You can try again below.</div>';
+
   const paymentsHtml = (invoice.payments||[]).length ? `
-    <div class="card">
-      <div class="label">Payments Received</div>
-      ${invoice.payments.map(p => `<div class="row"><span>${escH(p.date)}${p.method?' · '+escH(p.method):''}</span><span class="paid">${fmt(p.amount)}</span></div>`).join('')}
+    <div style="padding:16px 0">
+      <div style="font-family:var(--font-h);font-weight:500;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dark);margin-bottom:8px">Payments Received</div>
+      <table class="table">
+        <tbody>
+          ${invoice.payments.map(p => `<tr>
+            <td>${escH(p.date)}${p.method?' · '+escH(p.method):''}</td>
+            <td class="qty"></td>
+            <td class="amt paid-stamp">${fmt(p.amount)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
     </div>` : '';
 
   const methodsHtml = isPaid ? '' : `
-    <div class="card">
-      <div class="label" style="margin-bottom:14px">Choose how to pay</div>
+    <div class="pay-section">
+      <div class="lbl">Choose how to pay</div>
       <div class="methods">
         <button class="method-btn" onclick="pay('ach')">
           <div class="title">ACH Bank Transfer</div>
@@ -149,79 +183,99 @@ function render(d) {
         </button>
         <button class="method-btn" onclick="pay('card')">
           <div class="title">Credit / Debit Card</div>
-          <div class="sub">Processing fee passed to you</div>
-          <div class="fee">+${ccFee}% card fee · ${fmt(cardTotal)} total</div>
+          <div class="sub">Card processing fee applies</div>
+          <div class="fee">+${ccFee}% · ${fmt(invoice.amount_due * (1 + ccFee/100))} total</div>
         </button>
-        ${si.wireInstructions ? `<button class="method-btn" onclick="showWire()">
+        ${si.wireInstructions ? `<button class="method-btn" onclick="showInfo('wire')">
           <div class="title">Wire Transfer</div>
           <div class="sub">Direct bank wire</div>
-          <div class="fee" style="color:#1a6e3a">No processing fee · ${fmt(invoice.amount_due)}</div>
+          <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
         </button>` : ''}
-        ${si.checkMailingAddress ? `<button class="method-btn" onclick="showCheck()">
+        ${si.checkMailingAddress ? `<button class="method-btn" onclick="showInfo('check')">
           <div class="title">Mail a Check</div>
           <div class="sub">Pay by mail</div>
           <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
         </button>` : ''}
       </div>
-      <div id="wire-panel" style="display:none;margin-top:16px">
-        <div class="label">Wire Instructions</div>
+      <div id="info-wire" style="display:none;margin-top:14px">
         <div class="info-box">${escH(si.wireInstructions || '')}</div>
-        <div class="footer" style="text-align:left;margin-top:8px">Include invoice ${escH(invoice.number||'')} in the memo.</div>
+        <div style="font-size:10px;color:var(--text-light);margin-top:6px;font-weight:400">Reference invoice ${escH(invoice.number||'')} in your wire memo.</div>
       </div>
-      <div id="check-panel" style="display:none;margin-top:16px">
-        <div class="label">Mail Check To</div>
+      <div id="info-check" style="display:none;margin-top:14px">
         <div class="info-box">${escH(si.checkMailingAddress || '')}</div>
-        <div class="footer" style="text-align:left;margin-top:8px">Include invoice ${escH(invoice.number||'')} in the memo. Your invoice will be marked paid once the check is received.</div>
+        <div style="font-size:10px;color:var(--text-light);margin-top:6px;font-weight:400">Reference invoice ${escH(invoice.number||'')} on your check. Marked paid once received.</div>
       </div>
     </div>`;
 
   document.getElementById('root').innerHTML = `
-    ${statusBanner}
+    <div class="doc">
+      ${studio.logo_url ? `<div class="watermark"><img src="${escH(studio.logo_url)}" alt=""></div>` : ''}
+      <div class="doc-inner">
+        ${statusBanner}
 
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px">
-        <div>
-          <div class="label">Invoice</div>
-          <div style="font-family:'Cormorant Garamond', serif; font-weight:900; font-size:24px; color:var(--mahogany)">${escH(invoice.number)}</div>
-          ${project ? `<div style="font-size:13px;color:var(--text-mid);margin-top:3px">${escH(project.name)}</div>` : ''}
+        <div class="hdr">
+          ${brandHtml}
+          <div class="center">
+            <div class="invoice-label">INVOICE</div>
+            ${billToHtml.replace('class="right"', 'class="right" style="text-align:center"')}
+          </div>
+          <div></div>
         </div>
-        <div style="text-align:right">
-          ${invoice.sent_date ? `<div style="font-size:12px;color:var(--text-mid)">Issued ${escH(invoice.sent_date)}</div>` : ''}
-          ${invoice.due_date  ? `<div style="font-size:12px;color:var(--text-mid)">Due ${escH(invoice.due_date)}</div>` : ''}
+
+        <hr class="rule-thin">
+        ${metaRow}
+        <hr class="rule-thin">
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th class="qty">Qty</th>
+              <th class="amt">Amount</th>
+            </tr>
+          </thead>
+          <tbody>${itemsBody || '<tr><td colspan="3" style="color:var(--text-light);font-style:italic">No line items.</td></tr>'}</tbody>
+        </table>
+
+        <div class="totals-block">
+          <div>
+            ${invoice.tax_rate ? `
+              <div class="col-label">Rate</div>
+              <div class="row"><span>TAX</span><span>${invoice.tax_rate}%</span></div>
+            ` : ''}
+            ${invoice.freight ? `<div class="row"><span>Freight</span><span>${fmt(invoice.freight)}</span></div>` : ''}
+            ${invoice.discount ? `<div class="row"><span>Discount</span><span>-${fmt(invoice.discount)}</span></div>` : ''}
+          </div>
+          <div>
+            <div class="col-label">Amount</div>
+            <div class="row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+            ${taxAmount ? `<div class="row"><span>Tax</span><span>${fmt(taxAmount)}</span></div>` : ''}
+          </div>
+          <div class="total-cell">
+            <div class="lbl">Total</div>
+            <div class="big">${fmt(invoice.total)}</div>
+            ${invoice.amount_paid > 0 ? `<div class="row" style="margin-top:10px"><span>Paid</span><span class="paid-stamp">${fmt(invoice.amount_paid)}</span></div>` : ''}
+            ${!isPaid ? `<div class="row"><span><strong>Amount Due</strong></span><span class="due-stamp">${fmt(invoice.amount_due)}</span></div>` : ''}
+          </div>
         </div>
+
+        ${paymentsHtml}
+
+        ${methodsHtml}
       </div>
-      ${client ? `<div style="font-size:13px;color:var(--text-mid);margin-bottom:10px">Billed to: <strong>${escH(client.name)}</strong></div>` : ''}
-      <div>${itemsHtml}</div>
     </div>
-
-    <div class="card totals">
-      <div class="row"><span>Subtotal</span><span>${fmt(invoice.subtotal)}</span></div>
-      ${invoice.freight ? `<div class="row"><span>Freight</span><span>${fmt(invoice.freight)}</span></div>` : ''}
-      ${invoice.discount ? `<div class="row"><span>Discount</span><span>-${fmt(invoice.discount)}</span></div>` : ''}
-      ${invoice.tax ? `<div class="row"><span>Tax${invoice.tax_rate?' ('+invoice.tax_rate+'%)':''}</span><span>${fmt(invoice.tax)}</span></div>` : ''}
-      <div class="row total-row"><span>Total</span><span>${fmt(invoice.total)}</span></div>
-      ${invoice.amount_paid > 0 ? `<div class="row" style="margin-top:6px"><span class="paid">Paid</span><span class="paid">${fmt(invoice.amount_paid)}</span></div>` : ''}
-      ${!isPaid ? `<div class="row"><span class="due">Amount Due</span><span class="due">${fmt(invoice.amount_due)}</span></div>` : ''}
-    </div>
-
-    ${paymentsHtml}
-
-    ${methodsHtml}
 
     <div class="footer">
-      Questions? Email <a href="mailto:${escH(si.email || '')}">${escH(si.email || '')}</a>
+      ${escH(studio.name || 'Studio')}${si.email ? ' · ' + escH(si.email) : ''}${si.phone ? ' · ' + escH(si.phone) : ''}${si.website ? ' · ' + escH(si.website) : ''}
     </div>
   `;
 }
 
-function showWire() {
-  document.getElementById('wire-panel').style.display = '';
-  document.getElementById('check-panel').style.display = 'none';
-}
-
-function showCheck() {
-  document.getElementById('check-panel').style.display = '';
-  document.getElementById('wire-panel').style.display = 'none';
+function showInfo(which) {
+  const w = document.getElementById('info-wire');
+  const c = document.getElementById('info-check');
+  if (w) w.style.display = which === 'wire'  ? '' : 'none';
+  if (c) c.style.display = which === 'check' ? '' : 'none';
 }
 
 async function pay(method) {
