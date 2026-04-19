@@ -1170,6 +1170,9 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div id="auth-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
       <button type="submit" id="auth-submit" class="btn btn-primary" style="width:100%;margin-top:8px">Sign in</button>
+      <div style="text-align:center;margin-top:14px">
+        <button type="button" onclick="sendPasswordReset()" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-light);text-decoration:underline">Forgot password?</button>
+      </div>
     </form>
     <div id="auth-loading" style="display:none;text-align:center;padding:20px 0;font-family:var(--font-b);font-size:12px;color:var(--text-mid)">Loading your studio…</div>
   </div>
@@ -2170,6 +2173,13 @@ tr:hover .row-btns { opacity:1; }
       <button class="btn btn-primary btn-sm" onclick="addPaymentCard()">Add</button>
     </div>
 
+    <div class="modal-section-hd" style="margin-top:22px">Team</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
+      Members of your studio. Owner can invite, edit permissions, and remove members.
+    </div>
+    <div id="as-team-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+    <button class="btn btn-primary btn-sm" id="as-invite-btn" onclick="openInviteMemberModal()">+ Invite Member</button>
+
     <div class="modal-footer" style="margin-top:18px">
       <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
       <div style="flex:1"></div>
@@ -2492,6 +2502,65 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ INVITE MEMBER MODAL ═════════════════ -->
+<div class="overlay" id="modal-invite-member">
+  <div class="modal" style="width:480px">
+    <button class="modal-x" onclick="closeModal('modal-invite-member')">✕</button>
+    <div class="modal-title">Invite Team Member</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:16px;line-height:1.5">
+      Creates an account for the person and queues a password reset email so they can set their own password.
+    </div>
+    <div class="frow">
+      <div class="fg" style="flex:1">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" id="inv-email" placeholder="name@example.com" autocomplete="off">
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Display Name</label>
+        <input type="text" class="fi" id="inv-display-name" placeholder="First name or full name">
+      </div>
+      <div class="fg">
+        <label class="fl">Job Title</label>
+        <input type="text" class="fi" id="inv-job-title" placeholder="Studio Assistant">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Phone</label>
+      <input type="text" class="fi" id="inv-phone" placeholder="(optional)">
+    </div>
+    <div class="modal-section-hd" style="margin-top:16px">Permissions</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-fin" checked style="accent-color:var(--russet);width:14px;height:14px">
+        Can view financials <span style="color:var(--text-light);font-weight:400;font-style:italic">— invoices, expenses, dashboards</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-pay" style="accent-color:var(--russet);width:14px;height:14px">
+        Can record invoice payments
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-send" style="accent-color:var(--russet);width:14px;height:14px">
+        Can send invoices
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-exp" style="accent-color:var(--russet);width:14px;height:14px">
+        Can manage expenses
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-mem" style="accent-color:var(--russet);width:14px;height:14px">
+        Can manage team members
+      </label>
+    </div>
+    <div id="inv-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-invite-member')">Cancel</button>
+      <button class="btn btn-primary" onclick="sendInvite()">Send Invite</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ PAYMENT MODAL ═════════════════ -->
 <div class="overlay" id="modal-payment">
   <div class="modal" style="width:440px">
@@ -2727,6 +2796,19 @@ async function signOut() {
   try { await sb.auth.signOut(); } catch (e) {}
   AUTH.user = null; AUTH.studio = null; AUTH.member = null; AUTH.ready = false;
   location.reload();
+}
+
+async function sendPasswordReset() {
+  const email = document.getElementById('auth-email').value.trim();
+  if (!email) { $authErr('Enter your email above first.'); return; }
+  try {
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    if (error) throw error;
+    $authErr('');
+    alert(`Password reset email sent to ${email}. Check your inbox.`);
+  } catch (e) {
+    $authErr(e?.message || 'Could not send reset email.');
+  }
 }
 
 function renderAuthBadge() {
@@ -8554,7 +8636,187 @@ function openAppSettings() {
   renderTaskStatusSettings();
   renderCardsList();
   loadStudioSettings();
+  renderTeamList();
   $c('modal-app-settings').classList.add('open');
+}
+
+// ─── TEAM MANAGEMENT (Phase D) ──────────────────────────
+
+let _teamMembers = [];
+
+async function fetchTeamMembers() {
+  if (!AUTH.ready || !AUTH.studio) return [];
+  const { data, error } = await sb
+    .from('studio_members')
+    .select('*')
+    .eq('studio_id', AUTH.studio.id);
+  if (error) { console.error('[team] fetch failed:', error); return []; }
+  return data || [];
+}
+
+async function renderTeamList() {
+  const el = $c('as-team-list');
+  if (!el) return;
+  const isOwner = AUTH.member?.role === 'owner';
+  const inviteBtn = $c('as-invite-btn');
+  if (inviteBtn) inviteBtn.style.display = isOwner ? '' : 'none';
+
+  el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic">Loading…</div>';
+  _teamMembers = await fetchTeamMembers();
+  if (!_teamMembers.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic">No members yet.</div>'; return; }
+
+  el.innerHTML = _teamMembers.map(m => renderTeamMemberRow(m, isOwner)).join('');
+}
+
+function renderTeamMemberRow(m, isOwner) {
+  const isSelf = m.user_id === AUTH.user.id;
+  const canEdit = isOwner || isSelf;
+  const canRemove = isOwner && !isSelf && m.role !== 'owner';
+  const pending = !m.accepted_at;
+  const perms = [
+    ['can_view_financials',  'view financials'],
+    ['can_record_payments',  'record payments'],
+    ['can_send_invoices',    'send invoices'],
+    ['can_manage_expenses',  'manage expenses'],
+    ['can_manage_members',   'manage members'],
+  ];
+  const permPills = perms.map(([k, label]) => {
+    const active = m.role === 'owner' || m[k];
+    const disabled = !isOwner || m.role === 'owner';
+    return `<button onclick="toggleMemberPerm('${m.id}','${k}',${!active})" ${disabled?'disabled':''}
+      style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 8px;border-radius:10px;cursor:${disabled?'default':'pointer'};transition:var(--t);border:1px solid ${active?'var(--russet)':'var(--border)'};background:${active?'rgba(91,45,34,0.08)':'transparent'};color:${active?'var(--mahogany)':'var(--text-light)'};opacity:${disabled?'0.8':'1'}">${label}</button>`;
+  }).join('');
+
+  return `
+  <div style="background:white;border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${canEdit ? `<input type="text" class="fi" value="${escH(m.display_name||'')}" placeholder="Display name"
+            onchange="updateMemberField('${m.id}','display_name',this.value.trim())" style="font-family:var(--font-h);font-weight:700;font-size:14px;border:none;background:transparent;padding:0;width:auto;min-width:120px">` :
+            `<span style="font-family:var(--font-h);font-weight:700;font-size:14px">${escH(m.display_name||'—')}</span>`}
+          <span style="font-size:10px;font-family:var(--font-b);padding:2px 8px;border-radius:10px;background:${m.role==='owner'?'rgba(91,45,34,0.1)':'rgba(160,150,140,0.1)'};color:${m.role==='owner'?'var(--mahogany)':'var(--text-mid)'};font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${m.role}</span>
+          ${pending ? `<span style="font-size:10px;font-family:var(--font-b);padding:2px 8px;border-radius:10px;background:rgba(196,122,32,0.1);color:#c47a20;font-weight:700;text-transform:uppercase">Pending</span>` : ''}
+        </div>
+        <div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap;font-size:11px;color:var(--text-mid);font-family:var(--font-b)">
+          ${canEdit ? `<input type="text" class="fi" value="${escH(m.job_title||'')}" placeholder="Job title"
+            onchange="updateMemberField('${m.id}','job_title',this.value.trim())" style="font-size:11px;padding:3px 6px;width:auto;min-width:110px">` :
+            `<span>${escH(m.job_title||'')}</span>`}
+          ${canEdit ? `<input type="text" class="fi" value="${escH(m.phone||'')}" placeholder="Phone"
+            onchange="updateMemberField('${m.id}','phone',this.value.trim())" style="font-size:11px;padding:3px 6px;width:auto;min-width:120px">` :
+            `<span>${escH(m.phone||'')}</span>`}
+        </div>
+      </div>
+      ${canRemove ? `<button class="btn btn-danger btn-sm" onclick="removeMember('${m.id}')" style="font-size:10px;padding:4px 8px">Remove</button>` : ''}
+    </div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap">${permPills}</div>
+  </div>`;
+}
+
+async function updateMemberField(memberId, field, value) {
+  const { error } = await sb.from('studio_members').update({ [field]: value }).eq('id', memberId);
+  if (error) { toast('Update failed: ' + error.message); return; }
+  const m = _teamMembers.find(x => x.id === memberId);
+  if (m) m[field] = value;
+  if (memberId === AUTH.member.id) {
+    AUTH.member[field] = value;
+    renderAuthBadge();
+  }
+  toast('Saved.');
+}
+
+async function toggleMemberPerm(memberId, permKey, newValue) {
+  const { error } = await sb.from('studio_members').update({ [permKey]: newValue }).eq('id', memberId);
+  if (error) { toast('Update failed: ' + error.message); return; }
+  const m = _teamMembers.find(x => x.id === memberId);
+  if (m) m[permKey] = newValue;
+  renderTeamList();
+}
+
+async function removeMember(memberId) {
+  const m = _teamMembers.find(x => x.id === memberId);
+  if (!m) return;
+  if (!confirm(`Remove ${m.display_name || 'this member'} from the studio? Their auth account will remain but they'll lose access.`)) return;
+  const { error } = await sb.from('studio_members').delete().eq('id', memberId);
+  if (error) { toast('Remove failed: ' + error.message); return; }
+  toast('Member removed.');
+  renderTeamList();
+}
+
+function openInviteMemberModal() {
+  ['inv-email','inv-display-name','inv-job-title','inv-phone'].forEach(id => { $c(id).value = ''; });
+  $c('inv-fin').checked = true;
+  ['inv-pay','inv-send','inv-exp','inv-mem'].forEach(id => { $c(id).checked = false; });
+  $c('inv-error').style.display = 'none';
+  $c('modal-invite-member').classList.add('open');
+  setTimeout(() => $c('inv-email').focus(), 80);
+}
+
+async function sendInvite() {
+  const email = $c('inv-email').value.trim().toLowerCase();
+  if (!email) { showInviteErr('Enter an email.'); return; }
+  const displayName = $c('inv-display-name').value.trim();
+  const jobTitle = $c('inv-job-title').value.trim();
+  const phone = $c('inv-phone').value.trim();
+  const perms = {
+    can_view_financials: $c('inv-fin').checked,
+    can_record_payments: $c('inv-pay').checked,
+    can_send_invoices:   $c('inv-send').checked,
+    can_manage_expenses: $c('inv-exp').checked,
+    can_manage_members:  $c('inv-mem').checked,
+  };
+
+  // Generate a throwaway password — the new user will set their own via password reset.
+  const tempPassword = 'Setup-' + crypto.randomUUID().replace(/-/g, '').slice(0, 16) + '!';
+
+  showInviteErr('');
+  $c('modal-invite-member').querySelector('.btn-primary').disabled = true;
+
+  try {
+    // signUp creates the auth user. With email confirmation on, this doesn't sign them in.
+    const { data: signupData, error: signupErr } = await sb.auth.signUp({
+      email,
+      password: tempPassword,
+      options: { emailRedirectTo: window.location.origin }
+    });
+    if (signupErr) throw new Error(signupErr.message);
+    const newUserId = signupData?.user?.id;
+    if (!newUserId) throw new Error('Sign-up returned no user id.');
+
+    // Insert studio_members row
+    const { error: memErr } = await sb.from('studio_members').insert({
+      studio_id: AUTH.studio.id,
+      user_id: newUserId,
+      role: 'member',
+      display_name: displayName || email.split('@')[0],
+      job_title: jobTitle || null,
+      phone: phone || null,
+      ...perms,
+      invited_at: new Date().toISOString(),
+      accepted_at: new Date().toISOString(),
+    });
+    if (memErr) throw new Error('Member row failed: ' + memErr.message);
+
+    // Trigger password-reset email so they can set their own password
+    const { error: resetErr } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (resetErr) console.warn('[invite] reset email failed:', resetErr);
+
+    closeModal('modal-invite-member');
+    toast(`Invite sent to ${email}. They'll receive a confirmation + password-setup email.`);
+    renderTeamList();
+  } catch (e) {
+    showInviteErr(e?.message || 'Invite failed.');
+  } finally {
+    $c('modal-invite-member').querySelector('.btn-primary').disabled = false;
+  }
+}
+
+function showInviteErr(msg) {
+  const el = $c('inv-error');
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else { el.style.display = 'none'; }
 }
 
 function getStudio() {
