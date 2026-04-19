@@ -1643,6 +1643,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab"        data-settab="units"   onclick="setSettingsTab('units')"   style="margin-bottom:-1px">Quantity Units</button>
         <button class="view-tab"        data-settab="tasks"   onclick="setSettingsTab('tasks')"   style="margin-bottom:-1px">Task Statuses</button>
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
+        <button class="view-tab"        data-settab="emails"  onclick="setSettingsTab('emails')"  style="margin-bottom:-1px">Email Templates</button>
         <button class="view-tab"        data-settab="colors"  onclick="setSettingsTab('colors')"  style="margin-bottom:-1px">Status Colors</button>
       </div>
 
@@ -1730,6 +1731,21 @@ tr:hover .row-btns { opacity:1; }
             <input type="text" class="fi" id="as-card-input" placeholder="e.g. Amex ending 4242" style="flex:1" onkeydown="if(event.key==='Enter'){addPaymentCard();event.preventDefault()}">
             <button class="btn btn-primary btn-sm" onclick="addPaymentCard()">Add</button>
           </div>
+        </div>
+
+        <div id="settab-emails" class="settings-panel" style="display:none;max-width:780px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic;line-height:1.5">
+            Reusable email templates with variables that auto-fill from the invoice / project / client. Built-in templates show with a lock icon. Click one to edit or delete your custom ones.
+          </div>
+          <div style="background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-family:var(--font-b);font-size:11px;color:var(--text-dark);line-height:1.8">
+            <strong>Available variables:</strong>
+            <code>{client.name}</code> <code>{client.firstName}</code> <code>{client.email}</code> <code>{client.phone}</code>
+            <code>{project.name}</code> <code>{project.address}</code>
+            <code>{invoice.number}</code> <code>{invoice.total}</code> <code>{invoice.dueDate}</code> <code>{invoice.sentDate}</code> <code>{invoice.phase}</code>
+            <code>{studio.name}</code> <code>{studio.email}</code> <code>{studio.phone}</code> <code>{me.name}</code>
+          </div>
+          <div id="as-email-templates-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+          <button class="btn btn-primary btn-sm" onclick="addEmailTemplate()">+ Add Template</button>
         </div>
 
         <div id="settab-colors" class="settings-panel" style="display:none;max-width:640px">
@@ -2621,6 +2637,40 @@ tr:hover .row-btns { opacity:1; }
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-invite-member')">Cancel</button>
       <button class="btn btn-primary" onclick="sendInvite()">Send Invite</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ SEND INVOICE MODAL ═════════════════ -->
+<div class="overlay" id="modal-send-invoice">
+  <div class="modal" style="width:560px">
+    <button class="modal-x" onclick="closeModal('modal-send-invoice')">✕</button>
+    <div class="modal-title">Send Invoice</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;line-height:1.5">
+      Sends a branded email to the client with a link to the payment page. Method buttons (ACH, Card, Wire, Check) all appear on that page.
+    </div>
+    <div class="fg">
+      <label class="fl">Template</label>
+      <select class="fi fsel" id="send-inv-template" onchange="applyEmailTemplate()">
+        <option value="">— Default message —</option>
+      </select>
+    </div>
+    <div class="fg">
+      <label class="fl">To</label>
+      <input type="email" class="fi" id="send-inv-to" placeholder="client@example.com">
+    </div>
+    <div class="fg">
+      <label class="fl">Subject</label>
+      <input type="text" class="fi" id="send-inv-subject">
+    </div>
+    <div class="fg">
+      <label class="fl">Personal Message <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— optional, shown above the invoice summary</span></label>
+      <textarea class="fi" id="send-inv-message" style="resize:vertical;min-height:80px;font-size:12px" placeholder="Hi,&#10;&#10;Here is your invoice for…"></textarea>
+    </div>
+    <div id="send-inv-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-send-invoice')">Cancel</button>
+      <button class="btn btn-primary" onclick="sendInvoiceEmail()">Send</button>
     </div>
   </div>
 </div>
@@ -9194,7 +9244,73 @@ function setSettingsTab(tab) {
   if (tab === 'units')  renderQtyUnitsList();
   if (tab === 'tasks')  renderTaskStatusSettings();
   if (tab === 'cards')  renderCardsList();
+  if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'colors') renderStatusColorSettings();
+}
+
+function renderEmailTemplatesList() {
+  const list = $c('as-email-templates-list');
+  if (!list) return;
+  const studio = getStudio();
+  const custom = studio.emailTemplates || [];
+
+  const row = (t, locked) => `
+    <div style="background:white;border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(t.name)}</span>
+          ${locked ? '<span style="font-size:9px;color:var(--text-light);font-style:italic">built-in · read-only</span>' : ''}
+        </div>
+        ${locked ? '' : `<div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="editEmailTemplate('${t.id}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailTemplate('${t.id}')">Delete</button></div>`}
+      </div>
+      <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);margin-bottom:4px"><strong>Subject:</strong> ${escH(t.subject)}</div>
+      <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);white-space:pre-wrap;line-height:1.5;max-height:100px;overflow:hidden;text-overflow:ellipsis">${escH(t.body)}</div>
+    </div>`;
+
+  const all = [
+    ...DEFAULT_EMAIL_TEMPLATES.map(t => row(t, true)),
+    ...custom.map(t => row(t, false)),
+  ];
+  list.innerHTML = all.join('');
+}
+
+function addEmailTemplate() {
+  const name = prompt('Template name (e.g. "Installation invoice"):');
+  if (!name) return;
+  const subject = prompt('Subject line (use variables like {invoice.number} or {project.name}):', 'Invoice {invoice.number}');
+  if (subject == null) return;
+  const body = prompt('Email body (use variables like {client.firstName}):', 'Hi {client.firstName},\n\n…\n\nThank you,\n{me.name}');
+  if (body == null) return;
+  const s = getStudio();
+  if (!s.emailTemplates) s.emailTemplates = [];
+  s.emailTemplates.push({ id: uid(), name: name.trim(), subject: subject.trim(), body: body });
+  save();
+  renderEmailTemplatesList();
+  toast('Template saved.');
+}
+
+function editEmailTemplate(id) {
+  const s = getStudio();
+  const t = (s.emailTemplates||[]).find(x => x.id === id);
+  if (!t) return;
+  const name = prompt('Template name:', t.name);
+  if (name == null) return;
+  const subject = prompt('Subject line:', t.subject);
+  if (subject == null) return;
+  const body = prompt('Email body:', t.body);
+  if (body == null) return;
+  t.name = name.trim(); t.subject = subject.trim(); t.body = body;
+  save();
+  renderEmailTemplatesList();
+  toast('Template updated.');
+}
+
+function deleteEmailTemplate(id) {
+  if (!confirm('Delete this template?')) return;
+  const s = getStudio();
+  s.emailTemplates = (s.emailTemplates || []).filter(t => t.id !== id);
+  save();
+  renderEmailTemplatesList();
 }
 
 // ─── TEAM MANAGEMENT (Phase D) ──────────────────────────
@@ -12272,8 +12388,12 @@ function renderInvoiceBuilder() {
   const actions = $c('invb-actions');
   if (actions) {
     const pdfBtn = `<button class="btn btn-ghost btn-sm" onclick="exportInvoicePDF('${inv.id}')">Export PDF</button>`;
-    const linkBtn = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid')
+    const canSendBtn = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid');
+    const linkBtn = canSendBtn
       ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
+      : '';
+    const sendBtn = canSendBtn
+      ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}')">Email Invoice</button>`
       : '';
     if (inv.status === 'cancelled') {
       actions.innerHTML = pdfBtn + '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
@@ -12287,11 +12407,13 @@ function renderInvoiceBuilder() {
       actions.innerHTML = `
         ${pdfBtn}
         ${linkBtn}
+        ${sendBtn}
         <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
     } else {
       actions.innerHTML = `
         ${pdfBtn}
         ${linkBtn}
+        ${sendBtn}
         <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
         <button class="btn btn-primary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save &amp; Mark Sent</button>`;
@@ -12316,6 +12438,309 @@ function resolveInvoiceWatermark(inv) {
   if (!on) return null;
   const wm = list.find(w => w.id === s.defaultWatermarkId) || list[0];
   return wm ? { watermark: wm, opacityPct: s.watermarkOpacity || 5 } : null;
+}
+
+// Beep-branded invoice email HTML. Inline-styled so it renders in every major mail client.
+function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl }) {
+  const si = studio || {};
+  const clientName = client?.name || '';
+  const esc = s => String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmtInner = (n) => '$' + (Number(n)||0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const mahogany = '#5B2D22';
+  const pecan   = '#9F6640';
+  const border  = '#bfb19a';
+  const bg      = '#FAF6EE';
+  const textDark = '#1a1108';
+  const textMid  = '#4a3a2a';
+
+  const line = `<tr><td style="border-top:1px solid ${border};height:1px;line-height:1px;font-size:0">&nbsp;</td></tr>`;
+
+  return `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Invoice ${esc(inv.number)}</title>
+</head>
+<body style="margin:0;padding:0;background:${bg};font-family:'Courier New',Courier,monospace;font-weight:700;color:${textDark}">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:${bg};padding:32px 0">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border:1px solid ${border}">
+
+<tr><td style="padding:32px 36px 20px">
+  ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(si.name||'')}" style="max-height:56px;max-width:200px;display:block;margin-bottom:14px">` : ''}
+  <div style="font-family:'Oswald',sans-serif;font-weight:600;font-size:20px;letter-spacing:0.08em;color:${mahogany};text-transform:uppercase">${esc(si.name || 'Studio')}</div>
+  <div style="font-size:11px;color:${textMid};margin-top:4px;line-height:1.6;white-space:pre-wrap;font-weight:700">${[si.address1, si.address2, si.phone, si.email, si.website].filter(Boolean).map(esc).join('\n')}</div>
+</td></tr>
+
+${line}
+
+<tr><td style="padding:20px 36px">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:22px;letter-spacing:.14em;color:${textDark};text-align:center">I N V O I C E</div>
+  ${project ? `<div style="font-family:'Courier New',monospace;font-size:12px;color:${textDark};text-align:center;margin-top:6px;letter-spacing:.05em;text-transform:uppercase;font-weight:700">${esc(project.name||'')}</div>` : ''}
+  ${message ? `<div style="background:${bg};border:1px solid ${border};padding:14px 18px;margin-top:18px;font-family:'Courier New',monospace;font-weight:700;font-size:13px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(message)}</div>` : ''}
+</td></tr>
+
+${line}
+
+<tr><td style="padding:18px 36px">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td style="font-size:11px;color:${textMid};text-transform:uppercase;letter-spacing:.1em"><strong style="color:${textDark}">Invoice</strong> ${esc(inv.number)}</td>
+      <td style="font-size:11px;color:${textMid};text-transform:uppercase;letter-spacing:.1em;text-align:right"><strong style="color:${textDark}">Due</strong> ${esc(inv.dueDate||inv.due_date||'—')}</td>
+    </tr>
+    ${clientName ? `<tr><td colspan="2" style="font-size:12px;color:${textMid};padding-top:8px">Billed to: <strong style="color:${textDark}">${esc(clientName)}</strong></td></tr>` : ''}
+  </table>
+</td></tr>
+
+<tr><td style="padding:4px 36px 18px">
+  <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse:collapse">
+    <thead>
+      <tr>
+        <th align="left"  style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Description</th>
+        <th align="right" style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Qty</th>
+        <th align="right" style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${(inv.lineItems||[]).map(l => {
+        const qty = Number(l.qty||1), price = Number(l.price||0), total = qty * price;
+        return `<tr>
+          <td style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px">${esc(l.name||'')}${l.description?`<div style="font-size:11px;color:${textMid};font-weight:400;margin-top:3px;white-space:pre-wrap">${esc(l.description)}</div>`:''}</td>
+          <td align="right" style="font-size:12px;color:${textMid};border-bottom:1px solid ${border};padding:10px 6px">${qty}</td>
+          <td align="right" style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px"><strong>${fmtInner(total)}</strong></td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+</td></tr>
+
+<tr><td style="padding:8px 36px 18px">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    ${inv.freight ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Freight</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.freight)}</td></tr>` : ''}
+    ${inv.discount ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Discount</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">-${fmtInner(inv.discount)}</td></tr>` : ''}
+    ${inv.tax ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Tax</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.tax)}</td></tr>` : ''}
+    <tr><td style="font-family:'Oswald',sans-serif;font-size:14px;color:${mahogany};text-transform:uppercase;letter-spacing:.1em;padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">Total</td>
+        <td align="right" style="font-family:'Oswald',sans-serif;font-size:18px;color:${mahogany};padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">${fmtInner(inv.total)}</td></tr>
+  </table>
+</td></tr>
+
+${line}
+
+<tr><td align="center" style="padding:24px 36px 32px">
+  <a href="${esc(payUrl)}" style="display:inline-block;background:${mahogany};color:#fff;text-decoration:none;padding:14px 28px;font-family:'Oswald',sans-serif;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase">Review &amp; Pay Invoice</a>
+  <div style="font-family:'Courier New',monospace;font-weight:700;font-size:11px;color:${textMid};margin-top:10px">
+    ACH (no fee) · Credit / Debit · Wire · Check${si.checkMailingAddress?'':''}
+  </div>
+</td></tr>
+
+<tr><td style="background:${bg};padding:16px 36px;text-align:center;font-family:'Courier New',monospace;font-weight:400;font-size:10px;color:${textMid}">
+  Questions? Reply to this email or contact ${esc(si.email || si.phone || '')}
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>`.trim();
+}
+
+function buildInvoiceEmailText({ inv, studio, payUrl, message }) {
+  const si = studio || {};
+  return [
+    `Invoice ${inv.number} from ${si.name || 'Studio'}`,
+    '',
+    message ? message + '\n' : '',
+    `Total: $${Number(inv.total||0).toFixed(2)}`,
+    `Due: ${inv.dueDate||'—'}`,
+    '',
+    `Pay online: ${payUrl}`,
+    '',
+    'ACH, Credit Card, Wire, or Check — pay however works best.',
+    '',
+    si.email ? `Questions? ${si.email}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+let _sendInvId = null;
+
+// ── Email template variable substitution
+// Known tokens: {client.name} {client.firstName} {client.email} {client.phone}
+//               {project.name} {project.address}
+//               {invoice.number} {invoice.total} {invoice.dueDate} {invoice.sentDate} {invoice.phase}
+//               {studio.name} {studio.email} {studio.phone}
+//               {me.name} (the sender's display_name)
+function buildTemplateContext(inv) {
+  const client = (S.clients||[]).find(c => c.id === inv.clientId) || {};
+  const project = S.projects.find(p => p.id === inv.projectId) || {};
+  const studio = getStudio();
+  const addrParts = [project.street, [project.city, project.state].filter(Boolean).join(', '), project.zip].filter(Boolean);
+  return {
+    'client.name': client.name || '',
+    'client.firstName': (client.name || '').split(' ')[0] || '',
+    'client.email': client.email || '',
+    'client.phone': client.phone || '',
+    'project.name': project.name || '',
+    'project.address': addrParts.join('\n'),
+    'invoice.number': inv.number || '',
+    'invoice.total': '$' + Number(inv.total||0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    'invoice.dueDate': inv.dueDate || '',
+    'invoice.sentDate': inv.sentDate || '',
+    'invoice.phase': inv.phase || '',
+    'studio.name': studio.name || '',
+    'studio.email': studio.email || '',
+    'studio.phone': studio.phone || '',
+    'me.name': AUTH.member?.display_name || studio.name || '',
+  };
+}
+
+function fillTemplate(str, ctx) {
+  return String(str || '').replace(/\{([^}]+)\}/g, (m, key) => (ctx[key.trim()] ?? m));
+}
+
+// Built-in default templates — user's custom ones override/extend these.
+const DEFAULT_EMAIL_TEMPLATES = [
+  {
+    id: 'builtin-new-invoice',
+    name: 'New invoice',
+    subject: 'Invoice {invoice.number} — {project.name}',
+    body: 'Hi {client.firstName},\n\nHere is invoice {invoice.number} for {project.name}, totaling {invoice.total}. It is due on {invoice.dueDate}.\n\nLet me know if you have any questions.\n\nThank you,\n{me.name}',
+  },
+  {
+    id: 'builtin-monthly',
+    name: 'Monthly charges',
+    subject: 'Monthly charges — {invoice.sentDate}',
+    body: 'Hi {client.firstName},\n\nAttached is your monthly design-hours invoice for {project.name} ({invoice.number}), totaling {invoice.total} due {invoice.dueDate}.\n\nThank you,\n{me.name}',
+  },
+  {
+    id: 'builtin-phase',
+    name: 'Phase invoice',
+    subject: 'Invoice {invoice.number} — {project.name} · {invoice.phase}',
+    body: 'Hi {client.firstName},\n\nHere is the {invoice.phase} invoice for {project.name} ({invoice.number}), totaling {invoice.total}. Due {invoice.dueDate}.\n\nLet me know if anything needs adjusting.\n\nThank you,\n{me.name}',
+  },
+  {
+    id: 'builtin-revised',
+    name: 'Revised invoice',
+    subject: 'Revised invoice {invoice.number}',
+    body: 'Hi {client.firstName},\n\nQuick update — I have revised invoice {invoice.number} for {project.name}. The new total is {invoice.total}, due {invoice.dueDate}.\n\nThank you,\n{me.name}',
+  },
+  {
+    id: 'builtin-reminder',
+    name: 'Friendly reminder',
+    subject: 'Friendly reminder: invoice {invoice.number}',
+    body: 'Hi {client.firstName},\n\nJust a quick reminder that invoice {invoice.number} for {project.name} is due {invoice.dueDate}. The balance is {invoice.total}.\n\nThanks so much,\n{me.name}',
+  },
+];
+
+function getAllEmailTemplates() {
+  const studio = getStudio();
+  const custom = studio.emailTemplates || [];
+  return [...DEFAULT_EMAIL_TEMPLATES, ...custom];
+}
+
+function openSendInvoiceModal(invoiceId) {
+  const inv = (S.invoices||[]).find(i => i.id === invoiceId);
+  if (!inv) return;
+  _sendInvId = invoiceId;
+  const client = (S.clients||[]).find(c => c.id === inv.clientId);
+
+  const sel = $c('send-inv-template');
+  if (sel) {
+    const tpls = getAllEmailTemplates();
+    sel.innerHTML = '<option value="">— Default message —</option>' +
+      tpls.map(t => `<option value="${t.id}">${escH(t.name)}</option>`).join('');
+    sel.value = 'builtin-new-invoice';
+  }
+
+  $c('send-inv-to').value = client?.email || '';
+  $c('send-inv-error').style.display = 'none';
+  applyEmailTemplate(); // populate subject + message based on selection
+  $c('modal-send-invoice').classList.add('open');
+  setTimeout(() => $c('send-inv-to').focus(), 80);
+}
+
+function applyEmailTemplate() {
+  const inv = (S.invoices||[]).find(i => i.id === _sendInvId);
+  if (!inv) return;
+  const id = $c('send-inv-template')?.value || '';
+  const tpl = getAllEmailTemplates().find(t => t.id === id);
+  const ctx = buildTemplateContext(inv);
+  if (tpl) {
+    $c('send-inv-subject').value = fillTemplate(tpl.subject, ctx);
+    $c('send-inv-message').value = fillTemplate(tpl.body, ctx);
+  } else {
+    // Plain fallback
+    $c('send-inv-subject').value = fillTemplate('Invoice {invoice.number}{project.name:" — "+project.name}', ctx).replace(/\{[^}]+\}/g,'').trim();
+  }
+}
+
+async function sendInvoiceEmail() {
+  const inv = (S.invoices||[]).find(i => i.id === _sendInvId);
+  if (!inv) { toast('Invoice not found.'); return; }
+  const toEmail = $c('send-inv-to').value.trim();
+  if (!toEmail) { showSendInvErr('Enter recipient email.'); return; }
+  const subject = $c('send-inv-subject').value.trim() || `Invoice ${inv.number || ''}`;
+  const message = $c('send-inv-message').value.trim();
+
+  // Ensure payment_token exists
+  if (!inv.paymentToken) {
+    try {
+      const token = crypto.randomUUID();
+      const { error } = await sb.from('invoices').update({ payment_token: token }).eq('id', inv.id);
+      if (error) throw error;
+      inv.paymentToken = token;
+    } catch (e) { showSendInvErr('Could not prepare payment link: ' + e.message); return; }
+  }
+
+  const payUrl = `${location.origin}/pay/?t=${encodeURIComponent(inv.paymentToken)}`;
+  const client = (S.clients||[]).find(c => c.id === inv.clientId);
+  const project = S.projects.find(p => p.id === inv.projectId);
+  const studio = getStudio();
+
+  // Logo URL for inline use in email body (signed URL, valid 1 hour)
+  let logoUrl = null;
+  if (studio.logo?.storagePath) {
+    try { logoUrl = await getFileSignedUrl(studio.logo.storagePath); } catch(e){}
+  }
+
+  const html = buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl });
+  const text = buildInvoiceEmailText({ inv, studio, payUrl, message });
+
+  const btn = $c('modal-send-invoice').querySelector('.btn-primary');
+  btn.disabled = true; btn.textContent = 'Sending…';
+
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(`${window.BEEP_SUPABASE_CONFIG.url}/functions/v1/send-email`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + (session?.access_token || window.BEEP_SUPABASE_CONFIG.anonKey),
+        'apikey': window.BEEP_SUPABASE_CONFIG.anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        invoice_id: inv.id, type: 'invoice',
+        to: toEmail, subject, html, text,
+        reply_to: studio.email || undefined,
+        from_name: studio.name || 'Beep Design',
+        from_email: 'hello@beepdesign.co',
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Send failed.');
+    closeModal('modal-send-invoice');
+    toast('Invoice sent to ' + toEmail);
+  } catch (e) {
+    showSendInvErr(e?.message || 'Send failed.');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send';
+  }
+}
+
+function showSendInvErr(msg) {
+  const el = $c('send-inv-error');
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else { el.style.display = 'none'; }
 }
 
 async function copyPaymentLink(invoiceId) {
