@@ -1596,6 +1596,83 @@ tr:hover .row-btns { opacity:1; }
       <div class="contacts-body" id="invb-body"><!-- rendered by JS --></div>
     </div>
 
+    <!-- ─────────── SETTINGS VIEW ─────────── -->
+    <div class="view" id="view-settings">
+      <div class="page-header">
+        <div>
+          <div class="page-title">App Settings</div>
+          <div class="page-sub">Studio profile, team, and app preferences</div>
+        </div>
+      </div>
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0;flex-wrap:wrap" id="settings-tabs">
+        <button class="view-tab active" data-settab="studio"  onclick="setSettingsTab('studio')"  style="margin-bottom:-1px">Studio Info</button>
+        <button class="view-tab"        data-settab="team"    onclick="setSettingsTab('team')"    style="margin-bottom:-1px">Team</button>
+        <button class="view-tab"        data-settab="units"   onclick="setSettingsTab('units')"   style="margin-bottom:-1px">Quantity Units</button>
+        <button class="view-tab"        data-settab="tasks"   onclick="setSettingsTab('tasks')"   style="margin-bottom:-1px">Task Statuses</button>
+        <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
+        <button class="view-tab"        data-settab="colors"  onclick="setSettingsTab('colors')"  style="margin-bottom:-1px">Status Colors</button>
+      </div>
+
+      <div class="contacts-body" style="padding:30px">
+        <div id="settab-studio" class="settings-panel" style="max-width:640px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic">Appears in the header of invoice PDFs and other exports. Changes save instantly.</div>
+          <div class="fg">
+            <label class="fl">Studio Name</label>
+            <input type="text" class="fi" id="as-studio-name" onchange="saveStudioField('name',this.value.trim())">
+          </div>
+          <div class="frow">
+            <div class="fg"><label class="fl">Address Line 1</label><input type="text" class="fi" id="as-studio-addr1" onchange="saveStudioField('address1',this.value.trim())"></div>
+            <div class="fg"><label class="fl">Address Line 2</label><input type="text" class="fi" id="as-studio-addr2" onchange="saveStudioField('address2',this.value.trim())"></div>
+          </div>
+          <div class="frow">
+            <div class="fg"><label class="fl">Phone</label><input type="text" class="fi" id="as-studio-phone" onchange="saveStudioField('phone',this.value.trim())"></div>
+            <div class="fg"><label class="fl">Email</label><input type="text" class="fi" id="as-studio-email" onchange="saveStudioField('email',this.value.trim())"></div>
+          </div>
+          <div class="fg"><label class="fl">Website</label><input type="text" class="fi" id="as-studio-website" onchange="saveStudioField('website',this.value.trim())"></div>
+        </div>
+
+        <div id="settab-team" class="settings-panel" style="display:none;max-width:780px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+            <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);font-style:italic;line-height:1.5">Members of your studio. Owner can invite, edit permissions,<br>and remove members.</div>
+            <button class="btn btn-primary btn-sm" id="as-invite-btn" onclick="openInviteMemberModal()">+ Invite Member</button>
+          </div>
+          <div id="as-team-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+
+        <div id="settab-units" class="settings-panel" style="display:none;max-width:640px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">These units appear as options when setting quantities on proposal items and components.</div>
+          <div id="as-units-list" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px"></div>
+          <div style="display:flex;gap:6px;max-width:320px">
+            <input type="text" class="fi" id="as-unit-input" placeholder="New unit…" style="flex:1" onkeydown="if(event.key==='Enter'){addQtyUnit();event.preventDefault()}">
+            <button class="btn btn-primary btn-sm" onclick="addQtyUnit()">Add</button>
+          </div>
+        </div>
+
+        <div id="settab-tasks" class="settings-panel" style="display:none;max-width:640px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">Status options for open project tasks.</div>
+          <div id="as-task-statuses" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px"></div>
+          <div style="display:flex;gap:6px;max-width:320px">
+            <input type="text" class="fi" id="as-task-status-input" placeholder="New status…" style="flex:1" onkeydown="if(event.key==='Enter'){addTaskStatus();event.preventDefault()}">
+            <button class="btn btn-primary btn-sm" onclick="addTaskStatus()">Add</button>
+          </div>
+        </div>
+
+        <div id="settab-cards" class="settings-panel" style="display:none;max-width:640px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">Cards available for expense tracking.</div>
+          <div id="as-cards-list" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px"></div>
+          <div style="display:flex;gap:6px;max-width:320px">
+            <input type="text" class="fi" id="as-card-input" placeholder="e.g. Amex ending 4242" style="flex:1" onkeydown="if(event.key==='Enter'){addPaymentCard();event.preventDefault()}">
+            <button class="btn btn-primary btn-sm" onclick="addPaymentCard()">Add</button>
+          </div>
+        </div>
+
+        <div id="settab-colors" class="settings-panel" style="display:none;max-width:640px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">Click a color swatch to change the color for each proposal status.</div>
+          <div id="as-status-colors" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
  
@@ -2095,98 +2172,7 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
  
-<!-- ═════════════════ APP SETTINGS MODAL ═════════════════ -->
-<div class="overlay" id="modal-app-settings">
-  <div class="modal" style="width:440px">
-    <button class="modal-x" onclick="closeModal('modal-app-settings')">✕</button>
-    <div class="modal-title">App Settings</div>
-
-    <div class="modal-section-hd">Quantity Units</div>
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
-      These units appear as options when setting quantities on proposal items and components.
-    </div>
-    <div id="as-units-list" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px"></div>
-    <div style="display:flex;gap:6px">
-      <input type="text" class="fi" id="as-unit-input" placeholder="New unit…" style="flex:1;font-size:12px;padding:6px 10px"
-        onkeydown="if(event.key==='Enter'){addQtyUnit();event.preventDefault()}">
-      <button class="btn btn-primary btn-sm" onclick="addQtyUnit()">Add</button>
-    </div>
-
-    <div class="modal-section-hd" style="margin-top:22px">Status Colors</div>
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
-      Click a color swatch to change the color for each proposal status.
-    </div>
-    <div id="as-status-colors" style="display:flex;flex-direction:column;gap:6px"></div>
-
-    <div class="modal-section-hd" style="margin-top:22px">Task Statuses</div>
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
-      Status options for open project tasks.
-    </div>
-    <div id="as-task-statuses" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px"></div>
-    <div style="display:flex;gap:6px">
-      <input type="text" class="fi" id="as-task-status-input" placeholder="New status…" style="flex:1;font-size:12px;padding:6px 10px"
-        onkeydown="if(event.key==='Enter'){addTaskStatus();event.preventDefault()}">
-      <button class="btn btn-primary btn-sm" onclick="addTaskStatus()">Add</button>
-    </div>
-
-    <div class="modal-section-hd" style="margin-top:22px">Studio Info (used on PDFs)</div>
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
-      Appears in the header of invoice PDFs and other exports.
-    </div>
-    <div class="fg">
-      <label class="fl">Studio Name</label>
-      <input type="text" class="fi" id="as-studio-name" style="font-size:12px;padding:6px 10px" onchange="saveStudioField('name',this.value.trim())">
-    </div>
-    <div class="frow">
-      <div class="fg">
-        <label class="fl">Address Line 1</label>
-        <input type="text" class="fi" id="as-studio-addr1" style="font-size:12px;padding:6px 10px" onchange="saveStudioField('address1',this.value.trim())">
-      </div>
-      <div class="fg">
-        <label class="fl">Address Line 2</label>
-        <input type="text" class="fi" id="as-studio-addr2" style="font-size:12px;padding:6px 10px" onchange="saveStudioField('address2',this.value.trim())">
-      </div>
-    </div>
-    <div class="frow">
-      <div class="fg">
-        <label class="fl">Phone</label>
-        <input type="text" class="fi" id="as-studio-phone" style="font-size:12px;padding:6px 10px" onchange="saveStudioField('phone',this.value.trim())">
-      </div>
-      <div class="fg">
-        <label class="fl">Email</label>
-        <input type="text" class="fi" id="as-studio-email" style="font-size:12px;padding:6px 10px" onchange="saveStudioField('email',this.value.trim())">
-      </div>
-    </div>
-    <div class="fg">
-      <label class="fl">Website</label>
-      <input type="text" class="fi" id="as-studio-website" style="font-size:12px;padding:6px 10px" onchange="saveStudioField('website',this.value.trim())">
-    </div>
-
-    <div class="modal-section-hd" style="margin-top:22px">Payment Cards</div>
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
-      Cards available for expense tracking.
-    </div>
-    <div id="as-cards-list" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px"></div>
-    <div style="display:flex;gap:6px">
-      <input type="text" class="fi" id="as-card-input" placeholder="e.g. Amex ending 4242" style="flex:1;font-size:12px;padding:6px 10px"
-        onkeydown="if(event.key==='Enter'){addPaymentCard();event.preventDefault()}">
-      <button class="btn btn-primary btn-sm" onclick="addPaymentCard()">Add</button>
-    </div>
-
-    <div class="modal-section-hd" style="margin-top:22px">Team</div>
-    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">
-      Members of your studio. Owner can invite, edit permissions, and remove members.
-    </div>
-    <div id="as-team-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-    <button class="btn btn-primary btn-sm" id="as-invite-btn" onclick="openInviteMemberModal()">+ Invite Member</button>
-
-    <div class="modal-footer" style="margin-top:18px">
-      <div style="font-size:11px;color:var(--text-light);font-style:italic">Changes save instantly.</div>
-      <div style="flex:1"></div>
-      <button class="btn btn-secondary" onclick="closeModal('modal-app-settings')">Done</button>
-    </div>
-  </div>
-</div>
+<!-- App Settings is now a full view — see #view-settings in the main content area. -->
 
 <!-- ═════════════════ TIME ENTRY MODAL ═════════════════ -->
 <div class="overlay" id="modal-time">
@@ -2713,6 +2699,10 @@ tr:hover .row-btns { opacity:1; }
 let sb = null;  // Supabase client — null until createClient available
 const AUTH = { user: null, studio: null, member: null, ready: false };
 
+// Phase E: team cache (for mention autocomplete) + notifications
+let _teamCache = []; // Array<{id, user_id, display_name, role}>
+const NOTIFICATIONS = { items: [], unread: 0, channel: null };
+
 function hasPermission(perm) {
   if (!AUTH.member) return false;
   if (AUTH.member.role === 'owner') return true;
@@ -2796,6 +2786,111 @@ async function signOut() {
   try { await sb.auth.signOut(); } catch (e) {}
   AUTH.user = null; AUTH.studio = null; AUTH.member = null; AUTH.ready = false;
   location.reload();
+}
+
+// ── Phase E helpers ──
+
+async function loadTeamCache() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  const { data, error } = await sb
+    .from('studio_members')
+    .select('id, user_id, display_name, role')
+    .eq('studio_id', AUTH.studio.id);
+  if (error) { console.error('[team cache]', error); return; }
+  _teamCache = data || [];
+}
+
+function getMentionableMembers(filter = '') {
+  const f = filter.toLowerCase();
+  return _teamCache
+    .filter(m => m.user_id !== AUTH.user?.id && (m.display_name || '').toLowerCase().includes(f))
+    .slice(0, 8);
+}
+
+// Parse @mentions from text. Returns { mentionedUserIds: [uuid], annotatedHtml: string }.
+function parseMentions(text) {
+  if (!text) return { mentionedUserIds: [], annotatedHtml: '' };
+  // Sort members by display_name length DESC so longer names match first (e.g. "Ann Marie" before "Ann")
+  const members = _teamCache.slice().sort((a,b) => (b.display_name||'').length - (a.display_name||'').length);
+  const mentionedUserIds = new Set();
+  let annotated = text;
+  members.forEach(m => {
+    const name = m.display_name || '';
+    if (!name) return;
+    const pattern = new RegExp('@' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
+    if (pattern.test(annotated)) {
+      mentionedUserIds.add(m.user_id);
+      annotated = annotated.replace(pattern, `<span class="mention">@${name}</span>`);
+    }
+  });
+  return { mentionedUserIds: [...mentionedUserIds], annotatedHtml: annotated };
+}
+
+async function createNotifications(mentionedUserIds, { linkEntityType, linkEntityId, message, payload = {} }) {
+  if (!AUTH.ready || !AUTH.studio || !mentionedUserIds.length) return;
+  const rows = mentionedUserIds.map(userId => ({
+    studio_id: AUTH.studio.id,
+    recipient_user_id: userId,
+    type: 'mention',
+    payload: { ...payload, actor_id: AUTH.user.id, actor_name: AUTH.member?.display_name || AUTH.user.email },
+    link_entity_type: linkEntityType,
+    link_entity_id: linkEntityId,
+    message,
+  }));
+  const { error } = await sb.from('notifications').insert(rows);
+  if (error) console.error('[notifications] insert failed:', error);
+}
+
+async function loadNotifications() {
+  if (!AUTH.ready) return;
+  const { data, error } = await sb
+    .from('notifications')
+    .select('*')
+    .eq('recipient_user_id', AUTH.user.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) { console.error('[notifications] load failed:', error); return; }
+  NOTIFICATIONS.items = data || [];
+  NOTIFICATIONS.unread = NOTIFICATIONS.items.filter(n => !n.read_at).length;
+  renderNotificationBell();
+}
+
+function subscribeNotifications() {
+  if (!AUTH.ready) return;
+  if (NOTIFICATIONS.channel) { sb.removeChannel(NOTIFICATIONS.channel); NOTIFICATIONS.channel = null; }
+  NOTIFICATIONS.channel = sb
+    .channel('notif-' + AUTH.user.id)
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'notifications', filter: 'recipient_user_id=eq.' + AUTH.user.id },
+      (payload) => {
+        NOTIFICATIONS.items.unshift(payload.new);
+        NOTIFICATIONS.unread++;
+        renderNotificationBell();
+      })
+    .subscribe();
+}
+
+async function markNotificationRead(id) {
+  const n = NOTIFICATIONS.items.find(x => x.id === id);
+  if (!n || n.read_at) return;
+  const readTs = new Date().toISOString();
+  const { error } = await sb.from('notifications').update({ read_at: readTs }).eq('id', id);
+  if (error) { console.error(error); return; }
+  n.read_at = readTs;
+  NOTIFICATIONS.unread = Math.max(0, NOTIFICATIONS.unread - 1);
+  renderNotificationBell();
+}
+
+async function markAllNotificationsRead() {
+  if (!NOTIFICATIONS.unread) return;
+  const readTs = new Date().toISOString();
+  const { error } = await sb.from('notifications').update({ read_at: readTs })
+    .eq('recipient_user_id', AUTH.user.id).is('read_at', null);
+  if (error) { console.error(error); return; }
+  NOTIFICATIONS.items.forEach(n => { if (!n.read_at) n.read_at = readTs; });
+  NOTIFICATIONS.unread = 0;
+  renderNotificationBell();
+  renderNotificationPanel();
 }
 
 async function sendPasswordReset() {
@@ -4026,6 +4121,7 @@ function showView(v) {
   if (v === 'time') renderTime();
   if (v === 'expenses') renderExpenses();
   if (v === 'dashboard') renderDashboard();
+  if (v === 'settings') setSettingsTab(_settingsTab || 'studio');
   if (v === 'documents') renderDocuments();
   if (v === 'doc-editor') { /* rendered by openDocEditor */ }
   if (v === 'invoices') { if (_invTab === 'reports') renderInvReports(); else renderInvoices(); }
@@ -6637,7 +6733,7 @@ function deleteProject(id) {
 // ─── UNSAVED-CHANGES GUARD ───────────────────────────────
 
 // Modals that save on every change — safe to dismiss freely
-const _freeDismissModals = new Set(['modal-lists', 'modal-app-settings']);
+const _freeDismissModals = new Set(['modal-lists']);
 
 // Called by overlay click / Escape — blocked for form modals
 function softCloseModal(id) {
@@ -8631,13 +8727,23 @@ function clientSelectOptions(selectedId) {
 // ─── APP SETTINGS ─────────────────────────────────────────
 
 function openAppSettings() {
-  renderQtyUnitsList();
-  renderStatusColorSettings();
-  renderTaskStatusSettings();
-  renderCardsList();
-  loadStudioSettings();
-  renderTeamList();
-  $c('modal-app-settings').classList.add('open');
+  showView('settings');
+}
+
+let _settingsTab = 'studio';
+function setSettingsTab(tab) {
+  _settingsTab = tab;
+  $a('[data-settab]').forEach(b => b.classList.toggle('active', b.dataset.settab === tab));
+  $a('.settings-panel').forEach(p => { p.style.display = 'none'; });
+  const panel = $c('settab-' + tab);
+  if (panel) panel.style.display = '';
+  // Lazy-render whatever this tab needs
+  if (tab === 'studio') loadStudioSettings();
+  if (tab === 'team')   renderTeamList();
+  if (tab === 'units')  renderQtyUnitsList();
+  if (tab === 'tasks')  renderTaskStatusSettings();
+  if (tab === 'cards')  renderCardsList();
+  if (tab === 'colors') renderStatusColorSettings();
 }
 
 // ─── TEAM MANAGEMENT (Phase D) ──────────────────────────
