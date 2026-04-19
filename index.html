@@ -12704,10 +12704,26 @@ async function sendInvoiceEmail() {
   const project = S.projects.find(p => p.id === inv.projectId);
   const studio = getStudio();
 
-  // Logo URL for inline use in email body (signed URL, valid 1 hour)
+  // Inline the logo as base64 so the email is self-contained (no external Supabase domain fetch
+  // that Gmail/etc flag as suspicious per Resend's domain-alignment guidance).
   let logoUrl = null;
   if (studio.logo?.storagePath) {
-    try { logoUrl = await getFileSignedUrl(studio.logo.storagePath); } catch(e){}
+    try {
+      const signedUrl = await getFileSignedUrl(studio.logo.storagePath);
+      const r = await fetch(signedUrl);
+      if (r.ok) {
+        const blob = await r.blob();
+        if (blob.size < 200 * 1024) { // keep email slim
+          logoUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.readAsDataURL(blob);
+          });
+        } else {
+          console.warn('[send-email] logo too large to inline, skipping to avoid email bloat');
+        }
+      }
+    } catch (e) { console.warn('[send-email] logo inline failed:', e); }
   }
 
   const html = buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl });
