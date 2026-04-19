@@ -11570,7 +11570,10 @@ function renderInvLineItems() {
     return `
     <div style="padding:8px 8px 4px;margin-bottom:6px;background:${isProposal?'rgba(91,45,34,0.02)':'transparent'};border-radius:var(--rs)">
       <div style="display:flex;align-items:flex-end;gap:6px">
-        <button onclick="toggleInvLineDesc(${i})" title="${descExpanded?'Hide description':'Add description'}" style="font-size:14px;background:none;border:none;cursor:pointer;color:${descExpanded?'var(--russet)':'var(--text-light)'};padding:${i===0?'10':'4'}px 2px;align-self:flex-end">≡</button>
+        <div class="fg" style="max-width:24px;align-items:center">
+          ${i===0?'<label class="fl">&nbsp;</label>':''}
+          <button onclick="toggleInvLineDesc(${i})" title="${descExpanded?'Hide description':'Add description'}" style="font-size:14px;background:none;border:none;cursor:pointer;color:${descExpanded?'var(--russet)':'var(--text-light)'};padding:4px 0;line-height:1">≡</button>
+        </div>
         <div class="fg" style="flex:2">
           ${i===0?'<label class="fl">Name</label>':''}
           <input type="text" class="fi" value="${escH(l.name||'')}" onchange="_invLineItems[${i}].name=this.value" style="font-size:12px;padding:5px 8px">
