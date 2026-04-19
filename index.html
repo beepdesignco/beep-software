@@ -2838,6 +2838,54 @@ async function signOut() {
   location.reload();
 }
 
+// ── Phase F: Supabase Storage helpers ──
+
+async function uploadFile(file, entityType, entityId) {
+  if (!AUTH.ready || !AUTH.studio) throw new Error('Not signed in.');
+  if (!file) throw new Error('No file.');
+  const ext = (file.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+  const uniq = crypto.randomUUID();
+  const storagePath = `${AUTH.studio.id}/${entityType}/${entityId}/${uniq}${ext}`;
+  const { error } = await sb.storage.from('files').upload(storagePath, file, {
+    contentType: file.type || 'application/octet-stream',
+    upsert: false,
+  });
+  if (error) throw new Error('Upload failed: ' + error.message);
+  return {
+    id: uniq,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    storagePath,
+    uploadedAt: new Date().toISOString(),
+  };
+}
+
+async function getFileSignedUrl(storagePath, expiresSeconds = 3600) {
+  const { data, error } = await sb.storage.from('files').createSignedUrl(storagePath, expiresSeconds);
+  if (error) throw new Error('Could not fetch file URL: ' + error.message);
+  return data.signedUrl;
+}
+
+async function viewFileRecord(record) {
+  if (!record) return;
+  try {
+    // Backwards compat: legacy base64 receipts still have `data` (data URL)
+    if (record.data) { window.open(record.data, '_blank'); return; }
+    if (!record.storagePath) { toast('No file path on record.'); return; }
+    const url = await getFileSignedUrl(record.storagePath);
+    window.open(url, '_blank');
+  } catch (e) { toast(e.message || 'File open failed.'); }
+}
+
+async function deleteStoredFile(storagePath) {
+  if (!storagePath) return;
+  try {
+    const { error } = await sb.storage.from('files').remove([storagePath]);
+    if (error) console.warn('[storage] remove failed:', error);
+  } catch (e) { console.warn('[storage]', e); }
+}
+
 // ── Phase E helpers ──
 
 async function loadTeamCache() {
@@ -3371,7 +3419,7 @@ function dbExpenseToS(e) {
     category: e.category || '',
     notes: e.notes || '',
     trackInPM: !!e.track_in_pm,
-    receipt: null,
+    receipt: e.receipt || (e.receipt_path ? { storagePath: e.receipt_path } : null),
     resolved: !!e.resolved,
     status: e.status || '',
     resolvedInvoiceId: e.resolved_invoice_id || '',
@@ -3601,6 +3649,8 @@ function expenseToDB(e, studioId) {
     status: e.status || null,
     resolved_invoice_id: e.resolvedInvoiceId || null,
     resolved_invoice_number: e.resolvedInvoiceNumber || null,
+    receipt: e.receipt && e.receipt.storagePath ? e.receipt : null,
+    receipt_path: e.receipt?.storagePath || null,
     deleted_at: null,
   };
 }
@@ -9895,25 +9945,26 @@ function openEditExpense(expId) {
 function handleExpReceiptUpload(input) {
   const file = input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    _expReceipt = { name: file.name, size: file.size, type: file.type, data: e.target.result };
-    renderExpReceiptPreview();
-  };
-  reader.readAsDataURL(file);
+  // Stage the File locally; actual upload happens in saveExpense so cancels don't orphan blobs.
+  _expReceipt = { name: file.name, size: file.size, type: file.type, _pendingFile: file };
+  renderExpReceiptPreview();
   input.value = '';
 }
 
 function renderExpReceiptPreview() {
   const el = $c('exp-receipt-preview');
   if (!_expReceipt) { el.innerHTML = ''; return; }
-  el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:3px 8px;font-size:11px;font-family:var(--font-b)">
-    ${_expReceipt.type?.includes('pdf')?'📄':'🖼'} ${escH(_expReceipt.name)}
-    <button onclick="_expReceipt=null;renderExpReceiptPreview()" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
+  const isPdf = _expReceipt.type?.includes('pdf');
+  const openAction = _expReceipt._pendingFile
+    ? '' // not uploaded yet; can't open
+    : ` onclick="viewFileRecord(_expReceipt)"`;
+  el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:3px 8px;font-size:11px;font-family:var(--font-b);cursor:${_expReceipt._pendingFile?'default':'pointer'}"${openAction}>
+    ${isPdf?'📄':'🖼'} ${escH(_expReceipt.name)}${_expReceipt._pendingFile?' <span style="color:var(--text-light);font-style:italic">(uploads on save)</span>':''}
+    <button onclick="event.stopPropagation();_expReceipt=null;renderExpReceiptPreview()" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:10px">✕</button>
   </span>`;
 }
 
-function saveExpense() {
+async function saveExpense() {
   const expType = $c('exp-type').value;
   if (!expType) { toast('Select an expense type.'); $c('exp-type').focus(); return; }
   const name = $c('exp-name').value.trim();
@@ -9925,13 +9976,33 @@ function saveExpense() {
   const existIdx = editingId ? S.expenses.findIndex(e => e.id === editingId) : -1;
   const prev = existIdx > -1 ? S.expenses[existIdx] : null;
 
+  // Phase F: if there's a pending file, upload it to Storage now.
+  const expId = editingId || uid();
+  let receiptRecord = _expReceipt;
+  if (_expReceipt && _expReceipt._pendingFile) {
+    try {
+      const uploaded = await uploadFile(_expReceipt._pendingFile, 'expenses', expId);
+      receiptRecord = uploaded;
+      // If we're replacing an existing receipt, remove the old blob
+      if (prev?.receipt?.storagePath && prev.receipt.storagePath !== uploaded.storagePath) {
+        deleteStoredFile(prev.receipt.storagePath);
+      }
+    } catch (e) {
+      toast('Receipt upload failed: ' + e.message);
+      return;
+    }
+  } else if (!_expReceipt && prev?.receipt?.storagePath) {
+    // Receipt was removed in this edit — delete the old blob
+    deleteStoredFile(prev.receipt.storagePath);
+  }
+
   if (prev && prev.resolved) {
     toast('This expense is paid and cannot be edited.');
     return;
   }
 
   const expense = {
-    id: editingId || uid(),
+    id: expId,
     projectId: pid,
     name,
     cost: $c('exp-cost').value.trim(),
@@ -9941,7 +10012,7 @@ function saveExpense() {
     trackInPM: $c('exp-track').checked,
     category: $c('exp-category').value.trim(),
     notes: $c('exp-notes').value.trim(),
-    receipt: _expReceipt,
+    receipt: receiptRecord,
     resolved: false,
     created: new Date().toISOString(),
   };
