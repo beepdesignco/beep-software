@@ -5,7 +5,12 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import Stripe from 'https://esm.sh/stripe@16.2.0?target=denonext';
-import { corsHeaders } from '../_shared/cors.ts';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, stripe-signature',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+};
 
 // Prefer the test key during development; falls back to STRIPE_SECRET_KEY (live) in production.
 // To switch to live: delete STRIPE_SECRET_KEY_TEST_KEY from Supabase secrets (or rename it).
