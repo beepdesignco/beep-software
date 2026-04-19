@@ -12664,37 +12664,55 @@ async function exportInvoicePDF(invId) {
   const TEXT_LIGHT = [160, 150, 140];
   const BORDER = [220, 210, 198];
 
-  // ── Header: optional logo, then studio block (left) + INVOICE label (right)
+  // ── Header: optional logo (PDF supports PNG/JPEG/WebP; SVG is not supported by jsPDF)
   let logoDataUrl = null;
   let logoDims = null;
+  let logoFormat = 'PNG';
   if (studio.logo?.storagePath) {
     try {
       const url = await getFileSignedUrl(studio.logo.storagePath);
       const r = await fetch(url);
+      if (!r.ok) throw new Error('Logo fetch returned ' + r.status);
       const blob = await r.blob();
-      logoDataUrl = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-      logoDims = await new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => resolve({ w: img.width, h: img.height });
-        img.onerror = () => resolve(null);
-        img.src = logoDataUrl;
-      });
-    } catch (e) { console.warn('[pdf logo]', e); }
+      const mime = (blob.type || '').toLowerCase();
+      console.log('[pdf logo] fetched', { mime, size: blob.size, path: studio.logo.storagePath });
+      if (mime.includes('svg')) {
+        console.warn('[pdf logo] SVG not supported by jsPDF; upload a PNG/JPG for PDF output.');
+        toast('Logo is SVG — PDF export needs a PNG or JPG. Upload a raster version to show it on PDFs.');
+      } else {
+        logoFormat = mime.includes('jpeg') || mime.includes('jpg') ? 'JPEG' : mime.includes('webp') ? 'WEBP' : 'PNG';
+        logoDataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+        logoDims = await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve({ w: img.width, h: img.height });
+          img.onerror = () => resolve(null);
+          img.src = logoDataUrl;
+        });
+      }
+    } catch (e) {
+      console.error('[pdf logo] load failed:', e);
+      toast('Logo load failed for PDF: ' + (e?.message || e));
+    }
   }
 
   let headerYOffset = 0;
   if (logoDataUrl && logoDims) {
-    const maxLogoH = 56;
-    const maxLogoW = 180;
+    const maxLogoH = 72;
+    const maxLogoW = 200;
     const scale = Math.min(maxLogoH / logoDims.h, maxLogoW / logoDims.w);
     const lw = logoDims.w * scale;
     const lh = logoDims.h * scale;
-    try { doc.addImage(logoDataUrl, 'PNG', margin, margin - 6, lw, lh); } catch(e) { console.warn(e); }
-    headerYOffset = lh + 8;
+    try {
+      doc.addImage(logoDataUrl, logoFormat, margin, margin, lw, lh);
+      headerYOffset = lh + 12;
+    } catch(e) {
+      console.error('[pdf logo] addImage failed:', e);
+      toast('Logo could not be drawn on the PDF: ' + (e?.message || e));
+    }
   }
 
   // Stenograph-receipt style: Courier throughout, explicit cell grid, no oversized accents.
