@@ -3845,20 +3845,25 @@ async function syncToSupabase() {
       });
     });
 
-    // Parents before children (for FK-safe upserts + soft delete cascades)
-    _syncOps += await _syncTable('clients',   current.clients,  _sbShadow.clients,  c => clientToDB(c, studioId));
-    _syncOps += await _syncTable('contacts',  current.contacts, _sbShadow.contacts, c => contactToDB(c, studioId));
-    _syncOps += await _syncTable('projects',  current.projects, _sbShadow.projects, p => projectToDB(p, studioId));
-    _syncOps += await _syncTable('proposal_spaces',     current.spaces,     _sbShadow.spaces,     s => spaceToDB(s));
-    _syncOps += await _syncTable('proposal_items',      current.items,      _sbShadow.items,      i => itemToDB(i));
-    _syncOps += await _syncTable('proposal_components', current.components, _sbShadow.components, c => componentToDB(c));
-    _syncOps += await _syncTable('expenses',  current.expenses, _sbShadow.expenses, e => expenseToDB(e, studioId));
-    _syncOps += await _syncTable('invoices',  current.invoices, _sbShadow.invoices, i => invoiceToDB(i, studioId));
-    _syncOps += await _syncTable('invoice_line_items', current.invoiceLineItems, _sbShadow.invoiceLineItems, l => invLineItemToDB(l), { softDelete: false });
-    _syncOps += await _syncTable('invoice_payments',   current.invoicePayments,  _sbShadow.invoicePayments,  p => invPaymentToDB(p),  { softDelete: false });
-    _syncOps += await _syncTable('documents', current.documents, _sbShadow.documents, d => documentToDB(d, studioId));
-    _syncOps += await _syncTable('document_versions', current.documentVersions, _sbShadow.documentVersions, v => documentVersionToDB(v), { softDelete: false });
-    _syncOps += await _syncTable('time_entries', current.timeEntries, _sbShadow.timeEntries, t => timeEntryToDB(t, studioId), { softDelete: false });
+    // Parents before children (for FK-safe upserts + soft delete cascades).
+    // Each table is isolated — a failure on one logs but doesn't halt subsequent tables.
+    const syncSafe = async (table, ...args) => {
+      try { _syncOps += await _syncTable(table, ...args); }
+      catch (e) { console.error('[BEEP sync]', table, 'failed:', e.message); if (typeof toast === 'function') toast('Sync (' + table + '): ' + e.message); }
+    };
+    await syncSafe('clients',   current.clients,  _sbShadow.clients,  c => clientToDB(c, studioId));
+    await syncSafe('contacts',  current.contacts, _sbShadow.contacts, c => contactToDB(c, studioId));
+    await syncSafe('projects',  current.projects, _sbShadow.projects, p => projectToDB(p, studioId));
+    await syncSafe('proposal_spaces',     current.spaces,     _sbShadow.spaces,     s => spaceToDB(s));
+    await syncSafe('proposal_items',      current.items,      _sbShadow.items,      i => itemToDB(i));
+    await syncSafe('proposal_components', current.components, _sbShadow.components, c => componentToDB(c));
+    await syncSafe('expenses',  current.expenses, _sbShadow.expenses, e => expenseToDB(e, studioId));
+    await syncSafe('invoices',  current.invoices, _sbShadow.invoices, i => invoiceToDB(i, studioId));
+    await syncSafe('invoice_line_items', current.invoiceLineItems, _sbShadow.invoiceLineItems, l => invLineItemToDB(l), { softDelete: false });
+    await syncSafe('invoice_payments',   current.invoicePayments,  _sbShadow.invoicePayments,  p => invPaymentToDB(p),  { softDelete: false });
+    await syncSafe('documents', current.documents, _sbShadow.documents, d => documentToDB(d, studioId));
+    await syncSafe('document_versions', current.documentVersions, _sbShadow.documentVersions, v => documentVersionToDB(v), { softDelete: false });
+    await syncSafe('time_entries', current.timeEntries, _sbShadow.timeEntries, t => timeEntryToDB(t, studioId), { softDelete: false });
 
     // Studio settings (single row)
     const currentSettings = {
@@ -11362,9 +11367,10 @@ function onInvProjectChange() {
   // Auto-check freight taxable from project settings
   if (proj?.taxFreight) $c('inv-freight-taxable').checked = true;
 
-  // Populate proposal items picker
-  const prop = S.proposals[pid];
+  // Populate proposal items picker (element only exists in the builder view, not the initial modal).
   const container = $c('inv-proposal-items');
+  if (!container) return;
+  const prop = S.proposals[pid];
   if (!prop || !prop.spaces?.length) {
     container.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No proposal items for this project.</div>';
     return;
