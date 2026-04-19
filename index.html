@@ -639,6 +639,33 @@ tr:hover .row-btns { opacity:1; }
  
 /* ===================== MODALS ===================== */
  
+.mention {
+  background:rgba(91,45,34,0.08);
+  color:var(--mahogany);
+  font-weight:600;
+  padding:0 4px;
+  border-radius:3px;
+}
+.mention-dropdown-item {
+  padding:8px 12px;
+  font-family:var(--font-b);
+  font-size:13px;
+  color:var(--text-dark);
+  cursor:pointer;
+  transition:var(--t);
+}
+.mention-dropdown-item:hover, .mention-dropdown-item.active {
+  background:rgba(91,45,34,0.06);
+  color:var(--mahogany);
+}
+.notif-item {
+  padding:12px 16px;
+  border-bottom:1px solid var(--border);
+  cursor:pointer;
+  transition:var(--t);
+}
+.notif-item:hover { background:rgba(91,45,34,0.03); }
+.notif-item.unread { background:rgba(91,45,34,0.04); border-left:3px solid var(--russet); }
 .overlay {
   display:none;
   position:fixed;
@@ -1226,6 +1253,12 @@ tr:hover .row-btns { opacity:1; }
       <div class="nav-item" onclick="showView('contacts')" data-view="contacts">
         <span class="nav-icon">◉</span>
         <span class="nav-label">Contacts</span>
+      </div>
+    </div>
+    <div id="notif-bell" style="display:none;padding:10px 14px;border-top:1px solid rgba(243,232,214,0.08);cursor:pointer;transition:var(--t)" onclick="toggleNotificationPanel()" onmouseenter="this.style.background='rgba(243,232,214,0.03)'" onmouseleave="this.style.background='transparent'">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-family:var(--font-b);font-size:12px;color:rgba(243,232,214,0.7)">🔔 Notifications</div>
+        <span id="notif-badge" style="display:none;background:#b33;color:white;font-family:var(--font-b);font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;min-width:18px;text-align:center">0</span>
       </div>
     </div>
     <div id="auth-badge" style="display:none"></div>
@@ -2174,6 +2207,18 @@ tr:hover .row-btns { opacity:1; }
  
 <!-- App Settings is now a full view — see #view-settings in the main content area. -->
 
+<!-- ═════════════════ NOTIFICATION PANEL ═════════════════ -->
+<div id="notif-panel" style="display:none;position:fixed;left:220px;bottom:60px;width:340px;max-height:520px;background:white;border:1px solid var(--border);border-radius:var(--rl);box-shadow:var(--shadow-lg);z-index:500;overflow:hidden;display:none;flex-direction:column">
+  <div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Notifications</div>
+    <button onclick="markAllNotificationsRead()" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);text-decoration:underline">Mark all read</button>
+  </div>
+  <div id="notif-list" style="overflow-y:auto;flex:1;max-height:440px"></div>
+</div>
+
+<!-- ═════════════════ MENTION AUTOCOMPLETE ═════════════════ -->
+<div id="mention-dropdown" style="display:none;position:fixed;z-index:2000;background:white;border:1px solid var(--border);border-radius:var(--rl);box-shadow:var(--shadow-lg);min-width:180px;max-width:260px;overflow:hidden"></div>
+
 <!-- ═════════════════ TIME ENTRY MODAL ═════════════════ -->
 <div class="overlay" id="modal-time">
   <div class="modal" style="width:520px">
@@ -2760,6 +2805,11 @@ async function afterSignIn() {
 
   renderAuthBadge();
 
+  // Phase E: load team cache + notifications in parallel, set up realtime
+  loadTeamCache();
+  loadNotifications();
+  subscribeNotifications();
+
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
     try {
@@ -2891,6 +2941,213 @@ async function markAllNotificationsRead() {
   NOTIFICATIONS.unread = 0;
   renderNotificationBell();
   renderNotificationPanel();
+}
+
+function renderNotificationBell() {
+  const bell = document.getElementById('notif-bell');
+  const badge = document.getElementById('notif-badge');
+  if (!bell || !badge) return;
+  bell.style.display = AUTH.ready ? '' : 'none';
+  if (NOTIFICATIONS.unread > 0) {
+    badge.style.display = '';
+    badge.textContent = NOTIFICATIONS.unread > 99 ? '99+' : String(NOTIFICATIONS.unread);
+  } else {
+    badge.style.display = 'none';
+  }
+  // Re-render panel if open
+  const panel = document.getElementById('notif-panel');
+  if (panel && panel.style.display !== 'none') renderNotificationPanel();
+}
+
+function renderNotificationPanel() {
+  const list = document.getElementById('notif-list');
+  if (!list) return;
+  if (!NOTIFICATIONS.items.length) {
+    list.innerHTML = '<div style="padding:24px 16px;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;text-align:center">No notifications yet.</div>';
+    return;
+  }
+  list.innerHTML = NOTIFICATIONS.items.map(n => {
+    const ts = n.created_at ? new Date(n.created_at) : null;
+    const tsLabel = ts ? timeAgo(ts) : '';
+    return `<div class="notif-item ${n.read_at ? '' : 'unread'}" onclick="openNotification('${n.id}')">
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);line-height:1.4">${escH(n.message || n.type)}</div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:4px">${tsLabel}</div>
+    </div>`;
+  }).join('');
+}
+
+function timeAgo(d) {
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+function toggleNotificationPanel() {
+  const panel = document.getElementById('notif-panel');
+  if (!panel) return;
+  const visible = panel.style.display !== 'none';
+  if (visible) {
+    panel.style.display = 'none';
+  } else {
+    panel.style.display = 'flex';
+    renderNotificationPanel();
+  }
+}
+
+async function openNotification(id) {
+  await markNotificationRead(id);
+  const n = NOTIFICATIONS.items.find(x => x.id === id);
+  if (!n) return;
+  // Navigate to the linked entity
+  if (n.link_entity_type === 'proposal_item' && n.payload?.project_id) {
+    openPMItemDetail(n.payload.project_id, n.payload.space_id, n.link_entity_id);
+    document.getElementById('notif-panel').style.display = 'none';
+  } else if (n.link_entity_type === 'project' && n.link_entity_id) {
+    openProjectDetail(n.link_entity_id);
+    document.getElementById('notif-panel').style.display = 'none';
+  }
+  renderNotificationPanel();
+}
+
+// ─── MENTION AUTOCOMPLETE ─────────────────────────────
+
+const MENTION = {
+  activeEl: null,      // textarea currently showing dropdown
+  startIdx: -1,        // position of the '@'
+  filter: '',
+  cursor: 0,           // highlighted row in dropdown
+  items: [],
+};
+
+function setupMentionAutocomplete() {
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t || !t.matches || !t.matches('textarea.mention-enabled')) return;
+    handleMentionInput(t);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!MENTION.activeEl) return;
+    if (e.target !== MENTION.activeEl) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      MENTION.cursor = Math.min(MENTION.items.length - 1, MENTION.cursor + 1);
+      renderMentionDropdown();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      MENTION.cursor = Math.max(0, MENTION.cursor - 1);
+      renderMentionDropdown();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (MENTION.items.length) { e.preventDefault(); selectMention(MENTION.items[MENTION.cursor]); }
+    } else if (e.key === 'Escape') {
+      closeMentionDropdown();
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!MENTION.activeEl) return;
+    if (e.target.closest('#mention-dropdown')) return;
+    if (e.target === MENTION.activeEl) return;
+    closeMentionDropdown();
+  });
+}
+
+function handleMentionInput(textarea) {
+  const v = textarea.value;
+  const caret = textarea.selectionStart;
+  // Find last '@' before caret that isn't preceded by a word char (so emails don't trigger)
+  let atIdx = -1;
+  for (let i = caret - 1; i >= 0; i--) {
+    const ch = v[i];
+    if (ch === '@') { atIdx = i; break; }
+    if (/\s/.test(ch)) break;
+    if (i === caret - 20) break; // limit search
+  }
+  if (atIdx < 0) { closeMentionDropdown(); return; }
+  if (atIdx > 0 && /\w/.test(v[atIdx - 1])) { closeMentionDropdown(); return; }
+
+  const filter = v.slice(atIdx + 1, caret);
+  if (/\s/.test(filter)) { closeMentionDropdown(); return; }
+
+  MENTION.activeEl = textarea;
+  MENTION.startIdx = atIdx;
+  MENTION.filter = filter;
+  MENTION.items = getMentionableMembers(filter);
+  MENTION.cursor = 0;
+  if (!MENTION.items.length) { closeMentionDropdown(); return; }
+
+  positionMentionDropdown(textarea);
+  renderMentionDropdown();
+}
+
+function positionMentionDropdown(textarea) {
+  const dd = document.getElementById('mention-dropdown');
+  if (!dd) return;
+  const rect = textarea.getBoundingClientRect();
+  dd.style.left = rect.left + 'px';
+  dd.style.top  = (rect.top - 8) + 'px';
+  dd.style.transform = 'translateY(-100%)';
+  dd.style.display = 'block';
+}
+
+function renderMentionDropdown() {
+  const dd = document.getElementById('mention-dropdown');
+  if (!dd) return;
+  dd.innerHTML = MENTION.items.map((m, i) => `
+    <div class="mention-dropdown-item ${i === MENTION.cursor ? 'active' : ''}"
+         onmouseenter="MENTION.cursor=${i};renderMentionDropdown()"
+         onclick="selectMention(_teamCache.find(x=>x.id==='${m.id}'))">
+      <div style="font-weight:600">${escH(m.display_name)}</div>
+      <div style="font-size:10px;color:var(--text-light);text-transform:capitalize">${m.role}</div>
+    </div>`).join('');
+}
+
+function selectMention(member) {
+  if (!MENTION.activeEl || !member) return;
+  const t = MENTION.activeEl;
+  const v = t.value;
+  const before = v.slice(0, MENTION.startIdx);
+  const afterStart = MENTION.startIdx + 1 + MENTION.filter.length;
+  const after = v.slice(afterStart);
+  const insertion = '@' + (member.display_name || '') + ' ';
+  t.value = before + insertion + after;
+  const newCaret = (before + insertion).length;
+  t.setSelectionRange(newCaret, newCaret);
+  closeMentionDropdown();
+  t.focus();
+}
+
+function closeMentionDropdown() {
+  MENTION.activeEl = null;
+  MENTION.items = [];
+  const dd = document.getElementById('mention-dropdown');
+  if (dd) dd.style.display = 'none';
+}
+
+function renderNoteWithMentions(text) {
+  if (!text) return '';
+  // Escape HTML first, then replace @Name occurrences with styled spans.
+  let html = escH(text);
+  const members = _teamCache.slice().sort((a,b) => (b.display_name||'').length - (a.display_name||'').length);
+  members.forEach(m => {
+    const name = m.display_name || '';
+    if (!name) return;
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('@' + esc + '\\b', 'g');
+    html = html.replace(pattern, `<span class="mention">@${escH(name)}</span>`);
+  });
+  return html;
+}
+
+// Initialize the mention autocomplete listeners once
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('DOMContentLoaded', () => {
+    try { setupMentionAutocomplete(); } catch(e){ console.warn(e); }
+  });
+  if (document.readyState === 'interactive' || document.readyState === 'complete') {
+    try { setupMentionAutocomplete(); } catch(e){ console.warn(e); }
+  }
 }
 
 async function sendPasswordReset() {
@@ -4643,7 +4900,20 @@ function addActivityNote(pid, spId, itemId, compId) {
   const val = input?.value.trim();
   if (!val) return;
 
-  const note = { id: uid(), author: 'Baylor', text: val, timestamp: new Date().toISOString(), compId: compId||null };
+  const author = AUTH.member?.display_name || AUTH.user?.email?.split('@')[0] || 'Unknown';
+  const authorUserId = AUTH.user?.id || null;
+
+  const { mentionedUserIds } = parseMentions(val);
+
+  const note = {
+    id: uid(),
+    author,
+    authorUserId,
+    text: val,
+    mentions: mentionedUserIds,
+    timestamp: new Date().toISOString(),
+    compId: compId || null,
+  };
 
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
@@ -4652,6 +4922,19 @@ function addActivityNote(pid, spId, itemId, compId) {
   save();
   if (input) input.value = '';
   renderProjectDetail();
+
+  // Fire-and-forget notifications for mentioned users
+  if (mentionedUserIds.length) {
+    const proj = getProject(pid);
+    const projName = proj?.name || 'project';
+    const itemName = item.name || 'item';
+    createNotifications(mentionedUserIds, {
+      linkEntityType: 'proposal_item',
+      linkEntityId: itemId,
+      message: `${author} mentioned you in "${itemName}" (${projName})`,
+      payload: { project_id: pid, space_id: spId, item_id: itemId, comp_id: compId || null },
+    });
+  }
 }
 
 function deleteActivityNote(pid, spId, itemId, noteId) {
@@ -4845,7 +5128,7 @@ function renderActivityNote(note, pid, spId, itemId) {
       </div>
       <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);white-space:nowrap">${dateStr}${note.edited ? ' (edited)' : ''}</span>
     </div>
-    <div id="note-text-${note.id}" style="font-size:12.5px;color:var(--text-dark);margin-top:4px;font-family:var(--font-b);line-height:1.5;white-space:pre-wrap">${escH(note.text)}</div>
+    <div id="note-text-${note.id}" style="font-size:12.5px;color:var(--text-dark);margin-top:4px;font-family:var(--font-b);line-height:1.5;white-space:pre-wrap">${renderNoteWithMentions(note.text)}</div>
     <div id="note-edit-${note.id}" style="display:none;margin-top:4px">
       <textarea class="fi" style="resize:vertical;min-height:44px;font-size:12px;width:100%">${escH(note.text)}</textarea>
       <div style="display:flex;gap:6px;margin-top:4px">
@@ -5581,7 +5864,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
 
             <div style="margin-top:8px">
               <div style="display:flex;gap:4px">
-                <input type="text" class="fi" id="pm-note-input-${c.id}" placeholder="Add a note about ${escH(c.name||'this component')}…" style="flex:1;font-size:11px;padding:5px 7px" onkeydown="if(event.key==='Enter'){addActivityNote('${pid}','${spId}','${itemId}','${c.id}');event.preventDefault()}">
+                <textarea class="fi mention-enabled" id="pm-note-input-${c.id}" placeholder="Add a note about ${escH(c.name||'this component')}… (use @ to mention)" style="flex:1;font-size:11px;padding:5px 7px;resize:vertical;min-height:32px" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!MENTION.activeEl){addActivityNote('${pid}','${spId}','${itemId}','${c.id}');event.preventDefault()}"></textarea>
                 <button class="btn btn-secondary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}','${c.id}')" style="font-size:10px;padding:4px 8px">Note</button>
               </div>
             </div>
@@ -5771,7 +6054,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
     <div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)">
       <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);padding-bottom:6px;border-bottom:2px solid var(--pecan);margin-bottom:12px">Notes & Activity</div>
       <div style="display:flex;gap:6px;margin-bottom:14px">
-        <textarea class="fi" id="pm-note-input" style="resize:vertical;min-height:44px;font-size:12px;flex:1" placeholder="Add a note about this item…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){addActivityNote('${pid}','${spId}','${itemId}','');event.preventDefault()}"></textarea>
+        <textarea class="fi mention-enabled" id="pm-note-input" style="resize:vertical;min-height:44px;font-size:12px;flex:1" placeholder="Add a note about this item… (use @ to mention)" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!MENTION.activeEl){addActivityNote('${pid}','${spId}','${itemId}','');event.preventDefault()}"></textarea>
         <button class="btn btn-primary btn-sm" onclick="addActivityNote('${pid}','${spId}','${itemId}','')" style="align-self:flex-end">Post</button>
       </div>
       <div style="max-height:500px;overflow-y:auto">
