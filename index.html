@@ -4039,6 +4039,50 @@ function save() {
   // Phase C: also push the diff to Supabase (debounced)
   if (typeof scheduleSync === 'function') scheduleSync();
 }
+
+// ── UI state persistence ──
+// View/tab/detail selections are local navigation state — not business data.
+// Kept in a separate localStorage key so they survive loadFromSupabase() which
+// overwrites the S object with studio data from the server.
+const UI_STATE_KEY = 'beep_ui_v1';
+
+function saveUIState() {
+  try {
+    const state = {
+      currentView: S.currentView,
+      currentPropProject: S.currentPropProject,
+      _detailProjectId: S._detailProjectId,
+      _returnView: S._returnView,
+      currentContactTab: S.currentContactTab,
+      clientView: S.clientView,
+      settingsTab:  typeof _settingsTab    !== 'undefined' ? _settingsTab    : null,
+      invTab:       typeof _invTab         !== 'undefined' ? _invTab         : null,
+      expReportTab: typeof _expReportTab   !== 'undefined' ? _expReportTab   : null,
+      currentInvoiceId: typeof _currentInvoiceId !== 'undefined' ? _currentInvoiceId : null,
+      currentDocId:     typeof _currentDocId     !== 'undefined' ? _currentDocId     : null,
+    };
+    localStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+  } catch(e){}
+}
+
+function restoreUIState() {
+  try {
+    const raw = localStorage.getItem(UI_STATE_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s.currentView)        S.currentView        = s.currentView;
+    if (s.currentPropProject) S.currentPropProject = s.currentPropProject;
+    if (s._detailProjectId)   S._detailProjectId   = s._detailProjectId;
+    if (s._returnView)        S._returnView        = s._returnView;
+    if (s.currentContactTab)  S.currentContactTab  = s.currentContactTab;
+    if (s.clientView != null) S.clientView         = s.clientView;
+    if (s.settingsTab  && typeof _settingsTab  !== 'undefined') _settingsTab  = s.settingsTab;
+    if (s.invTab       && typeof _invTab       !== 'undefined') _invTab       = s.invTab;
+    if (s.expReportTab && typeof _expReportTab !== 'undefined') _expReportTab = s.expReportTab;
+    if (s.currentInvoiceId && typeof _currentInvoiceId !== 'undefined') _currentInvoiceId = s.currentInvoiceId;
+    if (s.currentDocId     && typeof _currentDocId     !== 'undefined') _currentDocId     = s.currentDocId;
+  } catch(e){}
+}
  
 async function load() {
   if (USE_SUPABASE_READS && AUTH.ready) {
@@ -4165,6 +4209,9 @@ async function load() {
       save();
     }
   } catch(e){}
+
+  // Restore local UI state (view + tab selections) that Supabase doesn't carry.
+  if (typeof restoreUIState === 'function') restoreUIState();
 }
  
 // ─── UTILS ────────────────────────────────────────────────
@@ -4453,6 +4500,7 @@ function showView(v) {
   if (v === 'doc-editor') { /* rendered by openDocEditor */ }
   if (v === 'invoices') { if (_invTab === 'reports') renderInvReports(); else renderInvoices(); }
   if (v === 'invoice-builder') { /* rendered by openInvoiceBuilder */ }
+  saveUIState();
   save();
 }
 
@@ -9105,6 +9153,7 @@ function openAppSettings() {
 let _settingsTab = 'studio';
 function setSettingsTab(tab) {
   _settingsTab = tab;
+  if (typeof saveUIState === 'function') saveUIState();
   $a('[data-settab]').forEach(b => b.classList.toggle('active', b.dataset.settab === tab));
   $a('.settings-panel').forEach(p => { p.style.display = 'none'; });
   const panel = $c('settab-' + tab);
@@ -9822,6 +9871,7 @@ let _expReportTab = 'list';
 
 function setExpReportTab(tab) {
   _expReportTab = tab;
+  if (typeof saveUIState === 'function') saveUIState();
   $a('[data-exprtab]').forEach(b => b.classList.toggle('active', b.dataset.exprtab === tab));
   const filterRow = $c('exp-filter-row');
   if (filterRow) filterRow.style.display = tab === 'list' ? '' : 'none';
@@ -11594,8 +11644,8 @@ function renderInvLineItems() {
         <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
           <input type="checkbox" ${l.taxable?'checked':''} onchange="_invLineItems[${i}].taxable=this.checked;recalcInvoice()" style="accent-color:var(--russet);width:11px;height:11px"> Tax
         </label>
-        ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
-          <input type="checkbox" ${l.trackInPM?'checked':''} onchange="_invLineItems[${i}].trackInPM=this.checked" style="accent-color:var(--russet);width:11px;height:11px"> Track
+        ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap" title="Add this line to Project Management as an open-line item">
+          <input type="checkbox" ${l.trackInPM?'checked':''} onchange="toggleInvLineTrack(${i}, this.checked)" style="accent-color:var(--russet);width:11px;height:11px"> Track
         </label>` : ''}
         <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${i===0?'10':'4'}px 2px">✕</button>
       </div>
@@ -11613,6 +11663,66 @@ function toggleInvLineDesc(idx) {
   l._descOpen = !(l._descOpen || l.description);
   if (!l._descOpen) l.description = '';
   renderInvLineItems();
+}
+
+// Toggle "Track in PM" on a line item and persist immediately — works for
+// draft/sent/paid invoices so a user can retroactively decide to track.
+function toggleInvLineTrack(idx, checked) {
+  const l = _invLineItems[idx];
+  if (!l) return;
+  l.trackInPM = checked;
+
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  // Mirror to the stored invoice row so the change survives without a full Save click.
+  const storedLine = (inv.lineItems||[]).find(sl => sl.id === l.id);
+  if (storedLine) storedLine.trackInPM = checked;
+
+  const prop = S.proposals[inv.projectId];
+  if (prop && inv.status !== 'draft' && inv.status !== 'cancelled') {
+    if (checked) {
+      // Add to PM if not already there
+      if (l._expenseId) {
+        const exp = (S.expenses||[]).find(e => e.id === l._expenseId);
+        if (exp) {
+          const already = (prop.spaces||[]).some(sp => (sp.items||[]).some(i => i._expenseId === exp.id));
+          if (!already) {
+            let expSpace = prop.spaces.find(sp => sp.name === 'Expenses');
+            if (!expSpace) { expSpace = { id:uid(), name:'Expenses', items:[] }; prop.spaces.push(expSpace); }
+            expSpace.items.push({
+              id: uid(), _expenseId: exp.id, _invoiceLineId: l.id, _invoiceNumber: inv.number,
+              type:'openline', name: exp.name, netPrice: exp.cost, qty:'1', status:'invoiced',
+              notes: 'Expense — Invoice ' + inv.number,
+              category:'', allowance:false,
+              taxExempt: exp.expenseType !== 'billable', billCostOnly: exp.expenseType === 'passthrough',
+            });
+          }
+        }
+      } else if (!l.proposalItemId) {
+        // Manual line: add as open-line in "Invoice Items" space
+        const already = (prop.spaces||[]).some(sp => (sp.items||[]).some(i => i._invoiceLineId === l.id));
+        if (!already) {
+          let invSpace = prop.spaces.find(sp => sp.name === 'Invoice Items');
+          if (!invSpace) { invSpace = { id:uid(), name:'Invoice Items', items:[] }; prop.spaces.push(invSpace); }
+          invSpace.items.push({
+            id: uid(), _invoiceLineId: l.id, _invoiceNumber: inv.number,
+            type:'openline', name: l.name || 'Line item',
+            netPrice: String(l.price || ''), qty: String(l.qty || 1),
+            status: 'invoiced', notes: 'Added from invoice ' + inv.number,
+            category:'', allowance:false, taxExempt: !l.taxable, billCostOnly: true,
+          });
+        }
+      }
+    } else {
+      // Remove PM item tied to this invoice line (unless it's a regular proposal item)
+      (prop.spaces||[]).forEach(sp => {
+        sp.items = (sp.items||[]).filter(it => !(it._invoiceLineId === l.id));
+      });
+    }
+  }
+
+  save();
+  toast(checked ? 'Tracking in PM.' : 'Untracked from PM.');
 }
 
 function recalcInvoice() {
@@ -13016,6 +13126,7 @@ let _invTab = 'list';
 
 function setInvTab(tab) {
   _invTab = tab;
+  if (typeof saveUIState === 'function') saveUIState();
   $a('[data-invtab]').forEach(b => b.classList.toggle('active', b.dataset.invtab === tab));
   $c('inv-toolbar').style.display = tab === 'list' ? 'flex' : 'none';
   if (tab === 'list') renderInvoices();
@@ -14342,10 +14453,31 @@ async function init() {
   }
 
   if (S.currentView && S.currentView !== 'projects') {
-    showView(S.currentView);
-    if (S.currentView === 'proposal' && S.currentPropProject) {
-      $c('proj-select').value = S.currentPropProject;
-      renderPropBody();
+    // Detail views need their context object to exist; fall back to the list if missing.
+    if (S.currentView === 'invoice-builder') {
+      if (_currentInvoiceId && (S.invoices||[]).some(i => i.id === _currentInvoiceId)) {
+        openInvoiceBuilder(_currentInvoiceId);
+      } else {
+        showView('invoices');
+      }
+    } else if (S.currentView === 'doc-editor') {
+      if (_currentDocId && (S.documents||[]).some(d => d.id === _currentDocId)) {
+        openDocEditor(_currentDocId);
+      } else {
+        showView('documents');
+      }
+    } else if (S.currentView === 'project-detail') {
+      if (S._detailProjectId && (S.projects||[]).some(p => p.id === S._detailProjectId)) {
+        showView('project-detail');
+      } else {
+        showView('projects');
+      }
+    } else {
+      showView(S.currentView);
+      if (S.currentView === 'proposal' && S.currentPropProject) {
+        $c('proj-select').value = S.currentPropProject;
+        renderPropBody();
+      }
     }
   }
 
