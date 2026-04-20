@@ -12668,7 +12668,8 @@ function renderInvoiceBuilder() {
   const actions = $c('invb-actions');
   if (actions) {
     const pdfBtn = `<button class="btn btn-ghost btn-sm" onclick="exportInvoicePDF('${inv.id}')">Export PDF</button>`;
-    const previewBtn = `<button class="btn btn-ghost btn-sm" onclick="previewClientInvoice('${inv.id}')" title="Open the client-facing view in a new tab">Preview Invoice</button>`;
+    const previewLabel = (inv.status === 'sent' || inv.status === 'partial') ? 'View Invoice' : 'Preview Invoice';
+    const previewBtn = `<button class="btn btn-ghost btn-sm" onclick="previewClientInvoice('${inv.id}')" title="Open the client-facing view in a new tab">${previewLabel}</button>`;
     const linkBtn = (inv.status === 'sent' || inv.status === 'partial')
       ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
       : '';
