@@ -12669,15 +12669,14 @@ function renderInvoiceBuilder() {
   if (actions) {
     const pdfBtn = `<button class="btn btn-ghost btn-sm" onclick="exportInvoicePDF('${inv.id}')">Export PDF</button>`;
     const previewBtn = `<button class="btn btn-ghost btn-sm" onclick="previewClientInvoice('${inv.id}')" title="Open the client-facing view in a new tab">Preview Invoice</button>`;
-    const alreadySent = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid');
-    const linkBtn = alreadySent
+    const linkBtn = (inv.status === 'sent' || inv.status === 'partial')
       ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
-      : '';
-    const resendBtn = alreadySent
-      ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}')">Send Invoice</button>`
       : '';
     const reminderBtn = (inv.status === 'sent' || inv.status === 'partial')
       ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}', { reminder: true })">Send Reminder</button>`
+      : '';
+    const receiptBtn = inv.status === 'paid'
+      ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}', { receipt: true })">Send Receipt</button>`
       : '';
     if (inv.status === 'cancelled') {
       actions.innerHTML = pdfBtn + '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
@@ -12688,12 +12687,17 @@ function renderInvoiceBuilder() {
         <button class="btn btn-danger btn-sm" onclick="deleteDraft()">Delete Draft</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
         <button class="btn btn-primary btn-sm" onclick="openSendInvoiceFromBuilder()">Send Invoice</button>`;
-    } else if (inv.status === 'paid' || inv.status === 'partial') {
+    } else if (inv.status === 'paid') {
+      actions.innerHTML = `
+        ${pdfBtn}
+        ${previewBtn}
+        ${receiptBtn}
+        <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
+    } else if (inv.status === 'partial') {
       actions.innerHTML = `
         ${pdfBtn}
         ${previewBtn}
         ${linkBtn}
-        ${resendBtn}
         ${reminderBtn}
         <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
     } else {
@@ -12702,7 +12706,6 @@ function renderInvoiceBuilder() {
         ${pdfBtn}
         ${previewBtn}
         ${linkBtn}
-        ${resendBtn}
         ${reminderBtn}
         <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Cancel Invoice</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('sent')">Save Changes</button>`;
@@ -13064,8 +13067,18 @@ function resolveInvoiceWatermark(inv) {
   return wm ? { watermark: wm, opacityPct: s.watermarkOpacity || 5 } : null;
 }
 
+// Format a payment for human display: "Credit Card (via Stripe)" vs raw method string.
+function formatPaymentMethodForEmail(p) {
+  const m = String(p.method || '').trim();
+  const isStripe = !!(p.stripePaymentIntent || p.stripe_payment_intent);
+  if (isStripe && /credit card/i.test(m)) return 'Credit Card (via Stripe)';
+  if (isStripe && /ach/i.test(m))         return 'ACH Bank Transfer (via Stripe)';
+  return m || 'Payment';
+}
+
 // Beep-branded invoice email HTML. Inline-styled so it renders in every major mail client.
-function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl }) {
+// When isReceipt is true, renders a PAID stamp, RECEIPT heading, payment breakdown, and drops the Pay CTA.
+function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl, isReceipt, payments }) {
   const si = studio || {};
   const clientName = client?.name || '';
   const esc = s => String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -13076,8 +13089,12 @@ function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, 
   const bg      = '#FAF6EE';
   const textDark = '#1a1108';
   const textMid  = '#4a3a2a';
+  const paidGreen = '#567047';
 
   const line = `<tr><td style="border-top:1px solid ${border};height:1px;line-height:1px;font-size:0">&nbsp;</td></tr>`;
+  const heading = isReceipt ? 'R E C E I P T' : 'I N V O I C E';
+  const pays = Array.isArray(payments) ? payments.slice().sort((a,b) => (a.date||'').localeCompare(b.date||'')) : [];
+  const totalPaid = pays.reduce((s,p) => s + Number(p.amount || 0), 0);
 
   return `
 <!doctype html>
@@ -13100,8 +13117,9 @@ function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, 
 ${line}
 
 <tr><td style="padding:20px 36px">
-  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:22px;letter-spacing:.14em;color:${textDark};text-align:center">I N V O I C E</div>
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:22px;letter-spacing:.14em;color:${textDark};text-align:center">${heading}</div>
   ${project ? `<div style="font-family:'Courier New',monospace;font-size:12px;color:${textDark};text-align:center;margin-top:6px;letter-spacing:.05em;text-transform:uppercase;font-weight:700">${esc(project.name||'')}</div>` : ''}
+  ${isReceipt ? `<div style="text-align:center;margin-top:14px"><span style="display:inline-block;border:3px solid ${paidGreen};color:${paidGreen};font-family:'Oswald',sans-serif;font-weight:700;font-size:26px;letter-spacing:0.22em;padding:6px 22px;background:white">PAID</span></div>` : ''}
   ${message ? `<div style="background:${bg};border:1px solid ${border};padding:14px 18px;margin-top:18px;font-family:'Courier New',monospace;font-weight:700;font-size:13px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(message)}</div>` : ''}
 </td></tr>
 
@@ -13111,7 +13129,11 @@ ${line}
   <table width="100%" cellpadding="0" cellspacing="0">
     <tr>
       <td style="font-size:11px;color:${textMid};text-transform:uppercase;letter-spacing:.1em"><strong style="color:${textDark}">Invoice</strong> ${esc(inv.number)}</td>
-      <td style="font-size:11px;color:${textMid};text-transform:uppercase;letter-spacing:.1em;text-align:right"><strong style="color:${textDark}">Due</strong> ${esc(inv.dueDate||inv.due_date||'—')}</td>
+      <td style="font-size:11px;color:${textMid};text-transform:uppercase;letter-spacing:.1em;text-align:right">
+        ${isReceipt
+          ? `<strong style="color:${textDark}">Paid</strong> ${esc(pays[pays.length-1]?.date || new Date().toISOString().slice(0,10))}`
+          : `<strong style="color:${textDark}">Due</strong> ${esc(inv.dueDate||inv.due_date||'—')}`}
+      </td>
     </tr>
     ${clientName ? `<tr><td colspan="2" style="font-size:12px;color:${textMid};padding-top:8px">Billed to: <strong style="color:${textDark}">${esc(clientName)}</strong></td></tr>` : ''}
   </table>
@@ -13151,12 +13173,36 @@ ${line}
 
 ${line}
 
+${isReceipt ? `
+<tr><td style="padding:8px 36px 24px">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${mahogany};margin-bottom:8px;text-align:center">Payment Details</div>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+    <thead>
+      <tr>
+        <th align="left"  style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Date</th>
+        <th align="left"  style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Method</th>
+        <th align="right" style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${pays.length ? pays.map(p => `<tr>
+        <td style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:8px 6px">${esc(p.date || '—')}</td>
+        <td style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:8px 6px">${esc(formatPaymentMethodForEmail(p))}${p.notes && !/^Stripe /i.test(p.notes) ? ` <span style="color:${textMid};font-weight:400">— ${esc(p.notes)}</span>` : ''}</td>
+        <td align="right" style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:8px 6px"><strong>${fmtInner(p.amount)}</strong></td>
+      </tr>`).join('') : `<tr><td colspan="3" style="font-size:11px;color:${textMid};padding:8px 6px;font-style:italic">No payment records on file.</td></tr>`}
+      <tr>
+        <td colspan="2" style="font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:${paidGreen};padding:10px 6px;font-weight:700">Total Paid</td>
+        <td align="right" style="font-family:'Oswald',sans-serif;font-size:14px;color:${paidGreen};padding:10px 6px;font-weight:700">${fmtInner(totalPaid)}</td>
+      </tr>
+    </tbody>
+  </table>
+</td></tr>` : `
 <tr><td align="center" style="padding:24px 36px 32px">
   <a href="${esc(payUrl)}" style="display:inline-block;background:${mahogany};color:#fff;text-decoration:none;padding:14px 28px;font-family:'Oswald',sans-serif;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase">Review &amp; Pay Invoice</a>
   <div style="font-family:'Courier New',monospace;font-weight:700;font-size:11px;color:${textMid};margin-top:10px">
     ACH (no fee) · Credit / Debit · Wire · Check${si.checkMailingAddress?'':''}
   </div>
-</td></tr>
+</td></tr>`}
 
 <tr><td style="background:${bg};padding:16px 36px;text-align:center;font-family:'Courier New',monospace;font-weight:400;font-size:10px;color:${textMid}">
   Questions? Reply to this email or contact ${esc(si.email || si.phone || '')}
@@ -13169,8 +13215,27 @@ ${line}
 </html>`.trim();
 }
 
-function buildInvoiceEmailText({ inv, studio, payUrl, message }) {
+function buildInvoiceEmailText({ inv, studio, payUrl, message, isReceipt, payments }) {
   const si = studio || {};
+  if (isReceipt) {
+    const pays = Array.isArray(payments) ? payments : [];
+    const totalPaid = pays.reduce((s,p) => s + Number(p.amount || 0), 0);
+    return [
+      `RECEIPT — Invoice ${inv.number} from ${si.name || 'Studio'}`,
+      '',
+      'PAID IN FULL',
+      '',
+      message ? message + '\n' : '',
+      `Invoice total: $${Number(inv.total||0).toFixed(2)}`,
+      '',
+      'Payments:',
+      ...pays.map(p => `  ${p.date || '—'}  $${Number(p.amount||0).toFixed(2)}  ${formatPaymentMethodForEmail(p)}${p.notes && !/^Stripe /i.test(p.notes) ? ' — '+p.notes : ''}`),
+      '',
+      `Total paid: $${totalPaid.toFixed(2)}`,
+      '',
+      si.email ? `Questions? ${si.email}` : '',
+    ].filter(Boolean).join('\n');
+  }
   return [
     `Invoice ${inv.number} from ${si.name || 'Studio'}`,
     '',
@@ -13188,7 +13253,7 @@ function buildInvoiceEmailText({ inv, studio, payUrl, message }) {
 
 let _sendInvId = null;
 let _sendMarkSentOnSuccess = false;
-let _sendType = 'invoice'; // 'invoice' | 'reminder'
+let _sendType = 'invoice'; // 'invoice' | 'reminder' | 'receipt'
 
 // ── Email template variable substitution
 // Known tokens: {client.name} {client.firstName} {client.email} {client.phone}
@@ -13308,6 +13373,12 @@ const DEFAULT_EMAIL_TEMPLATES = [
     subject: 'Invoice {invoice.number} — due today',
     body: 'Hi {client.firstName},\n\nJust a reminder that invoice {invoice.number} for {project.name} is due today. The balance is {invoice.total}.\n\nThank you,\n{me.name}',
   },
+  {
+    id: 'builtin-receipt',
+    name: 'Receipt',
+    subject: 'Receipt for invoice {invoice.number}',
+    body: 'Hi {client.firstName},\n\nThank you for your payment! Attached is your receipt for invoice {invoice.number} for {project.name}, totaling {invoice.total}.\n\nIf you need another copy, just reply to this email.\n\nThank you,\n{me.name}',
+  },
 ];
 
 function getAllEmailTemplates() {
@@ -13336,9 +13407,12 @@ function openSendInvoiceModal(invoiceId, opts = {}) {
   if (!inv) return;
   _sendInvId = invoiceId;
   _sendMarkSentOnSuccess = !!opts.markSentOnSuccess && (inv.status === 'draft');
-  _sendType = opts.reminder ? 'reminder' : 'invoice';
+  _sendType = opts.receipt ? 'receipt' : opts.reminder ? 'reminder' : 'invoice';
   const titleEl = $c('send-inv-title');
-  if (titleEl) titleEl.textContent = _sendType === 'reminder' ? 'Send Reminder' : 'Send Invoice';
+  if (titleEl) {
+    titleEl.textContent = _sendType === 'receipt' ? 'Send Receipt'
+      : _sendType === 'reminder' ? 'Send Reminder' : 'Send Invoice';
+  }
   const client = (S.clients||[]).find(c => c.id === inv.clientId);
 
   const sel = $c('send-inv-template');
@@ -13346,16 +13420,15 @@ function openSendInvoiceModal(invoiceId, opts = {}) {
     const tpls = getAllEmailTemplates();
     sel.innerHTML = '<option value="">— Default message —</option>' +
       tpls.map(t => `<option value="${t.id}">${escH(t.name)}</option>`).join('');
-    sel.value = _sendType === 'reminder' ? 'builtin-reminder' : 'builtin-new-invoice';
+    sel.value = _sendType === 'receipt' ? 'builtin-receipt'
+      : _sendType === 'reminder' ? 'builtin-reminder' : 'builtin-new-invoice';
   }
 
-  // Adjust the "Copy Link" button label based on whether a status transition will happen
+  // Copy-Payment-Link doesn't belong in reminder or receipt flows — hide it.
   const copyBtn = $c('send-inv-copy-btn');
   if (copyBtn) {
-    copyBtn.textContent = _sendMarkSentOnSuccess
-      ? 'Copy Link & Mark Sent'
-      : (_sendType === 'reminder' ? 'Copy Payment Link' : 'Copy Payment Link');
-    copyBtn.style.display = _sendType === 'reminder' ? 'none' : '';
+    copyBtn.textContent = _sendMarkSentOnSuccess ? 'Copy Link & Mark Sent' : 'Copy Payment Link';
+    copyBtn.style.display = (_sendType === 'reminder' || _sendType === 'receipt') ? 'none' : '';
   }
 
   $c('send-inv-to').value = client?.email || '';
@@ -13432,8 +13505,9 @@ async function sendInvoiceEmail() {
     } catch (e) { console.warn('[send-email] logo inline failed:', e); }
   }
 
-  const html = buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl });
-  const text = buildInvoiceEmailText({ inv, studio, payUrl, message });
+  const isReceipt = _sendType === 'receipt';
+  const html = buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl, isReceipt, payments: isReceipt ? (inv.payments || []) : null });
+  const text = buildInvoiceEmailText({ inv, studio, payUrl, message, isReceipt, payments: isReceipt ? (inv.payments || []) : null });
 
   const btn = $c('modal-send-invoice').querySelector('.btn-primary');
   btn.disabled = true; btn.textContent = 'Sending…';
