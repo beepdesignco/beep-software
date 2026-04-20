@@ -1750,8 +1750,11 @@ tr:hover .row-btns { opacity:1; }
         </div>
 
         <div id="settab-reminders" class="settings-panel" style="display:none;max-width:820px">
-          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic;line-height:1.5">
-            Default reminder schedule per invoice type. Individual invoices can override this in their builder. Each rule picks an email template used when the reminder fires.
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:14px">
+            <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);font-style:italic;line-height:1.5;flex:1">
+              Default reminder schedule per invoice type. Individual invoices can override this in their builder. Each rule picks an email template used when the reminder fires.
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="previewAllRemindersRun()" style="font-size:11px;flex-shrink:0" title="Calls the cron Edge Function in dry-run mode to show what would fire today">Preview Today's Run</button>
           </div>
           <div id="as-reminders-panels" style="display:flex;flex-direction:column;gap:16px"></div>
         </div>
@@ -2689,7 +2692,7 @@ tr:hover .row-btns { opacity:1; }
     <input type="hidden" id="rr-scope">
     <input type="hidden" id="rr-scope-key">
     <input type="hidden" id="rr-rule-id">
-    <div class="frow">
+    <div id="rr-days-when-row" class="frow">
       <div class="fg" style="max-width:130px">
         <label class="fl">Days</label>
         <input type="number" class="fi" id="rr-days" min="1" step="1" value="3">
@@ -2701,6 +2704,9 @@ tr:hover .row-btns { opacity:1; }
           <option value="after">After due date</option>
         </select>
       </div>
+    </div>
+    <div id="rr-due-note" style="display:none;background:rgba(159,102,64,0.08);border-left:2px solid var(--pecan);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+      This reminder auto-sends on the invoice's due date. It is always on and can't be removed — you can only change the email template below.
     </div>
     <div class="fg">
       <label class="fl">Email Template</label>
@@ -9338,8 +9344,10 @@ function renderRemindersPanel() {
 
   container.innerHTML = INVOICE_TYPES.map(t => {
     const rules = defaults[t.v] || [];
-    const before = rules.filter(r => r.when === 'before').sort((a,b) => b.days - a.days);
-    const after  = rules.filter(r => r.when === 'after').sort((a,b) => a.days - b.days);
+    const dueRule = rules.find(r => r.when === 'due') || getDueDateRule(rules);
+    const before  = rules.filter(r => r.when === 'before').sort((a,b) => b.days - a.days);
+    const after   = rules.filter(r => r.when === 'after').sort((a,b) => a.days - b.days);
+
     const renderGroup = (arr, when) => arr.length ? arr.map(r => `
       <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(91,45,34,0.03);border-radius:var(--rs);margin-bottom:4px">
         <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);min-width:110px">${r.days} day${r.days!==1?'s':''} ${when}</span>
@@ -9349,9 +9357,22 @@ function renderRemindersPanel() {
       </div>
     `).join('') : '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 10px">No rules.</div>';
 
+    const dueRow = `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(159,102,64,0.08);border-radius:var(--rs);margin-bottom:4px;border-left:2px solid var(--pecan)">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);min-width:110px;font-weight:700">On due date</span>
+        <span style="flex:1;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">→ ${escH(tplName(dueRule.templateId))}</span>
+        <span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em">Always on</span>
+        <button class="btn btn-ghost btn-sm" onclick="editDueReminderRule('${t.v}')" style="font-size:10px;padding:3px 8px">Edit</button>
+      </div>`;
+
     return `
     <div style="background:white;border:1px solid var(--border);border-radius:var(--rl);padding:16px 18px">
       <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:10px">${escH(t.l)} Invoices</div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:10px;color:var(--text-mid);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Due Today</div>
+        ${dueRow}
+      </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div>
@@ -9367,6 +9388,20 @@ function renderRemindersPanel() {
       </div>
     </div>`;
   }).join('');
+}
+
+// Edit the Due Today rule at the studio level. If no explicit rule exists yet, seed one so it can be saved.
+function editDueReminderRule(invoiceType) {
+  const s = getStudio();
+  if (!s.reminderDefaults) s.reminderDefaults = { ...BUILTIN_REMINDER_DEFAULTS };
+  if (!s.reminderDefaults[invoiceType]) s.reminderDefaults[invoiceType] = [];
+  let rule = s.reminderDefaults[invoiceType].find(r => r.when === 'due');
+  if (!rule) {
+    rule = { id: uid(), days: 0, when: 'due', templateId: 'builtin-due-today' };
+    s.reminderDefaults[invoiceType].push(rule);
+    save();
+  }
+  openReminderRuleModal({ scope: 'studio', scopeKey: invoiceType, ruleId: rule.id });
 }
 
 function addReminderRule(invoiceType, when) {
@@ -12371,6 +12406,9 @@ function openInvoiceBuilder(invId) {
   _currentInvoiceId = invId;
   const inv = (S.invoices||[]).find(i => i.id === invId);
   if (!inv) return;
+  // Kick off (non-blocking) fetch of which reminder rules have already fired, so
+  // the Reminders section can mark them "✓ sent" instead of "fires on …".
+  loadInvoiceReminderHistory(invId);
   _invLineItems = JSON.parse(JSON.stringify(inv.lineItems||[]));
   _invFiles = [...(inv.files||[])];
   // Whole-item selections = lines that have proposalItemId but NO proposalComponentId
@@ -12629,6 +12667,7 @@ function renderInvoiceBuilder() {
   const actions = $c('invb-actions');
   if (actions) {
     const pdfBtn = `<button class="btn btn-ghost btn-sm" onclick="exportInvoicePDF('${inv.id}')">Export PDF</button>`;
+    const previewBtn = `<button class="btn btn-ghost btn-sm" onclick="previewClientInvoice('${inv.id}')" title="Open the client-facing view in a new tab">Preview Invoice</button>`;
     const alreadySent = (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid');
     const linkBtn = alreadySent
       ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
@@ -12644,12 +12683,14 @@ function renderInvoiceBuilder() {
     } else if (inv.status === 'draft') {
       actions.innerHTML = `
         ${pdfBtn}
+        ${previewBtn}
         <button class="btn btn-danger btn-sm" onclick="deleteDraft()">Delete Draft</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
         <button class="btn btn-primary btn-sm" onclick="openSendInvoiceFromBuilder()">Send Invoice</button>`;
     } else if (inv.status === 'paid' || inv.status === 'partial') {
       actions.innerHTML = `
         ${pdfBtn}
+        ${previewBtn}
         ${linkBtn}
         ${resendBtn}
         ${reminderBtn}
@@ -12658,6 +12699,7 @@ function renderInvoiceBuilder() {
       // sent
       actions.innerHTML = `
         ${pdfBtn}
+        ${previewBtn}
         ${linkBtn}
         ${resendBtn}
         ${reminderBtn}
@@ -12672,22 +12714,46 @@ function renderInvoiceRemindersSection(inv) {
   const hasOverride = !!inv.reminderOverride;
   const tpls = getAllEmailTemplates();
   const tplName = (id) => tpls.find(t => t.id === id)?.name || '—';
+  const sentKeys = _invReminderSentKeys.get(inv.id) || new Set();
 
-  const before = effective.filter(r => r.when === 'before').sort((a,b) => b.days - a.days);
-  const after  = effective.filter(r => r.when === 'after').sort((a,b) => a.days - b.days);
+  const dueRule = effective.find(r => r.when === 'due') || getDueDateRule(effective);
+  const before  = effective.filter(r => r.when === 'before').sort((a,b) => b.days - a.days);
+  const after   = effective.filter(r => r.when === 'after').sort((a,b) => a.days - b.days);
+
+  const fireDateFor = (r) => inv.dueDate ? computeRuleFireDate(r, inv.dueDate) : null;
+  const fireAnnotation = (r) => {
+    const key = reminderRuleKey(r);
+    if (sentKeys.has(key)) return `<span style="font-size:9px;color:var(--moss, #567047);font-weight:700">✓ sent</span>`;
+    const d = fireDateFor(r);
+    if (!d) return '';
+    const isPast = d < todayYMDInStudioTZ();
+    const label = isPast ? 'missed' : `fires ${d}`;
+    return `<span style="font-size:9px;color:${isPast?'#b33':'var(--text-light)'};font-style:italic">${label}</span>`;
+  };
 
   const row = (r) => `
     <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:rgba(91,45,34,0.03);border-radius:var(--rs);margin-bottom:3px">
       <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);min-width:110px">${r.days} day${r.days!==1?'s':''} ${r.when}</span>
       <span style="flex:1;font-family:var(--font-b);font-size:10px;color:var(--text-mid)">→ ${escH(tplName(r.templateId))}</span>
+      ${fireAnnotation(r)}
       ${hasOverride ? `<button class="btn btn-ghost btn-sm" onclick="editInvReminderRule('${inv.id}','${r.id}')" style="font-size:9px;padding:2px 6px">Edit</button>
       <button class="btn btn-danger btn-sm" onclick="deleteInvReminderRule('${inv.id}','${r.id}')" style="font-size:9px;padding:2px 6px">✕</button>` : ''}
+    </div>`;
+
+  const dueRow = `
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:rgba(159,102,64,0.08);border-radius:var(--rs);margin-bottom:3px;border-left:2px solid var(--pecan)">
+      <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);min-width:110px;font-weight:700">On due date</span>
+      <span style="flex:1;font-family:var(--font-b);font-size:10px;color:var(--text-mid)">→ ${escH(tplName(dueRule.templateId))}</span>
+      ${fireAnnotation(dueRule)}
+      <span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em">Always on</span>
+      ${hasOverride ? `<button class="btn btn-ghost btn-sm" onclick="editInvDueReminderRule('${inv.id}')" style="font-size:9px;padding:2px 6px">Edit</button>` : ''}
     </div>`;
 
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <label class="fl" style="margin:0">Reminders</label>
       <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="previewInvoiceReminderRun('${inv.id}')" style="font-size:10px" title="Call the cron Edge Function in dry-run mode for this invoice">Preview Auto-Run</button>
         ${hasOverride
           ? `<button class="btn btn-ghost btn-sm" onclick="resetInvoiceReminders('${inv.id}')" style="font-size:10px">Reset to studio default</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="overrideInvoiceReminders('${inv.id}')" style="font-size:10px">Customize for this invoice</button>`}
@@ -12695,6 +12761,11 @@ function renderInvoiceRemindersSection(inv) {
     </div>
     <div style="font-size:10px;color:${hasOverride?'var(--russet)':'var(--text-light)'};font-family:var(--font-b);font-style:italic;margin-bottom:8px">
       ${hasOverride ? 'Custom schedule for this invoice.' : `Using studio default for ${INVOICE_TYPES.find(t=>t.v===inv.type)?.l || inv.type || 'this type'}.`}
+      ${inv.dueDate ? '' : ' Set a due date to see scheduled fire dates.'}
+    </div>
+    <div style="margin-bottom:10px">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:9px;color:var(--text-mid);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Due Today</div>
+      ${dueRow}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div>
@@ -12708,6 +12779,119 @@ function renderInvoiceRemindersSection(inv) {
         ${hasOverride ? `<button class="btn btn-ghost btn-sm" onclick="addInvReminderRule('${inv.id}','after')" style="font-size:9px;margin-top:3px;padding:2px 8px">+ Add</button>` : ''}
       </div>
     </div>`;
+}
+
+// Cached per-invoice set of rule_keys that have already fired (from invoice_sends).
+// Loaded when the invoice detail opens so the UI can annotate with "✓ sent".
+const _invReminderSentKeys = new Map(); // invoice_id → Set<rule_key>
+
+async function loadInvoiceReminderHistory(invoiceId) {
+  try {
+    if (typeof sb === 'undefined' || !sb) return;
+    const { data, error } = await sb
+      .from('invoice_sends')
+      .select('rule_key')
+      .eq('invoice_id', invoiceId)
+      .not('rule_key', 'is', null);
+    if (error) return;
+    _invReminderSentKeys.set(invoiceId, new Set((data || []).map(r => r.rule_key)));
+    if (_currentInvoiceId === invoiceId) refreshInvoiceRemindersSection();
+  } catch (_e) { /* non-fatal */ }
+}
+
+function reminderRuleKey(r) {
+  if (r.when === 'due') return 'due';
+  return `${r.when}-${r.days}`;
+}
+
+// Compute "YYYY-MM-DD fire date" for a rule given the invoice's due_date.
+function computeRuleFireDate(rule, dueDateStr) {
+  if (!dueDateStr) return null;
+  const d = new Date(dueDateStr + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return null;
+  let offsetDays = 0;
+  if (rule.when === 'before') offsetDays = -Math.abs(rule.days || 0);
+  else if (rule.when === 'after') offsetDays = Math.abs(rule.days || 0);
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+function todayYMDInStudioTZ() {
+  // Match the Edge Function's America/Chicago "today" so UI annotations align with cron behavior.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+// Call the Edge Function in dry-run mode against a single invoice. Shows results.
+async function previewInvoiceReminderRun(invoiceId) {
+  const url = `${window.BEEP_SUPABASE_CONFIG.url}/functions/v1/run-invoice-reminders?dry=1&invoice_id=${encodeURIComponent(invoiceId)}`;
+  toast('Running dry-run…');
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + (session?.access_token || window.BEEP_SUPABASE_CONFIG.anonKey),
+        'apikey': window.BEEP_SUPABASE_CONFIG.anonKey,
+      },
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || 'Dry-run failed.');
+    const rows = Array.isArray(data.fired) ? data.fired : [];
+    if (rows.length === 0) {
+      alert(`Dry-run for today (${data.today}):\n\nNo reminders would fire for this invoice today.`);
+    } else {
+      alert(`Dry-run for today (${data.today}):\n\n` +
+        rows.map(f => `• ${f.rule_key} → ${f.to || '(no email)'} — ${f.status}${f.error ? ' ['+f.error+']' : ''}`).join('\n'));
+    }
+  } catch (e) {
+    alert('Dry-run failed: ' + (e?.message || e));
+  }
+}
+
+// Studio-wide dry-run (button on Reminders tab).
+async function previewAllRemindersRun() {
+  const url = `${window.BEEP_SUPABASE_CONFIG.url}/functions/v1/run-invoice-reminders?dry=1`;
+  toast('Running dry-run for all invoices…');
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + (session?.access_token || window.BEEP_SUPABASE_CONFIG.anonKey),
+        'apikey': window.BEEP_SUPABASE_CONFIG.anonKey,
+      },
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || 'Dry-run failed.');
+    const rows = Array.isArray(data.fired) ? data.fired : [];
+    const byInvoice = new Map();
+    rows.forEach(f => {
+      const inv = (S.invoices || []).find(i => i.id === f.invoice_id);
+      const label = inv ? inv.number : f.invoice_id.slice(0, 8);
+      if (!byInvoice.has(label)) byInvoice.set(label, []);
+      byInvoice.get(label).push(`${f.rule_key} → ${f.to || '(no email)'} — ${f.status}`);
+    });
+    const summary = byInvoice.size === 0
+      ? `No reminders would fire today (${data.today}).`
+      : `Dry-run for today (${data.today}) — ${rows.length} action(s):\n\n` +
+        [...byInvoice.entries()].map(([inv, lines]) => `${inv}\n  ${lines.join('\n  ')}`).join('\n\n');
+    alert(summary);
+  } catch (e) {
+    alert('Dry-run failed: ' + (e?.message || e));
+  }
+}
+
+// Edit Due Today rule on a per-invoice override. Seeds the rule into the override if it's not already there.
+function editInvDueReminderRule(invoiceId) {
+  const inv = (S.invoices||[]).find(i => i.id === invoiceId);
+  if (!inv?.reminderOverride) return;
+  let rule = inv.reminderOverride.find(r => r.when === 'due');
+  if (!rule) {
+    rule = { id: uid(), days: 0, when: 'due', templateId: 'builtin-due-today' };
+    inv.reminderOverride.push(rule);
+    save();
+  }
+  openReminderRuleModal({ scope: 'invoice', scopeKey: invoiceId, ruleId: rule.id });
 }
 
 function refreshInvoiceRemindersSection() {
@@ -12763,13 +12947,19 @@ function openReminderRuleModal({ scope, scopeKey, when, ruleId }) {
     rule = inv?.reminderOverride?.find(r => r.id === ruleId) || null;
   }
 
-  $c('rr-title').textContent = (mode === 'edit' ? 'Edit Reminder' : 'Add Reminder') + (scope === 'invoice' ? ' — This Invoice' : '');
+  const isDue = rule?.when === 'due' || when === 'due';
+  $c('rr-title').textContent = isDue
+    ? ('Due Today Reminder' + (scope === 'invoice' ? ' — This Invoice' : ''))
+    : ((mode === 'edit' ? 'Edit Reminder' : 'Add Reminder') + (scope === 'invoice' ? ' — This Invoice' : ''));
   $c('rr-mode').value = mode;
   $c('rr-scope').value = scope;
   $c('rr-scope-key').value = scopeKey;
   $c('rr-rule-id').value = ruleId || '';
   $c('rr-days').value = rule?.days ?? 3;
   $c('rr-when').value = rule?.when || when || 'after';
+  // Hide days/when for the due-today rule; show the explanatory note instead.
+  $c('rr-days-when-row').style.display = isDue ? 'none' : '';
+  $c('rr-due-note').style.display = isDue ? 'block' : 'none';
 
   // Template select populated with ALL templates (built-in + custom)
   const tplSel = $c('rr-template');
@@ -12786,12 +12976,27 @@ function saveReminderRule() {
   const scope = $c('rr-scope').value;
   const scopeKey = $c('rr-scope-key').value;
   const ruleId = $c('rr-rule-id').value;
-  const days = parseInt($c('rr-days').value, 10);
-  const when = $c('rr-when').value;
   const templateId = $c('rr-template').value;
 
-  if (!(days > 0)) { showRRErr('Days must be at least 1.'); return; }
-  if (!['before','after'].includes(when)) { showRRErr('Pick before or after.'); return; }
+  // Resolve the existing rule to check if this is a due-today edit (locked days/when).
+  let existing = null;
+  if (scope === 'studio') {
+    existing = getStudio().reminderDefaults?.[scopeKey]?.find(r => r.id === ruleId) || null;
+  } else {
+    existing = (S.invoices||[]).find(i => i.id === scopeKey)?.reminderOverride?.find(r => r.id === ruleId) || null;
+  }
+  const isDue = existing?.when === 'due';
+
+  let days, when;
+  if (isDue) {
+    days = 0;
+    when = 'due';
+  } else {
+    days = parseInt($c('rr-days').value, 10);
+    when = $c('rr-when').value;
+    if (!(days > 0)) { showRRErr('Days must be at least 1.'); return; }
+    if (!['before','after'].includes(when)) { showRRErr('Pick before or after.'); return; }
+  }
   if (!templateId) { showRRErr('Pick a template.'); return; }
 
   if (scope === 'studio') {
@@ -13028,13 +13233,21 @@ const INVOICE_TYPES = [
   { v: 'design_fee',   l: 'Design Fee' },
 ];
 
-// Ship with sensible defaults the first time the user opens Reminders
+// Ship with sensible defaults the first time the user opens Reminders.
+// Every schedule also gets an implicit due-date rule injected by getEffectiveReminderSchedule.
 const BUILTIN_REMINDER_DEFAULTS = {
   phased:     [{ days: 3, when: 'after', templateId: 'builtin-reminder' }, { days: 10, when: 'after', templateId: 'builtin-reminder' }],
   monthly:    [{ days: 3, when: 'after', templateId: 'builtin-reminder' }, { days: 10, when: 'after', templateId: 'builtin-reminder' }],
   standalone: [{ days: 3, when: 'after', templateId: 'builtin-reminder' }, { days: 10, when: 'after', templateId: 'builtin-reminder' }],
   design_fee: [{ days: 3, when: 'after', templateId: 'builtin-reminder' }, { days: 10, when: 'after', templateId: 'builtin-reminder' }],
 };
+
+// The "due today" rule is always present. Users can edit its template via the studio
+// default or per-invoice override, but can't remove it.
+function getDueDateRule(schedule) {
+  const existing = (schedule || []).find(r => r.when === 'due');
+  return existing || { id: 'due-default', days: 0, when: 'due', templateId: 'builtin-due-today' };
+}
 
 function getStudioReminderDefaults() {
   const s = getStudio();
@@ -13047,10 +13260,13 @@ function getStudioReminderDefaults() {
 }
 
 // Resolve the effective schedule for an invoice: its override if set, else the studio default for its type.
+// The "due today" rule is always implicitly present — injected here if not already in the list.
 function getEffectiveReminderSchedule(inv) {
-  if (inv?.reminderOverride) return inv.reminderOverride;
-  const defaults = getStudioReminderDefaults();
-  return defaults[inv?.type] || [];
+  const base = inv?.reminderOverride || getStudioReminderDefaults()[inv?.type] || [];
+  if (!base.some(r => r.when === 'due')) {
+    return [getDueDateRule(base), ...base];
+  }
+  return base;
 }
 
 // Built-in default templates — user's custom ones override/extend these.
@@ -13084,6 +13300,12 @@ const DEFAULT_EMAIL_TEMPLATES = [
     name: 'Friendly reminder',
     subject: 'Friendly reminder: invoice {invoice.number}',
     body: 'Hi {client.firstName},\n\nJust a quick reminder that invoice {invoice.number} for {project.name} is due {invoice.dueDate}. The balance is {invoice.total}.\n\nThanks so much,\n{me.name}',
+  },
+  {
+    id: 'builtin-due-today',
+    name: 'Due today',
+    subject: 'Invoice {invoice.number} — due today',
+    body: 'Hi {client.firstName},\n\nJust a reminder that invoice {invoice.number} for {project.name} is due today. The balance is {invoice.total}.\n\nThank you,\n{me.name}',
   },
 ];
 
@@ -13273,6 +13495,27 @@ function showSendInvErr(msg) {
   const el = $c('send-inv-error');
   if (msg) { el.textContent = msg; el.style.display = 'block'; }
   else { el.style.display = 'none'; }
+}
+
+// Open the client-facing pay page in a new tab. Mints a payment_token on the fly
+// if the invoice doesn't have one yet (happens for drafts that have never been sent).
+async function previewClientInvoice(invoiceId) {
+  const inv = (S.invoices||[]).find(i => i.id === invoiceId);
+  if (!inv) return;
+  let token = inv.paymentToken;
+  if (!token) {
+    try {
+      token = crypto.randomUUID();
+      const { error } = await sb.from('invoices').update({ payment_token: token }).eq('id', invoiceId);
+      if (error) throw error;
+      inv.paymentToken = token;
+    } catch (e) {
+      toast('Could not prepare preview: ' + (e?.message || e));
+      return;
+    }
+  }
+  const url = `${location.origin}/pay/?t=${encodeURIComponent(token)}&preview=1`;
+  window.open(url, '_blank', 'noopener');
 }
 
 async function copyPaymentLink(invoiceId) {
