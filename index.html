@@ -2649,6 +2649,40 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ REMINDER RULE MODAL ═════════════════ -->
+<div class="overlay" id="modal-reminder-rule">
+  <div class="modal" style="width:440px">
+    <button class="modal-x" onclick="closeModal('modal-reminder-rule')">✕</button>
+    <div class="modal-title" id="rr-title">Reminder</div>
+    <input type="hidden" id="rr-mode">
+    <input type="hidden" id="rr-scope">
+    <input type="hidden" id="rr-scope-key">
+    <input type="hidden" id="rr-rule-id">
+    <div class="frow">
+      <div class="fg" style="max-width:130px">
+        <label class="fl">Days</label>
+        <input type="number" class="fi" id="rr-days" min="1" step="1" value="3">
+      </div>
+      <div class="fg">
+        <label class="fl">When</label>
+        <select class="fi fsel" id="rr-when">
+          <option value="before">Before due date</option>
+          <option value="after">After due date</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Email Template</label>
+      <select class="fi fsel" id="rr-template"></select>
+    </div>
+    <div id="rr-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-reminder-rule')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveReminderRule()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ SEND INVOICE MODAL ═════════════════ -->
 <div class="overlay" id="modal-send-invoice">
   <div class="modal" style="width:560px">
@@ -9305,46 +9339,11 @@ function renderRemindersPanel() {
 }
 
 function addReminderRule(invoiceType, when) {
-  const daysStr = prompt(`Reminder how many days ${when} due?`, '3');
-  if (daysStr == null) return;
-  const days = parseInt(daysStr, 10);
-  if (!(days > 0)) return;
-  const tpls = getAllEmailTemplates();
-  const tplList = tpls.map((t, i) => `${i+1}. ${t.name}`).join('\n');
-  const idx = prompt(`Which template?\n\n${tplList}\n\nEnter number:`, '5');
-  if (idx == null) return;
-  const tpl = tpls[parseInt(idx, 10) - 1];
-  if (!tpl) return;
-  const s = getStudio();
-  if (!s.reminderDefaults) s.reminderDefaults = { ...BUILTIN_REMINDER_DEFAULTS };
-  if (!s.reminderDefaults[invoiceType]) s.reminderDefaults[invoiceType] = [];
-  s.reminderDefaults[invoiceType].push({ id: uid(), days, when, templateId: tpl.id });
-  save();
-  renderRemindersPanel();
-  toast('Reminder rule added.');
+  openReminderRuleModal({ scope: 'studio', scopeKey: invoiceType, when, ruleId: null });
 }
 
 function editReminderRule(invoiceType, ruleId) {
-  const s = getStudio();
-  const rules = s.reminderDefaults?.[invoiceType] || [];
-  const rule = rules.find(r => r.id === ruleId);
-  if (!rule) return;
-  const daysStr = prompt(`Days ${rule.when} due:`, String(rule.days));
-  if (daysStr == null) return;
-  const days = parseInt(daysStr, 10);
-  if (!(days > 0)) return;
-  const tpls = getAllEmailTemplates();
-  const tplList = tpls.map((t, i) => `${i+1}. ${t.name}${t.id===rule.templateId?' (current)':''}`).join('\n');
-  const curIdx = tpls.findIndex(t => t.id === rule.templateId) + 1;
-  const idx = prompt(`Which template?\n\n${tplList}\n\nEnter number:`, String(curIdx || 5));
-  if (idx == null) return;
-  const tpl = tpls[parseInt(idx, 10) - 1];
-  if (!tpl) return;
-  rule.days = days;
-  rule.templateId = tpl.id;
-  save();
-  renderRemindersPanel();
-  toast('Rule updated.');
+  openReminderRuleModal({ scope: 'studio', scopeKey: invoiceType, ruleId });
 }
 
 function deleteReminderRule(invoiceType, ruleId) {
@@ -12607,38 +12606,94 @@ function resetInvoiceReminders(invoiceId) {
 function addInvReminderRule(invoiceId, when) {
   const inv = (S.invoices||[]).find(i => i.id === invoiceId);
   if (!inv || !inv.reminderOverride) return;
-  const daysStr = prompt(`Reminder how many days ${when} due?`, '3');
-  if (daysStr == null) return;
-  const days = parseInt(daysStr, 10);
-  if (!(days > 0)) return;
-  const tpls = getAllEmailTemplates();
-  const idx = prompt(`Which template?\n\n${tpls.map((t,i) => `${i+1}. ${t.name}`).join('\n')}\n\nEnter number:`, '5');
-  if (idx == null) return;
-  const tpl = tpls[parseInt(idx, 10) - 1];
-  if (!tpl) return;
-  inv.reminderOverride.push({ id: uid(), days, when, templateId: tpl.id });
-  save();
-  refreshInvoiceRemindersSection();
+  openReminderRuleModal({ scope: 'invoice', scopeKey: invoiceId, when, ruleId: null });
 }
 
 function editInvReminderRule(invoiceId, ruleId) {
-  const inv = (S.invoices||[]).find(i => i.id === invoiceId);
-  const rule = inv?.reminderOverride?.find(r => r.id === ruleId);
-  if (!rule) return;
-  const daysStr = prompt(`Days ${rule.when} due:`, String(rule.days));
-  if (daysStr == null) return;
-  const days = parseInt(daysStr, 10);
-  if (!(days > 0)) return;
+  openReminderRuleModal({ scope: 'invoice', scopeKey: invoiceId, ruleId });
+}
+
+// ── Shared reminder-rule editor modal ──
+
+function openReminderRuleModal({ scope, scopeKey, when, ruleId }) {
+  const mode = ruleId ? 'edit' : 'add';
   const tpls = getAllEmailTemplates();
-  const curIdx = tpls.findIndex(t => t.id === rule.templateId) + 1;
-  const idx = prompt(`Which template?\n\n${tpls.map((t,i) => `${i+1}. ${t.name}${t.id===rule.templateId?' (current)':''}`).join('\n')}`, String(curIdx || 5));
-  if (idx == null) return;
-  const tpl = tpls[parseInt(idx, 10) - 1];
-  if (!tpl) return;
-  rule.days = days;
-  rule.templateId = tpl.id;
-  save();
-  refreshInvoiceRemindersSection();
+
+  // Resolve existing rule for edit mode
+  let rule = null;
+  if (scope === 'studio') {
+    const s = getStudio();
+    rule = s.reminderDefaults?.[scopeKey]?.find(r => r.id === ruleId) || null;
+  } else if (scope === 'invoice') {
+    const inv = (S.invoices||[]).find(i => i.id === scopeKey);
+    rule = inv?.reminderOverride?.find(r => r.id === ruleId) || null;
+  }
+
+  $c('rr-title').textContent = (mode === 'edit' ? 'Edit Reminder' : 'Add Reminder') + (scope === 'invoice' ? ' — This Invoice' : '');
+  $c('rr-mode').value = mode;
+  $c('rr-scope').value = scope;
+  $c('rr-scope-key').value = scopeKey;
+  $c('rr-rule-id').value = ruleId || '';
+  $c('rr-days').value = rule?.days ?? 3;
+  $c('rr-when').value = rule?.when || when || 'after';
+
+  // Template select populated with ALL templates (built-in + custom)
+  const tplSel = $c('rr-template');
+  tplSel.innerHTML = tpls.map(t => `<option value="${t.id}">${escH(t.name)}</option>`).join('');
+  tplSel.value = rule?.templateId || 'builtin-reminder';
+
+  $c('rr-error').style.display = 'none';
+  $c('modal-reminder-rule').classList.add('open');
+  setTimeout(() => $c('rr-days').focus(), 80);
+}
+
+function saveReminderRule() {
+  const mode = $c('rr-mode').value;
+  const scope = $c('rr-scope').value;
+  const scopeKey = $c('rr-scope-key').value;
+  const ruleId = $c('rr-rule-id').value;
+  const days = parseInt($c('rr-days').value, 10);
+  const when = $c('rr-when').value;
+  const templateId = $c('rr-template').value;
+
+  if (!(days > 0)) { showRRErr('Days must be at least 1.'); return; }
+  if (!['before','after'].includes(when)) { showRRErr('Pick before or after.'); return; }
+  if (!templateId) { showRRErr('Pick a template.'); return; }
+
+  if (scope === 'studio') {
+    const s = getStudio();
+    if (!s.reminderDefaults) s.reminderDefaults = { ...BUILTIN_REMINDER_DEFAULTS };
+    if (!s.reminderDefaults[scopeKey]) s.reminderDefaults[scopeKey] = [];
+    if (mode === 'edit') {
+      const r = s.reminderDefaults[scopeKey].find(x => x.id === ruleId);
+      if (r) Object.assign(r, { days, when, templateId });
+    } else {
+      s.reminderDefaults[scopeKey].push({ id: uid(), days, when, templateId });
+    }
+    save();
+    renderRemindersPanel();
+  } else {
+    const inv = (S.invoices||[]).find(i => i.id === scopeKey);
+    if (!inv) { showRRErr('Invoice not found.'); return; }
+    if (!inv.reminderOverride) inv.reminderOverride = [];
+    if (mode === 'edit') {
+      const r = inv.reminderOverride.find(x => x.id === ruleId);
+      if (r) Object.assign(r, { days, when, templateId });
+    } else {
+      inv.reminderOverride.push({ id: uid(), days, when, templateId });
+    }
+    save();
+    refreshInvoiceRemindersSection();
+  }
+
+  closeModal('modal-reminder-rule');
+  toast(mode === 'edit' ? 'Reminder updated.' : 'Reminder added.');
+}
+
+function showRRErr(msg) {
+  const el = $c('rr-error');
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else { el.style.display = 'none'; }
 }
 
 function deleteInvReminderRule(invoiceId, ruleId) {
