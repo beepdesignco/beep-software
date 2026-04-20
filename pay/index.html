@@ -80,6 +80,9 @@
 <script src="../supabase-config.js"></script>
 </head>
 <body>
+<div id="preview-banner" style="display:none;position:sticky;top:0;z-index:50;background:#5B2D22;color:#fff;text-align:center;padding:10px 16px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;letter-spacing:.14em;text-transform:uppercase">
+  Preview Mode — this is what your client sees
+</div>
 <div id="root">
   <div class="loading">Loading invoice…</div>
 </div>
@@ -88,6 +91,8 @@
 const params = new URLSearchParams(location.search);
 const token = params.get('t');
 const status = params.get('status');
+const isPreview = params.get('preview') === '1';
+if (isPreview) document.getElementById('preview-banner').style.display = 'block';
 
 const SB_URL = window.BEEP_SUPABASE_CONFIG?.url;
 const SB_KEY = window.BEEP_SUPABASE_CONFIG?.anonKey;
