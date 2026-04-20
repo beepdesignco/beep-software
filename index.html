@@ -2649,6 +2649,37 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ EMAIL TEMPLATE MODAL ═════════════════ -->
+<div class="overlay" id="modal-email-template">
+  <div class="modal" style="width:640px">
+    <button class="modal-x" onclick="closeModal('modal-email-template')">✕</button>
+    <div class="modal-title" id="et-title">Email Template</div>
+    <input type="hidden" id="et-mode">
+    <input type="hidden" id="et-id">
+    <div class="fg">
+      <label class="fl">Template Name <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown in the template dropdown</span></label>
+      <input type="text" class="fi" id="et-name" placeholder="e.g. Final payment reminder">
+    </div>
+    <div class="fg">
+      <label class="fl">Subject</label>
+      <input type="text" class="fi" id="et-subject" placeholder="e.g. Invoice {invoice.number} — {project.name}">
+    </div>
+    <div class="fg">
+      <label class="fl">Body</label>
+      <textarea class="fi" id="et-body" style="resize:vertical;min-height:200px;font-size:12px;font-family:var(--font-b)" placeholder="Hi {client.firstName},&#10;&#10;…&#10;&#10;Thank you,&#10;{me.name}"></textarea>
+    </div>
+    <div style="background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:var(--text-dark);line-height:1.8">
+      <strong>Available variables — click to insert at cursor:</strong>
+      <div id="et-vars" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px"></div>
+    </div>
+    <div id="et-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-email-template')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEmailTemplate()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ REMINDER RULE MODAL ═════════════════ -->
 <div class="overlay" id="modal-reminder-rule">
   <div class="modal" style="width:440px">
@@ -9380,35 +9411,85 @@ function renderEmailTemplatesList() {
   list.innerHTML = all.join('');
 }
 
+const EMAIL_TEMPLATE_VARS = [
+  'client.name', 'client.firstName', 'client.email', 'client.phone',
+  'project.name', 'project.address',
+  'invoice.number', 'invoice.total', 'invoice.dueDate', 'invoice.sentDate', 'invoice.phase',
+  'studio.name', 'studio.email', 'studio.phone', 'me.name',
+];
+
 function addEmailTemplate() {
-  const name = prompt('Template name (e.g. "Installation invoice"):');
-  if (!name) return;
-  const subject = prompt('Subject line (use variables like {invoice.number} or {project.name}):', 'Invoice {invoice.number}');
-  if (subject == null) return;
-  const body = prompt('Email body (use variables like {client.firstName}):', 'Hi {client.firstName},\n\n…\n\nThank you,\n{me.name}');
-  if (body == null) return;
-  const s = getStudio();
-  if (!s.emailTemplates) s.emailTemplates = [];
-  s.emailTemplates.push({ id: uid(), name: name.trim(), subject: subject.trim(), body: body });
-  save();
-  renderEmailTemplatesList();
-  toast('Template saved.');
+  openEmailTemplateModal(null);
 }
 
 function editEmailTemplate(id) {
+  openEmailTemplateModal(id);
+}
+
+function openEmailTemplateModal(id) {
   const s = getStudio();
-  const t = (s.emailTemplates||[]).find(x => x.id === id);
-  if (!t) return;
-  const name = prompt('Template name:', t.name);
-  if (name == null) return;
-  const subject = prompt('Subject line:', t.subject);
-  if (subject == null) return;
-  const body = prompt('Email body:', t.body);
-  if (body == null) return;
-  t.name = name.trim(); t.subject = subject.trim(); t.body = body;
+  const t = id ? (s.emailTemplates||[]).find(x => x.id === id) : null;
+  const mode = t ? 'edit' : 'add';
+
+  $c('et-title').textContent = mode === 'edit' ? 'Edit Email Template' : 'New Email Template';
+  $c('et-mode').value = mode;
+  $c('et-id').value = id || '';
+  $c('et-name').value = t?.name || '';
+  $c('et-subject').value = t?.subject || '';
+  $c('et-body').value = t?.body || '';
+  $c('et-error').style.display = 'none';
+
+  const varsEl = $c('et-vars');
+  varsEl.innerHTML = EMAIL_TEMPLATE_VARS.map(v =>
+    `<button type="button" onclick="insertTemplateVar('{${v}}')" style="font-family:var(--font-b);font-size:10px;background:white;border:1px solid var(--border);border-radius:var(--rs);padding:3px 8px;cursor:pointer;color:var(--russet)" title="Click to insert">{${v}}</button>`
+  ).join('');
+
+  $c('modal-email-template').classList.add('open');
+  setTimeout(() => (mode === 'edit' ? $c('et-subject') : $c('et-name')).focus(), 80);
+}
+
+// Insert a variable at the cursor in whichever field is focused (subject or body)
+function insertTemplateVar(token) {
+  const subject = $c('et-subject');
+  const body = $c('et-body');
+  const target = document.activeElement === subject ? subject : body;
+  const start = target.selectionStart ?? target.value.length;
+  const end   = target.selectionEnd ?? target.value.length;
+  target.value = target.value.slice(0, start) + token + target.value.slice(end);
+  const pos = start + token.length;
+  target.setSelectionRange(pos, pos);
+  target.focus();
+}
+
+function saveEmailTemplate() {
+  const name = $c('et-name').value.trim();
+  const subject = $c('et-subject').value.trim();
+  const body = $c('et-body').value;
+  const mode = $c('et-mode').value;
+  const id = $c('et-id').value;
+
+  if (!name) { showEtErr('Name is required.'); $c('et-name').focus(); return; }
+  if (!subject) { showEtErr('Subject is required.'); $c('et-subject').focus(); return; }
+  if (!body.trim()) { showEtErr('Body is required.'); $c('et-body').focus(); return; }
+
+  const s = getStudio();
+  if (!s.emailTemplates) s.emailTemplates = [];
+  if (mode === 'edit') {
+    const t = s.emailTemplates.find(x => x.id === id);
+    if (t) { t.name = name; t.subject = subject; t.body = body; }
+  } else {
+    s.emailTemplates.push({ id: uid(), name, subject, body });
+  }
   save();
+  closeModal('modal-email-template');
   renderEmailTemplatesList();
-  toast('Template updated.');
+  toast(mode === 'edit' ? 'Template updated.' : 'Template saved.');
+}
+
+function showEtErr(msg) {
+  const el = $c('et-error');
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else { el.style.display = 'none'; }
 }
 
 function deleteEmailTemplate(id) {
