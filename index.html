@@ -9389,26 +9389,52 @@ function renderEmailTemplatesList() {
   const list = $c('as-email-templates-list');
   if (!list) return;
   const studio = getStudio();
+  const overrides = studio.emailTemplateOverrides || {};
   const custom = studio.emailTemplates || [];
 
-  const row = (t, locked) => `
+  const row = (t, { isBuiltin }) => {
+    const modified = isBuiltin && overrides[t.id];
+    return `
     <div style="background:white;border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(t.name)}</span>
-          ${locked ? '<span style="font-size:9px;color:var(--text-light);font-style:italic">built-in · read-only</span>' : ''}
+          ${isBuiltin ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em">built-in</span>' : ''}
+          ${modified ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">modified</span>' : ''}
         </div>
-        ${locked ? '' : `<div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="editEmailTemplate('${t.id}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailTemplate('${t.id}')">Delete</button></div>`}
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm" onclick="editEmailTemplate('${t.id}')">Edit</button>
+          ${isBuiltin
+            ? (modified ? `<button class="btn btn-danger btn-sm" onclick="resetBuiltinTemplate('${t.id}')" title="Revert to the built-in default">Reset</button>` : '')
+            : `<button class="btn btn-danger btn-sm" onclick="deleteEmailTemplate('${t.id}')">Delete</button>`}
+        </div>
       </div>
       <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);margin-bottom:4px"><strong>Subject:</strong> ${escH(t.subject)}</div>
       <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);white-space:pre-wrap;line-height:1.5;max-height:100px;overflow:hidden;text-overflow:ellipsis">${escH(t.body)}</div>
     </div>`;
+  };
 
-  const all = [
-    ...DEFAULT_EMAIL_TEMPLATES.map(t => row(t, true)),
-    ...custom.map(t => row(t, false)),
-  ];
-  list.innerHTML = all.join('');
+  // getAllEmailTemplates already applies overrides — use it so the list shows the resolved values
+  const resolved = getAllEmailTemplates();
+  const resolvedBuiltins = resolved.slice(0, DEFAULT_EMAIL_TEMPLATES.length);
+  const resolvedCustom   = resolved.slice(DEFAULT_EMAIL_TEMPLATES.length);
+  list.innerHTML = [
+    ...resolvedBuiltins.map(t => row(t, { isBuiltin: true })),
+    ...resolvedCustom.map(t => row(t, { isBuiltin: false })),
+  ].join('');
+}
+
+function resetBuiltinTemplate(id) {
+  if (!isBuiltinEmailTemplate(id)) return;
+  if (!confirm('Revert this template to the built-in default?')) return;
+  const s = getStudio();
+  if (s.emailTemplateOverrides) {
+    delete s.emailTemplateOverrides[id];
+    if (!Object.keys(s.emailTemplateOverrides).length) delete s.emailTemplateOverrides;
+  }
+  save();
+  renderEmailTemplatesList();
+  toast('Reverted to default.');
 }
 
 const EMAIL_TEMPLATE_VARS = [
@@ -9427,17 +9453,30 @@ function editEmailTemplate(id) {
 }
 
 function openEmailTemplateModal(id) {
-  const s = getStudio();
-  const t = id ? (s.emailTemplates||[]).find(x => x.id === id) : null;
+  const isBuiltin = id && isBuiltinEmailTemplate(id);
+  let t = null;
+  if (id) {
+    // getAllEmailTemplates() already applies overrides for built-ins
+    t = getAllEmailTemplates().find(x => x.id === id) || null;
+  }
   const mode = t ? 'edit' : 'add';
 
-  $c('et-title').textContent = mode === 'edit' ? 'Edit Email Template' : 'New Email Template';
+  $c('et-title').textContent = mode === 'edit'
+    ? (isBuiltin ? 'Edit Built-in Template' : 'Edit Email Template')
+    : 'New Email Template';
   $c('et-mode').value = mode;
   $c('et-id').value = id || '';
   $c('et-name').value = t?.name || '';
   $c('et-subject').value = t?.subject || '';
   $c('et-body').value = t?.body || '';
   $c('et-error').style.display = 'none';
+
+  // Name is locked for built-ins (renaming would confuse the built-in→override mapping)
+  const nameEl = $c('et-name');
+  if (nameEl) {
+    nameEl.disabled = !!isBuiltin;
+    nameEl.title = isBuiltin ? 'Built-in template name cannot be changed.' : '';
+  }
 
   const varsEl = $c('et-vars');
   varsEl.innerHTML = EMAIL_TEMPLATE_VARS.map(v =>
@@ -9473,11 +9512,25 @@ function saveEmailTemplate() {
   if (!body.trim()) { showEtErr('Body is required.'); $c('et-body').focus(); return; }
 
   const s = getStudio();
-  if (!s.emailTemplates) s.emailTemplates = [];
-  if (mode === 'edit') {
+  if (mode === 'edit' && isBuiltinEmailTemplate(id)) {
+    // Built-in: save as an override (only subject/body; name locked)
+    if (!s.emailTemplateOverrides) s.emailTemplateOverrides = {};
+    const builtin = DEFAULT_EMAIL_TEMPLATES.find(x => x.id === id);
+    const patch = {};
+    if (subject !== builtin.subject) patch.subject = subject;
+    if (body    !== builtin.body)    patch.body    = body;
+    if (Object.keys(patch).length === 0) {
+      delete s.emailTemplateOverrides[id];
+      if (!Object.keys(s.emailTemplateOverrides).length) delete s.emailTemplateOverrides;
+    } else {
+      s.emailTemplateOverrides[id] = patch;
+    }
+  } else if (mode === 'edit') {
+    if (!s.emailTemplates) s.emailTemplates = [];
     const t = s.emailTemplates.find(x => x.id === id);
     if (t) { t.name = name; t.subject = subject; t.body = body; }
   } else {
+    if (!s.emailTemplates) s.emailTemplates = [];
     s.emailTemplates.push({ id: uid(), name, subject, body });
   }
   save();
@@ -13036,8 +13089,23 @@ const DEFAULT_EMAIL_TEMPLATES = [
 
 function getAllEmailTemplates() {
   const studio = getStudio();
+  const overrides = studio.emailTemplateOverrides || {};
   const custom = studio.emailTemplates || [];
-  return [...DEFAULT_EMAIL_TEMPLATES, ...custom];
+  // Apply overrides to built-ins; fields not overridden fall back to the built-in value
+  const builtinsResolved = DEFAULT_EMAIL_TEMPLATES.map(t => {
+    const o = overrides[t.id];
+    return o ? { ...t, ...o } : t;
+  });
+  return [...builtinsResolved, ...custom];
+}
+
+function isBuiltinEmailTemplate(id) {
+  return DEFAULT_EMAIL_TEMPLATES.some(t => t.id === id);
+}
+
+function isBuiltinModified(id) {
+  const o = getStudio().emailTemplateOverrides || {};
+  return !!o[id];
 }
 
 function openSendInvoiceModal(invoiceId, opts = {}) {
