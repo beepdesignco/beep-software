@@ -2736,7 +2736,8 @@ tr:hover .row-btns { opacity:1; }
     </div>
     <div class="fg">
       <label class="fl">To</label>
-      <input type="email" class="fi" id="send-inv-to" placeholder="client@example.com">
+      <input type="text" class="fi" id="send-inv-to" placeholder="client@example.com, second@example.com">
+      <div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px">Separate multiple addresses with commas.</div>
     </div>
     <div class="fg">
       <label class="fl">Subject</label>
@@ -13382,8 +13383,15 @@ function applyEmailTemplate() {
 async function sendInvoiceEmail() {
   const inv = (S.invoices||[]).find(i => i.id === _sendInvId);
   if (!inv) { toast('Invoice not found.'); return; }
-  const toEmail = $c('send-inv-to').value.trim();
-  if (!toEmail) { showSendInvErr('Enter recipient email.'); return; }
+  const rawTo = $c('send-inv-to').value.trim();
+  if (!rawTo) { showSendInvErr('Enter recipient email.'); return; }
+  // Split on comma or semicolon, trim, drop empties. Each address must look like x@y.z.
+  const toList = rawTo.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const bad = toList.filter(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (bad.length) { showSendInvErr('Invalid email(s): ' + bad.join(', ')); return; }
+  if (toList.length === 0) { showSendInvErr('Enter recipient email.'); return; }
+  const toEmail = toList.length === 1 ? toList[0] : toList;
+  const toDisplay = toList.join(', ');
   const subject = $c('send-inv-subject').value.trim() || `Invoice ${inv.number || ''}`;
   const message = $c('send-inv-message').value.trim();
 
@@ -13454,10 +13462,10 @@ async function sendInvoiceEmail() {
       markInvoiceSent(inv.id);
       closeModal('modal-send-invoice');
       showView('invoices');
-      toast('Invoice ' + inv.number + ' sent to ' + toEmail);
+      toast('Invoice ' + inv.number + ' sent to ' + toDisplay);
     } else {
       closeModal('modal-send-invoice');
-      toast('Invoice sent to ' + toEmail);
+      toast('Invoice sent to ' + toDisplay);
     }
   } catch (e) {
     showSendInvErr(e?.message || 'Send failed.');
