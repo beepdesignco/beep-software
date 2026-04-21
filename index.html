@@ -1644,6 +1644,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab"        data-settab="tasks"   onclick="setSettingsTab('tasks')"   style="margin-bottom:-1px">Task Statuses</button>
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
         <button class="view-tab"        data-settab="emails"  onclick="setSettingsTab('emails')"  style="margin-bottom:-1px">Email Templates</button>
+        <button class="view-tab"        data-settab="notes"   onclick="setSettingsTab('notes')"   style="margin-bottom:-1px">Invoice Notes</button>
         <button class="view-tab"        data-settab="reminders" onclick="setSettingsTab('reminders')" style="margin-bottom:-1px">Reminders</button>
         <button class="view-tab"        data-settab="colors"  onclick="setSettingsTab('colors')"  style="margin-bottom:-1px">Status Colors</button>
       </div>
@@ -1747,6 +1748,14 @@ tr:hover .row-btns { opacity:1; }
           </div>
           <div id="as-email-templates-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
           <button class="btn btn-primary btn-sm" onclick="addEmailTemplate()">+ Add Template</button>
+        </div>
+
+        <div id="settab-notes" class="settings-panel" style="display:none;max-width:780px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic;line-height:1.5">
+            Default note presets that can be attached to any invoice. Toggle "Default on" to have a preset pre-selected on new invoices. Per-invoice free-form notes still work alongside these.
+          </div>
+          <div id="as-invoice-notes-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+          <button class="btn btn-primary btn-sm" onclick="addInvoiceNotePreset()">+ Add Note</button>
         </div>
 
         <div id="settab-reminders" class="settings-panel" style="display:none;max-width:820px">
@@ -2716,6 +2725,34 @@ tr:hover .row-btns { opacity:1; }
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-reminder-rule')">Cancel</button>
       <button class="btn btn-primary" onclick="saveReminderRule()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ INVOICE NOTE PRESET EDITOR ═════════════════ -->
+<div class="overlay" id="modal-invoice-note">
+  <div class="modal" style="width:520px">
+    <button class="modal-x" onclick="closeModal('modal-invoice-note')">✕</button>
+    <div class="modal-title" id="inp-title">Note Preset</div>
+    <input type="hidden" id="inp-id">
+    <div class="fg">
+      <label class="fl">Label</label>
+      <input type="text" class="fi" id="inp-label" placeholder="e.g. Terms of payment">
+    </div>
+    <div class="fg">
+      <label class="fl">Note Body</label>
+      <textarea class="fi" id="inp-body" style="resize:vertical;min-height:150px;font-size:12px;font-family:var(--font-b)" placeholder="Payment due within 30 days. Late fees apply after 60 days…"></textarea>
+    </div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inp-default-on" style="margin:0">
+        Default on new invoices
+      </label>
+    </div>
+    <div id="inp-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-invoice-note')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveInvoiceNotePreset()">Save</button>
     </div>
   </div>
 </div>
@@ -9328,6 +9365,7 @@ function setSettingsTab(tab) {
   if (tab === 'tasks')  renderTaskStatusSettings();
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
+  if (tab === 'notes')  renderInvoiceNotesList();
   if (tab === 'reminders') renderRemindersPanel();
   if (tab === 'colors') renderStatusColorSettings();
 }
@@ -9419,6 +9457,129 @@ function deleteReminderRule(invoiceType, ruleId) {
   s.reminderDefaults[invoiceType] = (s.reminderDefaults[invoiceType] || []).filter(r => r.id !== ruleId);
   save();
   renderRemindersPanel();
+}
+
+// ── Invoice Note Presets ──
+// Stored on studio.defaultInvoiceNotes = [{id, label, body, defaultOn}].
+// Invoices reference them via inv.noteSelections = [id,...]; composition happens at render.
+
+function getInvoiceNotePresets() {
+  return getStudio().defaultInvoiceNotes || [];
+}
+
+function renderInvoiceNotesList() {
+  const list = $c('as-invoice-notes-list');
+  if (!list) return;
+  const presets = getInvoiceNotePresets();
+  if (presets.length === 0) {
+    list.innerHTML = `<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:14px 16px;background:white;border:1px dashed var(--border);border-radius:var(--rl);text-align:center">No note presets yet. Add one to make it available on invoices.</div>`;
+    return;
+  }
+  list.innerHTML = presets.map(n => `
+    <div style="background:white;border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(n.label || '—')}</span>
+          ${n.defaultOn ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">default on</span>' : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm" onclick="editInvoiceNotePreset('${n.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteInvoiceNotePreset('${n.id}')">Delete</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);white-space:pre-wrap;line-height:1.5;max-height:100px;overflow:hidden;text-overflow:ellipsis">${escH(n.body || '')}</div>
+    </div>`).join('');
+}
+
+function addInvoiceNotePreset() {
+  openInvoiceNoteModal(null);
+}
+
+function editInvoiceNotePreset(id) {
+  openInvoiceNoteModal(id);
+}
+
+function deleteInvoiceNotePreset(id) {
+  if (!confirm('Delete this note preset? It will be removed from any invoice using it.')) return;
+  const s = getStudio();
+  s.defaultInvoiceNotes = (s.defaultInvoiceNotes || []).filter(n => n.id !== id);
+  // Also strip the id from any invoice selections so stale references don't linger.
+  (S.invoices || []).forEach(inv => {
+    if (Array.isArray(inv.noteSelections)) {
+      inv.noteSelections = inv.noteSelections.filter(x => x !== id);
+    }
+  });
+  save();
+  renderInvoiceNotesList();
+}
+
+function openInvoiceNoteModal(id) {
+  const preset = id ? getInvoiceNotePresets().find(n => n.id === id) : null;
+  $c('inp-title').textContent = preset ? 'Edit Note Preset' : 'New Note Preset';
+  $c('inp-id').value = id || '';
+  $c('inp-label').value = preset?.label || '';
+  $c('inp-body').value = preset?.body || '';
+  $c('inp-default-on').checked = !!preset?.defaultOn;
+  $c('inp-error').style.display = 'none';
+  $c('modal-invoice-note').classList.add('open');
+  setTimeout(() => $c('inp-label').focus(), 80);
+}
+
+function saveInvoiceNotePreset() {
+  const id = $c('inp-id').value || null;
+  const label = $c('inp-label').value.trim();
+  const body  = $c('inp-body').value.trim();
+  const defaultOn = $c('inp-default-on').checked;
+  if (!label) { showInpErr('Enter a label.'); return; }
+  if (!body)  { showInpErr('Enter the note body.'); return; }
+
+  const s = getStudio();
+  if (!Array.isArray(s.defaultInvoiceNotes)) s.defaultInvoiceNotes = [];
+  if (id) {
+    const existing = s.defaultInvoiceNotes.find(n => n.id === id);
+    if (existing) Object.assign(existing, { label, body, defaultOn });
+  } else {
+    s.defaultInvoiceNotes.push({ id: uid(), label, body, defaultOn });
+  }
+  save();
+  closeModal('modal-invoice-note');
+  renderInvoiceNotesList();
+  toast(id ? 'Note updated.' : 'Note added.');
+}
+
+function showInpErr(msg) {
+  const el = $c('inp-error');
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else     { el.style.display = 'none'; }
+}
+
+// Combine selected preset bodies + the invoice's free-form notes into a single
+// rendered block. Used by PDF export + pay page render.
+function composeInvoiceNotes(inv) {
+  const presets = getInvoiceNotePresets();
+  const selectedIds = Array.isArray(inv?.noteSelections) ? inv.noteSelections : [];
+  const parts = selectedIds
+    .map(id => presets.find(p => p.id === id)?.body)
+    .filter(Boolean);
+  const extra = (inv?.notes || '').trim();
+  if (extra) parts.push(extra);
+  return parts.join('\n\n');
+}
+
+// Invoice builder: checkbox toggle on a preset. Mutates inv.noteSelections + saves.
+function toggleInvoiceNotePreset(presetId, checked) {
+  const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  if (!Array.isArray(inv.noteSelections)) inv.noteSelections = [];
+  const has = inv.noteSelections.includes(presetId);
+  if (checked && !has) inv.noteSelections.push(presetId);
+  else if (!checked && has) inv.noteSelections = inv.noteSelections.filter(x => x !== presetId);
+  save();
+}
+
+// IDs of presets that should be auto-selected on a brand-new invoice.
+function getDefaultOnNoteIds() {
+  return getInvoiceNotePresets().filter(p => p.defaultOn).map(p => p.id);
 }
 
 function renderEmailTemplatesList() {
@@ -12384,6 +12545,7 @@ function buildInvoiceFromModal() {
     ccFeePct: 0, ccFee: 0,
     taxRate: 0, subtotal: 0, tax: 0, total: 0,
     notes: '', files: [], payments: [],
+    noteSelections: getDefaultOnNoteIds(),
     created: new Date().toISOString(),
   };
 }
@@ -12580,9 +12742,29 @@ function renderInvoiceBuilder() {
   </div>`;
 
   // Notes & Attachments
-  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+  const notePresets = getInvoiceNotePresets();
+  const selectedNoteIds = new Set(Array.isArray(inv.noteSelections) ? inv.noteSelections : []);
+  const notePresetsBlock = notePresets.length === 0 ? '' : `
     <div class="fg">
-      <label class="fl">Notes</label>
+      <label class="fl" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Default Notes</span>
+        <span style="font-size:10px;color:var(--text-light);font-weight:400;font-style:italic">Manage presets in App Settings → Invoice Notes</span>
+      </label>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${notePresets.map(p => `
+          <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:rgba(91,45,34,0.03);border:1px solid var(--border);border-radius:var(--rs);cursor:pointer">
+            <input type="checkbox" ${selectedNoteIds.has(p.id) ? 'checked' : ''} onchange="toggleInvoiceNotePreset('${p.id}', this.checked)" style="margin:2px 0 0">
+            <div style="flex:1">
+              <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);margin-bottom:2px">${escH(p.label)}</div>
+              <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);white-space:pre-wrap;line-height:1.5">${escH(p.body)}</div>
+            </div>
+          </label>`).join('')}
+      </div>
+    </div>`;
+  html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+    ${notePresetsBlock}
+    <div class="fg">
+      <label class="fl">${notePresets.length ? 'Extra Notes' : 'Notes'}</label>
       <textarea class="fi" id="inv-notes" style="resize:vertical;min-height:50px;font-size:12px" placeholder="Payment terms, special instructions…">${escH(inv.notes||'')}</textarea>
     </div>
     <div class="fg" style="margin-top:8px">
@@ -14413,8 +14595,9 @@ async function exportInvoicePDF(invId) {
     cursorY = doc.lastAutoTable.finalY + 16;
   }
 
-  // ── Notes
-  if (inv.notes) {
+  // ── Notes (default presets + free-form, combined)
+  const notesText = composeInvoiceNotes(inv);
+  if (notesText) {
     if (cursorY > pageH - 120) { doc.addPage(); cursorY = margin; }
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
@@ -14424,7 +14607,7 @@ async function exportInvoicePDF(invId) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(...TEXT_MID);
-    const noteLines = doc.splitTextToSize(inv.notes, pageW - margin*2);
+    const noteLines = doc.splitTextToSize(notesText, pageW - margin*2);
     doc.text(noteLines, margin, cursorY);
     cursorY += noteLines.length * 12 + 8;
   }
