@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
 
     const { data: inv, error } = await sb
       .from('invoices')
-      .select('id, number, type, status, phase, sent_date, due_date, notes, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method)')
+      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method)')
       .eq('payment_token', token)
       .is('deleted_at', null)
       .single();
@@ -75,6 +75,14 @@ Deno.serve(async (req) => {
     const amountPaid = (inv.invoice_payments || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
     const amountDue = Math.max(0, Number(inv.total || 0) - amountPaid);
 
+    // Compose display notes from studio preset library + this invoice's selections + free-form.
+    const presets: any[] = studioInfo?.defaultInvoiceNotes || [];
+    const selected: string[] = Array.isArray((inv as any).note_selections) ? (inv as any).note_selections : [];
+    const presetParts = selected.map(id => presets.find(p => p.id === id)?.body).filter(Boolean);
+    const extra = String(inv.notes || '').trim();
+    if (extra) presetParts.push(extra);
+    const composedNotes = presetParts.join('\n\n');
+
     return json({
       invoice: {
         id: inv.id,
@@ -82,7 +90,7 @@ Deno.serve(async (req) => {
         status: inv.status,
         sent_date: inv.sent_date,
         due_date: inv.due_date,
-        notes: inv.notes,
+        notes: composedNotes,
         subtotal: Number(inv.subtotal || 0),
         freight: Number(inv.freight || 0),
         discount: Number(inv.discount || 0),

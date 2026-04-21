@@ -76,6 +76,7 @@ Deno.serve(async (req) => {
     let q = sb.from('invoices').select(`
       id, number, type, status, phase, sent_date, due_date, total, studio_id,
       client_id, project_id, payment_token, reminder_override,
+      notes, note_selections,
       invoice_payments(amount),
       studios:studio_id(id, name, studio_info),
       clients:client_id(id, name, email),
@@ -131,8 +132,9 @@ Deno.serve(async (req) => {
         const message = fillTemplate(tpl.body, ctx);
         const payUrl  = `${PUBLIC_APP_URL}/pay/?t=${encodeURIComponent(inv.payment_token || '')}`;
         const logoUrl = await resolveLogoDataUrl(sb, studioInfo);
-        const html    = buildInvoiceEmailHtml({ inv, studio, studioInfo, client, project, message, payUrl, logoUrl });
-        const text    = buildInvoiceEmailText({ inv, studioInfo, payUrl, message });
+        const invoiceNotes = composeInvoiceNotes(inv, studioInfo);
+        const html    = buildInvoiceEmailHtml({ inv, studio, studioInfo, client, project, message, payUrl, logoUrl, invoiceNotes });
+        const text    = buildInvoiceEmailText({ inv, studioInfo, payUrl, message, invoiceNotes });
 
         if (dryRun) {
           fired.push({ invoice_id: inv.id, rule_key: key, to: toEmail, status: 'dry-run' });
@@ -300,9 +302,20 @@ function esc(s: any): string {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as any)[c]);
 }
 
+// Compose the final notes text: selected preset bodies + free-form inv.notes.
+// Used for reminder email bodies so clients see the same notes a manual send would.
+function composeInvoiceNotes(inv: any, studioInfo: any): string {
+  const presets: any[] = studioInfo?.defaultInvoiceNotes || [];
+  const selected: string[] = Array.isArray(inv?.note_selections) ? inv.note_selections : [];
+  const parts = selected.map(id => presets.find(p => p.id === id)?.body).filter(Boolean);
+  const extra = String(inv?.notes || '').trim();
+  if (extra) parts.push(extra);
+  return parts.join('\n\n');
+}
+
 // Mirror of buildInvoiceEmailHtml() in index.html — kept minimal for reminders
 // (line items omitted to keep payload small; client already saw them in original send).
-function buildInvoiceEmailHtml({ inv, studio, studioInfo, client, project, message, payUrl, logoUrl }: any): string {
+function buildInvoiceEmailHtml({ inv, studio, studioInfo, client, project, message, payUrl, logoUrl, invoiceNotes }: any): string {
   const si = studioInfo || {};
   const clientName = client?.name || '';
   const mahogany = '#5B2D22', border = '#bfb19a', bg = '#FAF6EE', textDark = '#1a1108', textMid = '#4a3a2a';
@@ -331,6 +344,10 @@ ${line}
   <tr><td colspan="2" style="font-size:12px;color:${textMid};padding-top:8px">Balance due: <strong style="color:${textDark}">${fmtMoney(inv.total)}</strong></td></tr>
 </table></td></tr>
 ${line}
+${invoiceNotes ? `<tr><td style="padding:16px 36px">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${mahogany};margin-bottom:8px">Notes</div>
+  <div style="font-family:'Courier New',monospace;font-weight:700;font-size:12px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(invoiceNotes)}</div>
+</td></tr>${line}` : ''}
 <tr><td align="center" style="padding:24px 36px 32px">
   <a href="${esc(payUrl)}" style="display:inline-block;background:${mahogany};color:#fff;text-decoration:none;padding:14px 28px;font-family:'Oswald',sans-serif;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase">Review &amp; Pay Invoice</a>
   <div style="font-family:'Courier New',monospace;font-weight:700;font-size:11px;color:${textMid};margin-top:10px">ACH (no fee) · Credit / Debit · Wire · Check</div>
@@ -341,13 +358,14 @@ ${line}
 </table></td></tr></table></body></html>`.trim();
 }
 
-function buildInvoiceEmailText({ inv, studioInfo, payUrl, message }: any): string {
+function buildInvoiceEmailText({ inv, studioInfo, payUrl, message, invoiceNotes }: any): string {
   return [
     `Invoice ${inv.number} from ${studioInfo?.name || 'Studio'}`,
     '',
     message ? message + '\n' : '',
     `Total: ${fmtMoney(inv.total)}`,
     `Due: ${inv.due_date || '—'}`,
+    ...(invoiceNotes ? ['', 'Notes:', invoiceNotes] : []),
     '',
     `Pay online: ${payUrl}`,
     '',
