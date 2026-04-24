@@ -1223,10 +1223,6 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◇</span>
         <span class="nav-label">Clients</span>
       </div>
-      <div class="nav-item" onclick="showView('vendors')" data-view="vendors">
-        <span class="nav-icon">◈</span>
-        <span class="nav-label">Vendors</span>
-      </div>
       <div class="nav-section-label" style="margin-top:10px">On the Horizon</div>
       <div class="nav-item" onclick="showView('time')" data-view="time">
         <span class="nav-icon">◷</span>
@@ -1354,21 +1350,20 @@ tr:hover .row-btns { opacity:1; }
       <div class="page-header">
         <div>
           <div class="page-title">Contacts</div>
-          <div class="page-sub">Every vendor, rep, and workroom. One place.</div>
+          <div class="page-sub">Vendors, workrooms, reps, architects, GCs — everyone you work with.</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-secondary btn-sm" onclick="openManageLists()">⚙ Manage Lists</button>
-          <button class="btn btn-primary" onclick="openNewContactModal()">+ New Contact</button>
+          <button class="btn btn-primary" onclick="openNewVendorFromContacts()">+ New</button>
         </div>
       </div>
-      <div class="contacts-toolbar">
-        <input type="text" class="search-in" id="contact-search" placeholder="Search name, company, showroom…" oninput="renderContacts()">
+      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <input type="text" class="search-in" id="contact-search" placeholder="Search companies or people…" oninput="renderContacts()" style="flex:1;min-width:240px">
         <div class="view-tabs">
-          <button class="view-tab active" data-ctab="all"      onclick="setContactTab('all')">All</button>
-          <button class="view-tab"        data-ctab="type"     onclick="setContactTab('type')">By Type</button>
-          <button class="view-tab"        data-ctab="category" onclick="setContactTab('category')">By Category</button>
+          <button class="view-tab active" data-csort="company" onclick="setContactsSort('company')">By Company</button>
+          <button class="view-tab"        data-csort="person"  onclick="setContactsSort('person')">By Person</button>
         </div>
       </div>
+      <div id="contacts-type-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
       <div class="contacts-body" id="contacts-body"><!-- rendered by JS --></div>
     </div>
  
@@ -1389,22 +1384,6 @@ tr:hover .row-btns { opacity:1; }
       <div class="contacts-body" id="clients-body"><!-- rendered by JS --></div>
     </div>
 
-    <!-- ─────────── VENDORS VIEW ─────────── -->
-    <div class="view" id="view-vendors">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Vendors</div>
-          <div class="page-sub">Workrooms, showrooms, artisans, receivers. Everyone you source from.</div>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-primary" onclick="openVendorEditor(null)">+ New Vendor</button>
-        </div>
-      </div>
-      <div class="contacts-toolbar">
-        <input type="text" class="search-in" id="vendor-search" placeholder="Search vendors…" oninput="renderVendors()">
-      </div>
-      <div class="contacts-body" id="vendors-body"><!-- rendered by JS --></div>
-    </div>
 
     <!-- ─────────── TIME TRACKER VIEW ─────────── -->
     <div class="view" id="view-time">
@@ -3651,8 +3630,100 @@ async function loadFromSupabase() {
   S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
   S.studio       = AUTH.studio.studio_info || {};
 
+  // One-time fold of legacy S.contacts → vendors + vendor_contacts. Runs on
+  // first sign-in after this build; studio.contactsMigratedAt guards re-run.
+  if (typeof migrateContactsToVendors === 'function') migrateContactsToVendors();
+
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
   if (typeof captureSbShadow === 'function') captureSbShadow();
+}
+
+// ─── ONE-TIME FOLD: contacts → vendors + vendor_contacts ──
+// Runs once per studio. Every legacy contacts row becomes:
+//   • If it has a company → vendor named after company (vendor_type from role) + rep under it
+//   • Else → vendor named after the person (vendor_type from role) + rep of same name
+// project.addressBook.linkedContacts[i].contactId is re-pointed to the new
+// vendor_contact id. S.contacts is cleared — the shadow-diff sync will soft-
+// delete the rows in the DB on the next save(); the DB data stays recoverable
+// via deleted_at for rollback.
+function migrateContactsToVendors() {
+  if (!S.studio) S.studio = {};
+  if (S.studio.contactsMigratedAt) return;
+
+  const legacy = S.contacts || [];
+  if (legacy.length === 0) {
+    S.studio.contactsMigratedAt = new Date().toISOString();
+    return; // nothing to do; still stamps the flag so we don't re-check every load
+  }
+
+  if (!S.vendors)        S.vendors = [];
+  if (!S.vendorContacts) S.vendorContacts = [];
+
+  // oldContactId → newVendorContactId
+  const idMap = new Map();
+
+  for (const contact of legacy) {
+    const name    = (contact.name    || 'Unnamed').trim();
+    const company = (contact.company || '').trim();
+    const role    = (contact.role    || '').trim();
+
+    // Resolve vendor: company name if present, else person name
+    const vendorName = company || name;
+    const vendorType = role || '';
+
+    let vendor = S.vendors.find(v => (v.name || '').toLowerCase() === vendorName.toLowerCase());
+    if (!vendor) {
+      vendor = {
+        id: uid(),
+        name: vendorName,
+        vendorType,
+        website: '',
+        phone: company ? '' : (contact.phone || ''),
+        email: company ? '' : (contact.email || ''),
+        address: '',
+        notes: '',
+        created: new Date().toISOString(),
+      };
+      S.vendors.push(vendor);
+    } else if (!vendor.vendorType && vendorType) {
+      vendor.vendorType = vendorType;
+    }
+
+    const newContact = {
+      id: uid(),
+      vendorId: vendor.id,
+      clientId: contact.clientId || null,
+      name,
+      // When company was present, `role` belongs to the person (their title at that company).
+      // When no company, we used role as the vendor_type instead, so don't duplicate it on the title.
+      title: company ? role : '',
+      email: contact.email || '',
+      phone: contact.phone || '',
+      notes: contact.notes || '',
+      primary: false,
+      brandIds: [],
+      sortOrder: 0,
+      created: new Date().toISOString(),
+    };
+    S.vendorContacts.push(newContact);
+    idMap.set(contact.id, newContact.id);
+  }
+
+  // Re-point project address_book.linkedContacts references so the old IDs don't dangle.
+  (S.projects || []).forEach(proj => {
+    const links = proj.addressBook?.linkedContacts;
+    if (!Array.isArray(links)) return;
+    links.forEach(lc => {
+      if (lc && lc.contactId && idMap.has(lc.contactId)) {
+        lc.contactId = idMap.get(lc.contactId);
+      }
+    });
+  });
+
+  // Clear S.contacts — the sync engine will soft-delete the DB rows on the next save().
+  S.contacts = [];
+  S.studio.contactsMigratedAt = new Date().toISOString();
+  console.log('[beep] Migrated', legacy.length, 'legacy contact(s) into vendors + vendor_contacts.');
 }
 
 // ── Supabase row → S-shape mappers ──
@@ -3693,6 +3764,7 @@ function dbVendorContactToS(c) {
   return {
     id: c.id,
     vendorId: c.vendor_id,
+    clientId: c.client_id || null,
     name: c.name || '',
     title: c.title || '',
     email: c.email || '',
@@ -4033,6 +4105,7 @@ function vendorContactToDB(c) {
     id: c.id,
     studio_id: c._studioId,           // set by sync loop
     vendor_id: c.vendorId,
+    client_id: c.clientId || null,
     name: c.name || '',
     title: c.title || null,
     email: c.email || null,
@@ -4926,7 +4999,8 @@ function showView(v) {
   if (v === 'proposal') { updateProjSelect(); if (S.currentPropProject) loadProposal(S.currentPropProject); }
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
-  if (v === 'vendors')  renderVendors();
+  // Legacy redirect — old "vendors" nav was folded into contacts
+  if (v === 'vendors') { showView('contacts'); return; }
   if (v === 'time') renderTime();
   if (v === 'expenses') renderExpenses();
   if (v === 'dashboard') renderDashboard();
@@ -5132,9 +5206,27 @@ function renderPDOverview(proj, pid) {
       ${qrLarch.contactPerson ? '<div style="'+qrDetail+'">'+escH(qrLarch.contactPerson)+'</div>' : ''}
     `});
   }
-  // Starred contacts
+  // Starred contacts — after the fold-in, lc.contactId points at a vendor_contact;
+  // old data (not yet migrated) may still point at a legacy contact — fall back.
   (ab.linkedContacts||[]).forEach((lc, i) => {
     if (!lc.starred || !lc.contactId) return;
+    const vc = (S.vendorContacts||[]).find(c => c.id === lc.contactId);
+    if (vc) {
+      const vendor = (S.vendors||[]).find(v => v.id === vc.vendorId);
+      const name   = vendor?.name || vc.name;
+      const role   = lc.projectRole || vc.title || vendor?.vendorType || 'Contact';
+      const poc    = vc.name && vendor && vc.name !== vendor.name
+        ? { name: vc.name, phone: vc.phone, email: vc.email } : null;
+      qrItems.push({ key:'star_'+i, html:`
+        <div style="${qrLabel}">${escH(role)} \u2605</div>
+        <div style="${qrName}">${escH(name)}</div>
+        ${poc ? '<div style="'+qrDetail+'">'+escH(poc.name)+(poc.phone?' \u00b7 '+escH(poc.phone):'')+(poc.email?' \u00b7 <span style="color:var(--russet)">'+escH(poc.email)+'</span>':'')+'</div>' : ''}
+        ${!poc && vc.phone ? '<div style="'+qrDetail+'">'+escH(vc.phone)+'</div>' : ''}
+        ${!poc && vc.email ? '<div style="'+qrDetail+'"><span style="color:var(--russet)">'+escH(vc.email)+'</span></div>' : ''}
+      `});
+      return;
+    }
+    // Legacy fallback (unmigrated S.contacts entry)
     const ct = (S.contacts||[]).find(c => c.id === lc.contactId);
     if (!ct) return;
     const poc = (ct.people||[])[0];
@@ -7042,10 +7134,11 @@ function toggleABStar(pid, idx) {
 function handleABContactDropdown(pid, idx, selectEl) {
   if (selectEl.value === '__new__') {
     selectEl.value = '';
-    openNewContactModal(newId => {
-      saveABLinkedContact(pid, idx, 'contactId', newId);
-      renderProjectDetail();
-    });
+    // Contacts are now vendors + vendor_contacts. Open the vendor editor so
+    // the user creates the company first, then adds the rep inside the same
+    // modal. Afterwards they come back here and pick from the dropdown.
+    toast('Create the company + contact in the editor, then pick them here.');
+    openVendorEditor(null);
   } else {
     saveABLinkedContact(pid, idx, 'contactId', selectEl.value);
     renderProjectDetail();
@@ -7306,17 +7399,24 @@ function renderPDAddressBook(proj, pid) {
   html += '</div>';
 
   // ── LINKED CONTACTS (from Contacts area) ──
-  const availableContacts = (S.contacts||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  // Pool = vendor_contacts (post-fold-in) + any stragglers in legacy S.contacts.
+  // Each option is annotated with the parent vendor/company for clarity.
+  const vcEntries = (S.vendorContacts||[]).map(vc => {
+    const v = (S.vendors||[]).find(x => x.id === vc.vendorId);
+    return { id: vc.id, name: vc.name, subtitle: v?.name ? v.name + (v.vendorType ? ' · ' + v.vendorType : '') : (vc.title || '') };
+  });
+  const legacyEntries = (S.contacts||[]).map(c => ({ id: c.id, name: c.name, subtitle: c.company || c.role || '' }));
+  const availableContacts = [...vcEntries, ...legacyEntries].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
 
   html += `<div style="${sectionStyle}">
     <div style="${sectionHd}">Project Contacts</div>
     <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:12px">
-      Link contacts from your contact book and label their role for this project.
+      Link people from the Contacts page and label their role for this project.
     </div>
     ${linked.map((lc, i) => {
       const contact = availableContacts.find(c => c.id === lc.contactId);
       const contactOpts = '<option value="">— Select contact —</option>' +
-        availableContacts.map(c => `<option value="${c.id}" ${c.id===lc.contactId?'selected':''}>${escH(c.name)}${c.city?' · '+escH(c.city):''}</option>`).join('') +
+        availableContacts.map(c => `<option value="${c.id}" ${c.id===lc.contactId?'selected':''}>${escH(c.name)}${c.subtitle?' · '+escH(c.subtitle):''}</option>`).join('') +
         '<option value="__new__">+ Add New Contact</option>';
       return `
       <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
@@ -9276,109 +9376,193 @@ function toggleClientView() {
  
 // ─── SAMPLE DATA ──────────────────────────────────────────
  
-// ─── CONTACTS ─────────────────────────────────────────────
- 
-function setContactTab(tab) {
-  S.currentContactTab = tab;
-  $a('[data-ctab]').forEach(b => b.classList.toggle('active', b.dataset.ctab === tab));
-  save();
+// ─── CONTACTS (unified: vendors + vendor_contacts in one view) ─────────
+//
+// This is the only list view for everyone you work with — vendor companies,
+// reps, workrooms, architects, GCs, receivers. Data lives in S.vendors +
+// S.vendorContacts. The legacy S.contacts is migrated on first load
+// (see migrateContactsToVendors); any lingering entries are still shown
+// here as a safety net so nothing is ever hidden by accident.
+
+let _contactsSort = 'company';      // 'company' | 'person'
+let _contactsTypeFilter = null;     // null = all, else vendor_type string
+
+function setContactsSort(sort) {
+  _contactsSort = sort;
+  $a('[data-csort]').forEach(b => b.classList.toggle('active', b.dataset.csort === sort));
   renderContacts();
 }
- 
+
+function setContactsTypeFilter(type) {
+  _contactsTypeFilter = (_contactsTypeFilter === type) ? null : type;
+  renderContacts();
+}
+
+// Back-compat with old code paths that called setContactTab.
+function setContactTab(tab) { renderContacts(); }
+
 function renderContacts() {
   const body  = $c('contacts-body');
+  if (!body) return;
   const query = ($c('contact-search')?.value || '').toLowerCase().trim();
-  const tab   = S.currentContactTab || 'all';
-  let contacts = S.contacts;
- 
-  if (query) {
-    contacts = contacts.filter(c => {
-      const orgText = [c.name, c.city, c.notes, ...(c.lines||[]).map(b => typeof b==='string'?b:b.name), ...getContactCategories(c)].join(' ').toLowerCase();
-      const peopleText = (c.people||[]).map(p => [p.name, p.role, p.email].join(' ')).join(' ').toLowerCase();
-      return orgText.includes(query) || peopleText.includes(query);
+  const vendors        = (S.vendors        || []);
+  const vendorContacts = (S.vendorContacts || []);
+  const legacy         = (S.contacts       || []);
+
+  // Filter chips: every distinct vendor_type in use, plus an "All" chip.
+  const typesInUse = Array.from(new Set(vendors.map(v => v.vendorType).filter(Boolean))).sort();
+  renderContactsTypeFilters(typesInUse);
+
+  // Matches query?
+  const matches = (txt) => !query || String(txt || '').toLowerCase().includes(query);
+  const matchesRecord = (parts) => !query || parts.some(matches);
+
+  if (_contactsSort === 'person') {
+    // Flat list of people — every vendor_contact + any legacy S.contacts entries not yet migrated.
+    let people = vendorContacts.map(vc => {
+      const v = vendors.find(x => x.id === vc.vendorId);
+      return { kind: 'vc', id: vc.id, name: vc.name, title: vc.title, company: v?.name || '',
+               vendorType: v?.vendorType || '', email: vc.email, phone: vc.phone, notes: vc.notes,
+               primary: vc.primary, vendorId: v?.id || null };
     });
-  }
- 
-  if (!contacts.length) {
-    body.innerHTML = `<div class="no-results">${query ? `Nothing matches "${query}." Try a name, brand, or workroom.` : 'No contacts yet. Add your first one.'}</div>`;
+    legacy.forEach(c => {
+      people.push({ kind: 'legacy', id: c.id, name: c.name, title: c.role || '',
+                    company: c.company || '', vendorType: '',
+                    email: c.email, phone: c.phone, notes: c.notes });
+    });
+    // Filter
+    if (_contactsTypeFilter) people = people.filter(p => p.vendorType === _contactsTypeFilter);
+    if (query) people = people.filter(p => matchesRecord([p.name, p.title, p.company, p.email, p.phone, p.notes]));
+    if (!people.length) {
+      body.innerHTML = `<div class="no-results">${query ? 'Nothing matches that search.' : 'No people yet. Add your first contact.'}</div>`;
+      return;
+    }
+    people.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    body.innerHTML = `<div class="contacts-grid">${people.map(personCardHtml).join('')}</div>`;
     return;
   }
- 
-  if (tab === 'all')      body.innerHTML = renderAllContacts(contacts);
-  if (tab === 'type')     body.innerHTML = renderGroupedByType(contacts);
-  if (tab === 'category') body.innerHTML = renderGroupedByCat(contacts);
+
+  // Company-first (default). Vendors as primary cards; each card shows nested contacts.
+  let filteredVendors = vendors;
+  if (_contactsTypeFilter) filteredVendors = filteredVendors.filter(v => v.vendorType === _contactsTypeFilter);
+  if (query) {
+    filteredVendors = filteredVendors.filter(v => {
+      const vendorContactsHere = vendorContacts.filter(vc => vc.vendorId === v.id);
+      return matchesRecord([v.name, v.vendorType, v.email, v.phone, v.website, v.address, v.notes])
+          || vendorContactsHere.some(vc => matchesRecord([vc.name, vc.title, vc.email, vc.phone, vc.notes]));
+    });
+  }
+  filteredVendors = [...filteredVendors].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // Legacy loose contacts (no migration yet) shown at the bottom so nothing's hidden.
+  const looseLegacy = _contactsTypeFilter
+    ? []
+    : legacy.filter(c => !query || matchesRecord([c.name, c.company, c.role, c.email, c.phone, c.notes]));
+
+  if (!filteredVendors.length && !looseLegacy.length) {
+    body.innerHTML = `<div class="no-results">${query ? 'Nothing matches that search.' : 'No contacts yet. Click + New to add one.'}</div>`;
+    return;
+  }
+
+  const vendorCards = filteredVendors.map(v => vendorCardHtml(v, vendorContacts)).join('');
+  const legacyCards = looseLegacy.length
+    ? `<div class="group-block">
+        <div class="group-label">Legacy / Unsorted <span class="group-count">${looseLegacy.length}</span></div>
+        <div class="contacts-grid">${looseLegacy.map(c => legacyContactCardHtml(c)).join('')}</div>
+      </div>`
+    : '';
+  body.innerHTML = `<div class="contacts-grid">${vendorCards}</div>${legacyCards}`;
 }
- 
-function renderAllContacts(contacts) {
-  const sorted = [...contacts].sort((a,b) => (a.name||'').localeCompare(b.name||''));
-  return `<div class="contacts-grid">${sorted.map(c => contactCardHtml(c)).join('')}</div>`;
+
+function renderContactsTypeFilters(typesInUse) {
+  const host = $c('contacts-type-filters');
+  if (!host) return;
+  if (!typesInUse.length) { host.innerHTML = ''; return; }
+  const chip = (label, val, active) => `
+    <button onclick="setContactsTypeFilter(${val === null ? 'null' : `'${escH(val).replace(/'/g, "\\'")}'`})"
+      style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? 'var(--russet)' : 'var(--border)'};background:${active ? 'rgba(122,74,16,0.12)' : 'white'};color:${active ? 'var(--russet)' : 'var(--text-mid)'};font-weight:700">${escH(label)}</button>`;
+  host.innerHTML = chip('All', null, _contactsTypeFilter === null)
+    + typesInUse.map(t => chip(t, t, _contactsTypeFilter === t)).join('');
 }
- 
-function contactCardHtml(c) {
-  const typeLabel = CONTACT_TYPES.find(t => t.id === c.type)?.label || 'Other';
-  const _cats  = getContactCategories(c);
-  const cats  = _cats.slice(0,3).map(cat => `<span class="cat-pill">${escH(cat)}</span>`).join('');
-  const extra = _cats.length > 3 ? `<span class="cat-pill">+${(_cats.length-3)}</span>` : '';
-  const lines = (c.lines||[]).slice(0,5).map(b => {
-    const nm = typeof b === 'string' ? b : b.name;
-    const subCats = (typeof b === 'object' && b.categories && b.categories.length)
-      ? `<span style="font-size:9px;color:var(--text-light);margin-left:3px">(${b.categories.slice(0,2).join(', ')}${b.categories.length>2?'…':''})</span>` : '';
-    return `<span class="brand-pill">${escH(nm)}${subCats}</span>`;
-  }).join('');
-  const people = (c.people||[]).map(p => `
-    <div class="poc-row">
-      <span class="poc-name">${escH(p.name)}</span>
-      ${p.role  ? `<span class="poc-role">${escH(p.role)}</span>` : ''}
-      ${p.email ? `<a class="poc-email" href="mailto:${escH(p.email)}" onclick="event.stopPropagation()">${escH(p.email)}</a>` : ''}
-      ${p.phone ? `<span style="font-size:11px;color:var(--text-mid)">${escH(p.phone)}</span>` : ''}
-      ${p.notes ? `<span style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(p.notes)}</span>` : ''}
+
+function vendorCardHtml(v, vendorContacts) {
+  const reps = vendorContacts.filter(c => c.vendorId === v.id)
+    .sort((a, b) => (b.primary - a.primary) || (a.name || '').localeCompare(b.name || ''));
+  const itemCount = countItemsForVendor(v.id);
+  const repsHtml = reps.slice(0, 4).map(vc => `
+    <div class="poc-row" onclick="event.stopPropagation(); openVendorContactEditor('${v.id}','${vc.id}')">
+      <span class="poc-name">${escH(vc.name)}${vc.primary ? ' <span style="color:var(--russet);font-size:9px;text-transform:uppercase;letter-spacing:0.06em;margin-left:3px">primary</span>' : ''}</span>
+      ${vc.title ? `<span class="poc-role">${escH(vc.title)}</span>` : ''}
+      ${vc.email ? `<a class="poc-email" href="mailto:${escH(vc.email)}" onclick="event.stopPropagation()">${escH(vc.email)}</a>` : ''}
+      ${vc.phone ? `<span style="font-size:11px;color:var(--text-mid)">${escH(vc.phone)}</span>` : ''}
     </div>`).join('');
- 
+  const moreReps = reps.length > 4 ? `<div style="font-size:10px;color:var(--text-light);font-style:italic;padding:2px 0 0">+${reps.length - 4} more…</div>` : '';
   return `
-    <div class="contact-card" onclick="openEditContactModal('${c.id}')">
+    <div class="contact-card" onclick="openVendorEditor('${v.id}')">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div class="contact-name">${escH(c.name||'—')}</div>
-        <span class="type-badge type-${c.type||'other'}">${typeLabel}</span>
+        <div class="contact-name">${escH(v.name || '(unnamed)')}</div>
+        ${v.vendorType ? `<span class="type-badge" style="background:rgba(122,74,16,0.12);color:var(--russet)">${escH(v.vendorType)}</span>` : ''}
       </div>
-      ${c.city ? `<div style="font-size:11px;color:var(--text-mid);margin-top:1px;font-style:italic">${escH(c.city)}</div>` : ''}
-      ${people ? `<div class="poc-list">${people}</div>` : ''}
-      ${lines ? `<div class="lines-wrap">${lines}</div>` : ''}
-      ${cats||extra ? `<div class="contact-cats" style="margin-top:6px">${cats}${extra}</div>` : ''}
+      ${v.email ? `<div style="font-size:11.5px;color:var(--russet);margin-top:3px">${escH(v.email)}</div>` : ''}
+      ${v.phone ? `<div style="font-size:11.5px;color:var(--text-mid);margin-top:1px">${escH(v.phone)}</div>` : ''}
+      ${v.website ? `<div style="font-size:11px;color:var(--text-light);margin-top:2px;font-style:italic">${escH(v.website)}</div>` : ''}
+      ${repsHtml ? `<div class="poc-list" style="margin-top:6px">${repsHtml}${moreReps}</div>` : ''}
+      ${(reps.length || itemCount) ? `<div style="font-size:10px;color:var(--text-light);margin-top:5px;font-family:var(--font-b)">${reps.length ? reps.length + ' contact' + (reps.length!==1?'s':'') : ''}${reps.length && itemCount ? ' · ' : ''}${itemCount ? itemCount + ' item' + (itemCount!==1?'s':'') : ''}</div>` : ''}
     </div>`;
 }
- 
-function renderGroupedByType(contacts) {
-  return CONTACT_TYPES.map(type => {
-    const members = contacts.filter(c => (c.type||'other') === type.id).sort((a,b) => (a.name||'').localeCompare(b.name||''));
-    if (!members.length) return '';
-    return `
-      <div class="group-block">
-        <div class="group-label">${type.label} <span class="group-count">${members.length}</span></div>
-        <div class="contacts-grid">${members.map(c => contactCardHtml(c)).join('')}</div>
-      </div>`;
-  }).join('');
+
+function personCardHtml(p) {
+  const onclick = p.kind === 'vc'
+    ? `openVendorContactEditor('${p.vendorId}','${p.id}')`
+    : `openLegacyContactEditor('${p.id}')`;
+  return `
+    <div class="contact-card" onclick="${onclick}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div class="contact-name">${escH(p.name || '(unnamed)')}</div>
+        ${p.primary ? '<span style="font-size:9px;color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Primary</span>' : ''}
+      </div>
+      ${p.title ? `<div style="font-size:11px;color:var(--text-mid);margin-top:2px">${escH(p.title)}</div>` : ''}
+      ${p.company ? `<div style="font-size:11px;color:var(--russet);margin-top:1px;font-family:var(--font-b);font-weight:700">${escH(p.company)}${p.vendorType ? ` · <span style="font-weight:400">${escH(p.vendorType)}</span>` : ''}</div>` : ''}
+      ${p.email ? `<div style="font-size:11.5px;color:var(--russet);margin-top:3px">${escH(p.email)}</div>` : ''}
+      ${p.phone ? `<div style="font-size:11.5px;color:var(--text-mid);margin-top:1px">${escH(p.phone)}</div>` : ''}
+      ${p.notes ? `<div style="font-size:10px;color:var(--text-light);margin-top:3px;font-style:italic">${escH(p.notes)}</div>` : ''}
+    </div>`;
 }
- 
-function renderGroupedByCat(contacts) {
-  const grouped = {};
-  contacts.forEach(c => {
-    const cats = getContactCategories(c);
-    const effectiveCats = cats.length ? cats : ['Uncategorized'];
-    effectiveCats.forEach(cat => {
-      if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(c);
-    });
+
+function legacyContactCardHtml(c) {
+  return `
+    <div class="contact-card" onclick="openLegacyContactEditor('${c.id}')">
+      <div class="contact-name">${escH(c.name || '(unnamed)')}</div>
+      ${c.company ? `<div style="font-size:11px;color:var(--russet);margin-top:1px;font-family:var(--font-b);font-weight:700">${escH(c.company)}</div>` : ''}
+      ${c.role ? `<div style="font-size:11px;color:var(--text-mid);margin-top:2px">${escH(c.role)}</div>` : ''}
+      ${c.email ? `<div style="font-size:11.5px;color:var(--russet);margin-top:3px">${escH(c.email)}</div>` : ''}
+      ${c.phone ? `<div style="font-size:11.5px;color:var(--text-mid);margin-top:1px">${escH(c.phone)}</div>` : ''}
+      ${c.notes ? `<div style="font-size:10px;color:var(--text-light);margin-top:3px;font-style:italic">${escH(c.notes)}</div>` : ''}
+    </div>`;
+}
+
+function countItemsForVendor(vendorId) {
+  let n = 0;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.vendorId === vendorId) n++;
+    }));
   });
-  const cats = S.categories && S.categories.length ? S.categories : CATEGORIES;
-  const ordered = [...cats, 'Uncategorized'].filter(k => grouped[k]);
-  return ordered.map(key => {
-    const members = grouped[key].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-    return `
-      <div class="group-block">
-        <div class="group-label">${escH(key)} <span class="group-count">${members.length}</span></div>
-        <div class="contacts-grid">${members.map(c => contactCardHtml(c)).join('')}</div>
-      </div>`;
-  }).join('');
+  return n;
+}
+
+// Entry point for "+ New" on the Contacts page — creates a new vendor.
+// After save, user can add reps inside the vendor detail.
+function openNewVendorFromContacts() { openVendorEditor(null); }
+
+// Legacy contact editor — opens the old modal if it still exists, otherwise no-op.
+// Used until any remaining legacy contacts get migrated.
+function openLegacyContactEditor(id) {
+  if (typeof openEditContactModal === 'function') {
+    openEditContactModal(id);
+  } else {
+    toast('Legacy contact. Migrate to a vendor+contact to edit.');
+  }
 }
  
 // ─── MANAGE LISTS ─────────────────────────────────────────
