@@ -1723,13 +1723,13 @@ tr:hover .row-btns { opacity:1; }
 
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px">Item Pipeline Statuses</div>
           <div id="as-pipeline-statuses" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <div style="margin-bottom:28px">
+          <div id="as-add-pipeline-status-btn" style="display:none;margin-bottom:28px">
             <button class="btn btn-ghost btn-sm" onclick="addCustomPipelineStatus()" style="font-size:11px">+ Add Pipeline Status</button>
           </div>
 
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Project Task Statuses</div>
           <div id="as-task-statuses" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <div style="display:flex;gap:6px;max-width:420px">
+          <div id="as-add-task-status-row" style="display:none;gap:6px;max-width:420px;align-items:center">
             <input type="text" class="fi" id="as-task-status-input" placeholder="New task status…" style="flex:1" onkeydown="if(event.key==='Enter'){addTaskStatus();event.preventDefault()}">
             <input type="color" id="as-task-status-color" value="#9f6640" style="width:36px;height:36px;padding:2px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer">
             <button class="btn btn-primary btn-sm" onclick="addTaskStatus()">Add</button>
@@ -3515,7 +3515,8 @@ async function loadFromSupabase() {
   S.paymentCards     = studioSettings.payment_cards     || [];
   S.statusColors     = studioSettings.status_colors     || (typeof DEFAULT_STATUS_COLORS !== 'undefined' ? {...DEFAULT_STATUS_COLORS} : {});
   S.statusLabels     = studioSettings.status_labels     || {};
-  S.customItemStatuses = studioSettings.custom_item_statuses || [];
+  S.customItemStatuses   = studioSettings.custom_item_statuses  || [];
+  S.pipelineStatusOrder  = studioSettings.pipeline_status_order || [];
   S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
   S.studio       = AUTH.studio.studio_info || {};
 
@@ -4089,7 +4090,8 @@ async function syncToSupabase() {
       payment_cards: S.paymentCards || [],
       status_colors: S.statusColors || {},
       status_labels: S.statusLabels || {},
-      custom_item_statuses: S.customItemStatuses || [],
+      custom_item_statuses:  S.customItemStatuses  || [],
+      pipeline_status_order: S.pipelineStatusOrder || [],
       categories:    S.categories   || [],
     };
     const currentInfo = S.studio || {};
@@ -10165,11 +10167,29 @@ function removeQtyUnit(val) {
 // Users can rename the display label (stored in S.statusLabels[v]) and change the color
 // (S.statusColors[v]) without touching any logic. Custom pipeline statuses live in
 // S.customItemStatuses = [{v, l}] — their v is slugified at creation time.
+// Display order is stored in S.pipelineStatusOrder = [v, v, v, ...]; anything not in
+// the order array falls through in its natural position.
+
+let _editingPipelineStatuses = false;
+let _editingTaskStatuses = false;
+let _dragStatusKind = null;
+let _dragStatusFromIdx = -1;
 
 function getAllPipelineStatuses() {
   const base = STATUSES.map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: true }));
   const custom = (S.customItemStatuses || []).map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: false }));
-  return [...base, ...custom];
+  const all = [...base, ...custom];
+  const order = S.pipelineStatusOrder || [];
+  if (!order.length) return all;
+  // Stable sort by position in the order array; unknowns (new statuses) go after
+  return all.slice().sort((a, b) => {
+    const ia = order.indexOf(a.v);
+    const ib = order.indexOf(b.v);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
 }
 
 function getPipelineStatusLabel(v) {
@@ -10185,20 +10205,78 @@ function renderPipelineStatusSettings() {
   const el = $c('as-pipeline-statuses');
   if (!el) return;
   const all = getAllPipelineStatuses();
-  el.innerHTML = all.map(s => {
+  const editing = _editingPipelineStatuses;
+
+  const rows = all.map((s, idx) => {
     const color = getStatusColor(s.v);
+    const handle = `<span draggable="true" ondragstart="statusDragStart(event,'pipeline',${idx})" ondragover="event.preventDefault()" ondrop="statusDrop(event,'pipeline',${idx})" title="Drag to reorder" style="cursor:grab;color:var(--text-light);font-size:14px;line-height:1;user-select:none;padding:0 2px">⋮⋮</span>`;
+    if (editing) {
+      return `
+      <div ondragover="event.preventDefault()" ondrop="statusDrop(event,'pipeline',${idx})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+        ${handle}
+        <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
+          onchange="updateStatusColor('${s.v}',this.value)">
+        <input type="text" class="fi" value="${escH(s.l)}" style="flex:1;font-size:12px;color:${color};font-weight:700;font-family:var(--font-b);padding:6px 8px" onchange="updatePipelineStatusLabel('${s.v}', this.value)">
+        ${s.builtin
+          ? `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Built-in · ${s.v}</span>
+             <button onclick="resetStatusColor('${s.v}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">reset</button>`
+          : `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Custom · ${s.v}</span>
+             <button onclick="deleteCustomPipelineStatus('${s.v}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>`}
+      </div>`;
+    }
+    // Read-only row
     return `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
-      <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
-        onchange="updateStatusColor('${s.v}',this.value)">
-      <input type="text" class="fi" value="${escH(s.l)}" style="flex:1;font-size:12px;color:${color};font-weight:700;font-family:var(--font-b);padding:6px 8px" onchange="updatePipelineStatusLabel('${s.v}', this.value)">
-      ${s.builtin
-        ? `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Built-in · ${s.v}</span>
-           <button onclick="resetStatusColor('${s.v}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">reset</button>`
-        : `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Custom · ${s.v}</span>
-           <button onclick="deleteCustomPipelineStatus('${s.v}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>`}
+    <div ondragover="event.preventDefault()" ondrop="statusDrop(event,'pipeline',${idx})" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      ${handle}
+      <span style="width:14px;height:14px;border-radius:50%;background:${color};flex-shrink:0;border:1px solid rgba(0,0,0,0.08)"></span>
+      <span style="flex:1;font-family:var(--font-b);font-weight:700;font-size:13px;color:${color}">${escH(s.l)}</span>
+      <span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">${s.builtin ? 'Built-in' : 'Custom'} · ${s.v}</span>
     </div>`;
   }).join('');
+
+  // Action bar: Edit toggle (+ Done when editing)
+  const toggleBtn = `<button class="btn btn-ghost btn-sm" onclick="togglePipelineStatusEdit()" style="font-size:11px">${editing ? 'Done Editing' : 'Edit Statuses'}</button>`;
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">${toggleBtn}</div>
+    ${rows}`;
+
+  const addBtn = $c('as-add-pipeline-status-btn');
+  if (addBtn) addBtn.style.display = editing ? '' : 'none';
+}
+
+function togglePipelineStatusEdit() {
+  _editingPipelineStatuses = !_editingPipelineStatuses;
+  renderPipelineStatusSettings();
+}
+
+// Drag/drop reorder helpers shared by both lists.
+function statusDragStart(e, kind, idx) {
+  _dragStatusKind = kind;
+  _dragStatusFromIdx = idx;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', String(idx)); } catch {}
+}
+
+function statusDrop(e, kind, idx) {
+  e.preventDefault();
+  if (_dragStatusKind !== kind || _dragStatusFromIdx < 0 || _dragStatusFromIdx === idx) return;
+  if (kind === 'pipeline') {
+    const current = getAllPipelineStatuses().map(s => s.v);
+    const [moved] = current.splice(_dragStatusFromIdx, 1);
+    current.splice(idx, 0, moved);
+    S.pipelineStatusOrder = current;
+    save();
+    renderPipelineStatusSettings();
+  } else if (kind === 'task') {
+    const list = (S.taskStatuses && S.taskStatuses.length) ? S.taskStatuses : [...DEFAULT_TASK_STATUSES];
+    const [moved] = list.splice(_dragStatusFromIdx, 1);
+    list.splice(idx, 0, moved);
+    S.taskStatuses = list;
+    save();
+    renderTaskStatusSettings();
+  }
+  _dragStatusKind = null;
+  _dragStatusFromIdx = -1;
 }
 
 function updateStatusColor(statusVal, color) {
@@ -10281,16 +10359,41 @@ function renderTaskStatusSettings() {
   const el = $c('as-task-statuses');
   if (!el) return;
   const statuses = S.taskStatuses && S.taskStatuses.length ? S.taskStatuses : DEFAULT_TASK_STATUSES;
-  el.innerHTML = statuses.map(s => {
+  const editing = _editingTaskStatuses;
+
+  const rows = statuses.map((s, idx) => {
     const color = getTaskStatusColor(s);
+    const handle = `<span draggable="true" ondragstart="statusDragStart(event,'task',${idx})" ondragover="event.preventDefault()" ondrop="statusDrop(event,'task',${idx})" title="Drag to reorder" style="cursor:grab;color:var(--text-light);font-size:14px;line-height:1;user-select:none;padding:0 2px">⋮⋮</span>`;
+    if (editing) {
+      return `
+      <div ondragover="event.preventDefault()" ondrop="statusDrop(event,'task',${idx})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+        ${handle}
+        <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
+          onchange="updateTaskStatusColor('${escH(s)}', this.value)">
+        <span style="flex:1;font-family:var(--font-b);font-size:12px;color:${color};font-weight:700">${escH(s)}</span>
+        <button onclick="removeTaskStatus('${escH(s)}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+      </div>`;
+    }
     return `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
-      <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
-        onchange="updateTaskStatusColor('${escH(s)}', this.value)">
-      <span style="flex:1;font-family:var(--font-b);font-size:12px;color:${color};font-weight:700">${escH(s)}</span>
-      <button onclick="removeTaskStatus('${escH(s)}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+    <div ondragover="event.preventDefault()" ondrop="statusDrop(event,'task',${idx})" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      ${handle}
+      <span style="width:14px;height:14px;border-radius:50%;background:${color};flex-shrink:0;border:1px solid rgba(0,0,0,0.08)"></span>
+      <span style="flex:1;font-family:var(--font-b);font-weight:700;font-size:13px;color:${color}">${escH(s)}</span>
     </div>`;
   }).join('');
+
+  const toggleBtn = `<button class="btn btn-ghost btn-sm" onclick="toggleTaskStatusEdit()" style="font-size:11px">${editing ? 'Done Editing' : 'Edit Statuses'}</button>`;
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">${toggleBtn}</div>
+    ${rows}`;
+
+  const addRow = $c('as-add-task-status-row');
+  if (addRow) addRow.style.display = editing ? 'flex' : 'none';
+}
+
+function toggleTaskStatusEdit() {
+  _editingTaskStatuses = !_editingTaskStatuses;
+  renderTaskStatusSettings();
 }
 
 function addTaskStatus() {
