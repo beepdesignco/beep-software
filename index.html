@@ -3622,6 +3622,29 @@ initAuth();
 // Flip to false to temporarily read from localStorage instead (escape hatch while iterating on Phase B/C).
 const USE_SUPABASE_READS = true;
 
+// ─── System event emission ──────────────────────────────────
+// Fire-and-forget helper around the emit_system_event() SECURITY DEFINER
+// function. Writes a locked row into activity_entries so the chronological
+// chart + weekly digest can consume it later. Does not throw — emission
+// failing should never interrupt the user's action.
+async function emitSystemEvent({ projectId, entityType, entityId, eventType, body, payload }) {
+  try {
+    if (typeof sb === 'undefined' || !sb || !AUTH?.studio?.id) return;
+    const { error } = await sb.rpc('emit_system_event', {
+      p_studio_id:   AUTH.studio.id,
+      p_project_id:  projectId || null,
+      p_entity_type: entityType,
+      p_entity_id:   entityId,
+      p_event_type:  eventType,
+      p_body:        body || '',
+      p_payload:     payload || {},
+    });
+    if (error) console.warn('[emit_system_event]', eventType, error.message);
+  } catch (e) {
+    console.warn('[emit_system_event] threw', e?.message || e);
+  }
+}
+
 async function loadFromSupabase() {
   if (!AUTH.ready || !AUTH.studio) return;
   const studioId = AUTH.studio.id;
@@ -9116,8 +9139,20 @@ function mutItem(pid, spId, iid, key, val) {
   const sp   = S.proposals[pid]?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === iid);
   if (!item) return;
+  const oldVal = item[key];
   item[key] = val;
   save();
+  if (key === 'status' && oldVal !== val) {
+    const label = (v) => (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(v) : String(v || '');
+    emitSystemEvent({
+      projectId: pid,
+      entityType: 'proposal_item',
+      entityId: iid,
+      eventType: 'item.status_changed',
+      body: `${item.name || 'Item'}: ${label(oldVal)} → ${label(val)}`,
+      payload: { item_id: iid, item_name: item.name || '', from: oldVal || null, to: val || null, project_id: pid },
+    });
+  }
 }
 
 function toggleNotes(pid, spId, iid) {
@@ -15162,7 +15197,7 @@ async function sendInvoiceEmail() {
     if (!r.ok) throw new Error(data.error || 'Send failed.');
     // If this was the draft-send flow, transition to sent now that the email is out
     if (_sendMarkSentOnSuccess) {
-      markInvoiceSent(inv.id);
+      markInvoiceSent(inv.id, { recipients: toList, via: 'email' });
       closeModal('modal-send-invoice');
       showView('invoices');
       toast('Invoice ' + inv.number + ' sent to ' + toDisplay);
@@ -15192,7 +15227,7 @@ async function copyLinkAndMarkSent() {
   const url = `${location.origin}/pay/?t=${encodeURIComponent(inv.paymentToken)}`;
   try { await navigator.clipboard.writeText(url); } catch {}
   if (_sendMarkSentOnSuccess) {
-    markInvoiceSent(inv.id);
+    markInvoiceSent(inv.id, { via: 'link' });
     closeModal('modal-send-invoice');
     showView('invoices');
     toast('Link copied. Invoice ' + inv.number + ' marked sent.');
@@ -15381,7 +15416,7 @@ function saveInvoiceFromBuilder(status, opts = {}) {
 
 // Flip a draft invoice to 'sent' and run all automations. Used after a successful email send
 // or manual link copy.
-function markInvoiceSent(invId) {
+function markInvoiceSent(invId, meta = {}) {
   const inv = (S.invoices||[]).find(i => i.id === invId);
   if (!inv) return;
   if (inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid') return; // already sent
@@ -15389,6 +15424,21 @@ function markInvoiceSent(invId) {
   if (!inv.sentDate) inv.sentDate = new Date().toISOString().slice(0, 10);
   processInvoiceSentAutomations(inv);
   save();
+  // System event — fire-and-forget; failures don't interrupt the send flow.
+  const recipients = Array.isArray(meta.recipients) ? meta.recipients : (meta.recipients ? [meta.recipients] : []);
+  emitSystemEvent({
+    projectId: inv.projectId || null,
+    entityType: 'invoice',
+    entityId: inv.id,
+    eventType: 'invoice.sent',
+    body: `Invoice ${inv.number || ''} sent${recipients.length ? ' to ' + recipients.join(', ') : ''}`.trim(),
+    payload: {
+      invoice_id: inv.id,
+      invoice_number: inv.number || null,
+      recipients,
+      via: meta.via || null,                 // 'email' | 'link' | null
+    },
+  });
 }
 
 // Kick off the send flow from the invoice builder (draft or edited sent invoice):
