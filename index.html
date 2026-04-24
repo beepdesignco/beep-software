@@ -4003,14 +4003,30 @@ function dbDocumentToS(d) {
 }
 
 function dbTimeToS(t) {
+  // In-memory shape keeps the existing field names (hours, date, notes, billed,
+  // person, rate) so all the existing render paths (line 17280+ etc.) keep
+  // working without a sweeping rewrite. The DB columns are the source of truth
+  // — derived back into the UI-shape here at load time.
+  const durationSeconds = t.duration_seconds != null ? Number(t.duration_seconds) : 0;
+  const hoursDerived    = durationSeconds > 0 ? (durationSeconds / 3600).toFixed(2) : '';
+  const dateStr         = t.started_at ? String(t.started_at).slice(0, 10) : '';
   return {
     id: t.id,
     projectId: t.project_id || '',
-    description: t.description || '',
-    startedAt: t.started_at,
-    endedAt: t.ended_at,
-    durationSeconds: t.duration_seconds,
-    billable: !!t.billable,
+    userId:    t.user_id    || null,
+    person:    t.user_id    || '',            // display placeholder until we have a studio_member lookup
+    rate:      t.rate != null ? Number(t.rate) : null,
+    hours:     hoursDerived,
+    date:      dateStr,
+    notes:     t.description || '',
+    billed:    t.status === 'billed',
+    // New-column pass-through (surfaces them to any future UI that wants to read them directly)
+    startedAt:           t.started_at,
+    endedAt:             t.ended_at,
+    durationSeconds,
+    status:              t.status || 'unbilled',
+    invoiceLineItemId:   t.invoice_line_item_id || null,
+    billedAt:            t.billed_at || null,
   };
 }
 
@@ -4324,11 +4340,36 @@ function documentVersionToDB(v) {
   };
 }
 function timeEntryToDB(t, studioId) {
+  // Cutover to the Phase 0 #8 schema. The in-memory shape still uses
+  // {hours, date, notes, billed}; we synthesize the real columns here so the
+  // NOT-NULL constraints on started_at + status ∈ {unbilled,billed} always pass.
+  // Timer-created entries pass startedAt/endedAt directly via stopTimer;
+  // manual entries get a synthetic started_at at 09:00 UTC on the picked date.
+  //
+  // DROPPED WRITE: `billable` (replaced by `status`; `billable` column still
+  // exists in the DB but we no longer populate it).
+  //
+  // ALWAYS WRITES `status='unbilled'` today — the billed transition happens
+  // via the invoice flow in a later pass (Phase 0 #8 step 2). The manual
+  // modal's "billed" checkbox is currently inert on DB write.
+  const dateStr  = t.date || new Date().toISOString().slice(0, 10);
+  const hoursN   = parseFloat(t.hours) || 0;
+  const durSec   = t.durationSeconds != null ? Math.round(Number(t.durationSeconds)) : Math.round(hoursN * 3600);
+  const started  = t.startedAt || `${dateStr}T09:00:00.000Z`;
+  const ended    = t.endedAt   || new Date(new Date(started).getTime() + durSec * 1000).toISOString();
   return {
-    id: t.id, studio_id: studioId, user_id: AUTH.user?.id,
-    project_id: t.projectId || null, description: t.description || null,
-    started_at: t.startedAt, ended_at: t.endedAt || null,
-    duration_seconds: t.durationSeconds ?? null, billable: t.billable !== false,
+    id:                  t.id,
+    studio_id:           studioId,
+    user_id:             t.userId || AUTH.user?.id,
+    project_id:          t.projectId || null,
+    description:         t.notes || t.description || null,
+    started_at:          started,
+    ended_at:            ended,
+    duration_seconds:    durSec,
+    rate:                t.rate != null && t.rate !== '' ? Number(t.rate) : null,
+    status:              'unbilled',
+    invoice_line_item_id: null,
+    billed_at:           null,
   };
 }
 function spaceToDB(sp) {
@@ -12027,16 +12068,23 @@ function _renderTimerWidget() {
   if (navPill)  { navPill.style.display = ''; navPill.textContent = '⏱ ' + str.replace(/^00:/,''); }
 }
  
+// One-shot capture of the wall-clock bounds of the just-stopped timer.
+// Consumed by saveTimeEntry on the next Save so started_at / ended_at get
+// real timestamps instead of the synthesized "9am on the picked date."
+let _lastTimerBounds = null;
+
 function stopTimer() {
   if (!S.activeTimer) return;
   const t = S.activeTimer;
-  const elapsed = Date.now() - t.startMs;
+  const stopMs = Date.now();
+  const elapsed = stopMs - t.startMs;
   if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
   S.activeTimer = null;
   save();
   _renderTimerWidget();
   // Pre-fill the Log Time modal
   openNewTimeModal();
+  _lastTimerBounds = { startMs: t.startMs, stopMs };  // must be set *after* openNewTimeModal which clears it
   // Override defaults with timer data
   const sel = $c('tm-project');
   if (sel) sel.value = t.projectId;
@@ -17489,6 +17537,10 @@ function renderTimeDetail(allEntries) {
 }
  
 function openNewTimeModal() {
+  // Clear any stale timer bounds from a previous stopTimer so a plain manual
+  // entry doesn't accidentally inherit them. stopTimer re-sets them *after* it
+  // calls this function.
+  _lastTimerBounds = null;
   $c('tm-title').textContent = 'Log Time';
   $c('tm-id').value = '';
   $c('tm-delete-btn').style.display = 'none';
@@ -17559,24 +17611,39 @@ function saveTimeEntry() {
   const projId   = $c('tm-project').value;
   const personRaw = $c('tm-person').value;
   const person   = personRaw === 'other' ? ($c('tm-person-custom').value.trim() || 'Other') : personRaw;
-  const rate     = parseFloat($c('tm-rate').value) || 0;
+  const rateRaw  = $c('tm-rate').value.trim();
+  // Rate default for the DB write: the user's own hourly_rate when the field is blank.
+  // The UI number box still shows whatever was entered/prefilled (legacy TEAM defaults),
+  // so behavior is unchanged when the user has already typed a rate.
+  const rate     = rateRaw
+    ? (parseFloat(rateRaw) || 0)
+    : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null);
   const hours    = parseFloat($c('tm-hours').value) || 0;
   const date     = $c('tm-date').value;
   const notes    = $c('tm-notes').value.trim();
-  const billed   = $c('tm-billed').checked;
- 
+  const billed   = $c('tm-billed').checked;  // captured for UI; does not drive DB status in Part 2
+
   if (!projId) { $c('tm-project').focus(); return; }
   if (!hours)  { $c('tm-hours').focus(); return; }
- 
-  const data = { projectId:projId, person, rate, hours, date, notes, billed };
- 
+
+  const data = { projectId: projId, person, rate, hours, date, notes, billed };
+
+  // If this entry came from stopTimer, preserve the real wall-clock bounds so
+  // started_at / ended_at round-trip the timer precision (to the second).
+  if (_lastTimerBounds) {
+    data.startedAt       = new Date(_lastTimerBounds.startMs).toISOString();
+    data.endedAt         = new Date(_lastTimerBounds.stopMs).toISOString();
+    data.durationSeconds = Math.max(1, Math.round((_lastTimerBounds.stopMs - _lastTimerBounds.startMs) / 1000));
+    _lastTimerBounds = null;   // consume once
+  }
+
   if (!S.timeEntries) S.timeEntries = [];
   if (id) {
     const idx = S.timeEntries.findIndex(e => e.id === id);
     if (idx > -1) Object.assign(S.timeEntries[idx], data);
     toast('Entry updated.');
   } else {
-    S.timeEntries.push({ id:uid(), ...data });
+    S.timeEntries.push({ id:uid(), userId: AUTH.user?.id, ...data });
     toast('Time logged.');
   }
   save();
