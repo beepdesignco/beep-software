@@ -4014,8 +4014,10 @@ function dbTimeToS(t) {
   // person, rate) so all the existing render paths (line 17280+ etc.) keep
   // working without a sweeping rewrite. The DB columns are the source of truth
   // — derived back into the UI-shape here at load time.
+  // IMPORTANT: store hours as a precise number (not toFixed(2) string) so
+  // sub-minute durations don't collapse to 0.00 before rendering.
   const durationSeconds = t.duration_seconds != null ? Number(t.duration_seconds) : 0;
-  const hoursDerived    = durationSeconds > 0 ? (durationSeconds / 3600).toFixed(2) : '';
+  const hoursDerived    = durationSeconds > 0 ? (durationSeconds / 3600) : 0;
   const dateStr         = t.started_at ? String(t.started_at).slice(0, 10) : '';
   return {
     id: t.id,
@@ -12061,21 +12063,24 @@ function hmsToDecimalHours(h, m, s) {
   return (Number(h) || 0) + (Number(m) || 0) / 60 + (Number(s) || 0) / 3600;
 }
 
-// Human-readable duration string. "2h 34m 12s" / "0h 0m 13s" / "1h 0m".
-// Omits seconds segment only if s===0 AND either h>0 or m>0 (so "13s" is shown as "0h 0m 13s").
-function fmtDuration(totalSecondsOrDecimalHours) {
-  const seconds = totalSecondsOrDecimalHours > 0 && totalSecondsOrDecimalHours < 1e6
-    ? (Number.isInteger(totalSecondsOrDecimalHours) && totalSecondsOrDecimalHours >= 60
-        ? totalSecondsOrDecimalHours
-        : Math.round((Number(totalSecondsOrDecimalHours) || 0) * 3600))
-    : 0;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
+// Human-readable duration strings. Separate callers by unit to avoid the
+// hours-vs-seconds ambiguity the old single-arg version had.
+function fmtDurationFromSeconds(totalSeconds) {
+  const total = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
   if (h === 0 && m === 0) return `${s}s`;
   if (s === 0)            return `${h}h ${m}m`;
   return `${h}h ${m}m ${s}s`;
 }
+function fmtDurationFromHours(decimalHours) {
+  return fmtDurationFromSeconds((Number(decimalHours) || 0) * 3600);
+}
+// Back-compat alias. Treats input as decimal hours (safe for all existing callers
+// that used to pass `parseFloat(e.hours)`). For seconds-typed values prefer
+// fmtDurationFromSeconds() directly.
+function fmtDuration(decimalHours) { return fmtDurationFromHours(decimalHours); }
  
 function startTimer() {
   const projId = $c('tt-timer-proj')?.value;
@@ -17420,7 +17425,7 @@ function renderTimeLog(entries) {
         <td>${escH(fmtEntryWhen(e))}</td>
         <td style="font-weight:600">${escH(proj?.name || 'Unknown')}</td>
         <td>${escH(personLabel)}</td>
-        <td style="text-align:right;font-family:var(--font-b);white-space:nowrap">${escH(fmtDuration(parseFloat(e.hours) || 0))}</td>
+        <td style="text-align:right;font-family:var(--font-b);white-space:nowrap">${escH(fmtDurationFromSeconds(e.durationSeconds ?? (parseFloat(e.hours) || 0) * 3600))}</td>
         <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
         <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
         <td>${e.billed ? '<span class="tt-billed-pill">Billed</span>' : '<span class="tt-unbilled-pill">Unbilled</span>'}</td>
