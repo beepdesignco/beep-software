@@ -1646,6 +1646,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
         <button class="view-tab"        data-settab="emails"  onclick="setSettingsTab('emails')"  style="margin-bottom:-1px">Email Templates</button>
         <button class="view-tab"        data-settab="notes"   onclick="setSettingsTab('notes')"   style="margin-bottom:-1px">Invoice Notes</button>
+        <button class="view-tab"        data-settab="categories" onclick="setSettingsTab('categories')" style="margin-bottom:-1px">Categories</button>
         <button class="view-tab"        data-settab="reminders" onclick="setSettingsTab('reminders')" style="margin-bottom:-1px">Reminders</button>
       </div>
 
@@ -1767,6 +1768,28 @@ tr:hover .row-btns { opacity:1; }
           </div>
           <div id="as-invoice-notes-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
           <button class="btn btn-primary btn-sm" onclick="addInvoiceNotePreset()">+ Add Note</button>
+        </div>
+
+        <div id="settab-categories" class="settings-panel" style="display:none;max-width:780px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic;line-height:1.5">
+            Studio-configurable lists powering the pickers elsewhere in the app. Rename in place — changes cascade to every record using the old name.
+          </div>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px">Vendor Types</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">Used in the Contacts "Filter by type" row and the Type field on each vendor (e.g. Manufacturer, Workroom, Receiver, Architect, GC, Upholsterer).</div>
+          <div id="as-vendor-types-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:6px;max-width:420px;margin-bottom:28px">
+            <input type="text" class="fi" id="as-vendor-type-input" placeholder="New vendor type…" style="flex:1" onkeydown="if(event.key==='Enter'){addVendorType();event.preventDefault()}">
+            <button class="btn btn-primary btn-sm" onclick="addVendorType()">Add</button>
+          </div>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Brand Offering Categories</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">The product categories a brand sells — picked on the Brand editor (e.g. Textile, Lighting, Furniture, Tile, Wallcovering).</div>
+          <div id="as-brand-categories-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:6px;max-width:420px">
+            <input type="text" class="fi" id="as-brand-category-input" placeholder="New brand category…" style="flex:1" onkeydown="if(event.key==='Enter'){addBrandCategory();event.preventDefault()}">
+            <button class="btn btn-primary btn-sm" onclick="addBrandCategory()">Add</button>
+          </div>
         </div>
 
         <div id="settab-reminders" class="settings-panel" style="display:none;max-width:820px">
@@ -3674,6 +3697,7 @@ async function loadFromSupabase() {
   S.customItemStatuses   = studioSettings.custom_item_statuses  || [];
   S.pipelineStatusOrder  = studioSettings.pipeline_status_order || [];
   S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
+  S.vendorTypes      = Array.isArray(studioSettings.vendor_types) ? studioSettings.vendor_types : [];
   S.studio       = AUTH.studio.studio_info || {};
 
   // One-time fold of legacy S.contacts → vendors + vendor_contacts. Runs on
@@ -4477,6 +4501,7 @@ async function syncToSupabase() {
       custom_item_statuses:  S.customItemStatuses  || [],
       pipeline_status_order: S.pipelineStatusOrder || [],
       categories:    S.categories   || [],
+      vendor_types:  S.vendorTypes  || [],
     };
     const currentInfo = S.studio || {};
     if (!_deepEq(currentSettings, _sbShadow.studioSettings) || !_deepEq(currentInfo, _sbShadow.studioInfo)) {
@@ -4636,6 +4661,7 @@ let S = {
   vendors: [],
   vendorContacts: [],
   brands: [],
+  vendorTypes: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -10075,7 +10101,11 @@ function renderVendors() {
 function populateVendorTypeDatalist() {
   const dl = $c('vn-type-list');
   if (!dl) return;
-  const types = Array.from(new Set((S.vendors||[]).map(v => v.vendorType).filter(Boolean))).sort();
+  // Prefer the studio-managed list; merge in anything already in use on a vendor
+  // so we don't silently lose options people never added to the canonical list.
+  const fromList = (S.vendorTypes || []);
+  const fromVendors = (S.vendors || []).map(v => v.vendorType).filter(Boolean);
+  const types = Array.from(new Set([...fromList, ...fromVendors])).sort();
   dl.innerHTML = types.map(t => `<option value="${escH(t)}">`).join('');
 }
 
@@ -10429,6 +10459,7 @@ function setSettingsTab(tab) {
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'notes')  renderInvoiceNotesList();
+  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); }
   if (tab === 'reminders') renderRemindersPanel();
 }
 
@@ -10613,6 +10644,142 @@ function showInpErr(msg) {
   const el = $c('inp-error');
   if (msg) { el.textContent = msg; el.style.display = 'block'; }
   else     { el.style.display = 'none'; }
+}
+
+// ─── Categories settings (Vendor Types + Brand Categories) ──
+
+function renderVendorTypesList() {
+  const el = $c('as-vendor-types-list');
+  if (!el) return;
+  const types = (S.vendorTypes || []).slice().sort((a,b) => a.localeCompare(b));
+  if (!types.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:8px 0">No vendor types yet. Add one below.</div>';
+    return;
+  }
+  el.innerHTML = types.map(t => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      <input type="text" class="fi" value="${escH(t)}" data-old="${escH(t)}" style="flex:1;font-size:12px" onchange="renameVendorType(this.dataset.old, this.value.trim())">
+      <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${countVendorsOfType(t)} in use</span>
+      <button onclick="removeVendorType('${escH(t).replace(/'/g, "\\'")}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+    </div>`).join('');
+}
+
+function countVendorsOfType(t) {
+  return (S.vendors || []).filter(v => (v.vendorType || '') === t).length;
+}
+
+function addVendorType() {
+  const input = $c('as-vendor-type-input');
+  const val = (input?.value || '').trim();
+  if (!val) return;
+  if (!S.vendorTypes) S.vendorTypes = [];
+  if (S.vendorTypes.some(x => x.toLowerCase() === val.toLowerCase())) { toast('That type already exists.'); return; }
+  S.vendorTypes.push(val);
+  input.value = '';
+  save();
+  renderVendorTypesList();
+  // Also refresh the datalist used on the vendor modal
+  if (typeof populateVendorTypeDatalist === 'function') populateVendorTypeDatalist();
+}
+
+function renameVendorType(oldName, newName) {
+  oldName = String(oldName || '').trim();
+  newName = String(newName || '').trim();
+  if (!newName || newName === oldName) return;
+  if ((S.vendorTypes || []).some(x => x.toLowerCase() === newName.toLowerCase() && x !== oldName)) {
+    toast('"' + newName + '" already exists.');
+    renderVendorTypesList();
+    return;
+  }
+  S.vendorTypes = (S.vendorTypes || []).map(x => x === oldName ? newName : x);
+  // Cascade to vendors that use this type
+  let cascaded = 0;
+  (S.vendors || []).forEach(v => { if (v.vendorType === oldName) { v.vendorType = newName; cascaded++; } });
+  save();
+  renderVendorTypesList();
+  if (cascaded) toast('Renamed and updated ' + cascaded + ' vendor' + (cascaded!==1?'s':'') + '.');
+  if (typeof populateVendorTypeDatalist === 'function') populateVendorTypeDatalist();
+}
+
+function removeVendorType(t) {
+  const inUse = countVendorsOfType(t);
+  const msg = inUse
+    ? 'Delete type "' + t + '"? ' + inUse + ' vendor' + (inUse!==1?'s':'') + ' currently use this type — their Type field will be cleared.'
+    : 'Delete type "' + t + '"?';
+  if (!confirm(msg)) return;
+  S.vendorTypes = (S.vendorTypes || []).filter(x => x !== t);
+  (S.vendors || []).forEach(v => { if (v.vendorType === t) v.vendorType = ''; });
+  save();
+  renderVendorTypesList();
+  if (typeof populateVendorTypeDatalist === 'function') populateVendorTypeDatalist();
+}
+
+function renderBrandCategoriesList() {
+  const el = $c('as-brand-categories-list');
+  if (!el) return;
+  const cats = (S.categories || []).slice().sort((a,b) => a.localeCompare(b));
+  if (!cats.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:8px 0">No brand categories yet. Add one below.</div>';
+    return;
+  }
+  el.innerHTML = cats.map(c => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      <input type="text" class="fi" value="${escH(c)}" data-old="${escH(c)}" style="flex:1;font-size:12px" onchange="renameBrandCategory(this.dataset.old, this.value.trim())">
+      <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${countBrandsInCategory(c)} brand${countBrandsInCategory(c)!==1?'s':''}</span>
+      <button onclick="removeBrandCategory('${escH(c).replace(/'/g, "\\'")}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+    </div>`).join('');
+}
+
+function countBrandsInCategory(c) {
+  return (S.brands || []).filter(b => (b.categories || []).includes(c)).length;
+}
+
+function addBrandCategory() {
+  const input = $c('as-brand-category-input');
+  const val = (input?.value || '').trim();
+  if (!val) return;
+  if (!S.categories) S.categories = [];
+  if (S.categories.some(x => x.toLowerCase() === val.toLowerCase())) { toast('That category already exists.'); return; }
+  S.categories.push(val);
+  input.value = '';
+  save();
+  renderBrandCategoriesList();
+}
+
+function renameBrandCategory(oldName, newName) {
+  oldName = String(oldName || '').trim();
+  newName = String(newName || '').trim();
+  if (!newName || newName === oldName) return;
+  if ((S.categories || []).some(x => x.toLowerCase() === newName.toLowerCase() && x !== oldName)) {
+    toast('"' + newName + '" already exists.');
+    renderBrandCategoriesList();
+    return;
+  }
+  S.categories = (S.categories || []).map(x => x === oldName ? newName : x);
+  let cascaded = 0;
+  (S.brands || []).forEach(b => {
+    if (Array.isArray(b.categories) && b.categories.includes(oldName)) {
+      b.categories = b.categories.map(x => x === oldName ? newName : x);
+      cascaded++;
+    }
+  });
+  save();
+  renderBrandCategoriesList();
+  if (cascaded) toast('Renamed and updated ' + cascaded + ' brand' + (cascaded!==1?'s':'') + '.');
+}
+
+function removeBrandCategory(c) {
+  const inUse = countBrandsInCategory(c);
+  const msg = inUse
+    ? 'Delete category "' + c + '"? ' + inUse + ' brand' + (inUse!==1?'s':'') + ' use it — it will be removed from those brands.'
+    : 'Delete category "' + c + '"?';
+  if (!confirm(msg)) return;
+  S.categories = (S.categories || []).filter(x => x !== c);
+  (S.brands || []).forEach(b => {
+    if (Array.isArray(b.categories)) b.categories = b.categories.filter(x => x !== c);
+  });
+  save();
+  renderBrandCategoriesList();
 }
 
 // Combine selected preset bodies + the invoice's free-form notes into a single
