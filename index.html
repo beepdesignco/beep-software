@@ -1363,7 +1363,8 @@ tr:hover .row-btns { opacity:1; }
           <button class="view-tab"        data-csort="person"  onclick="setContactsSort('person')">By Person</button>
         </div>
       </div>
-      <div id="contacts-type-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
+      <div id="contacts-type-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 4px"></div>
+      <div id="contacts-brand-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:2px 30px 8px"></div>
       <div class="contacts-body" id="contacts-body"><!-- rendered by JS --></div>
     </div>
  
@@ -2233,6 +2234,10 @@ tr:hover .row-btns { opacity:1; }
       <label class="fl">Notes</label>
       <textarea class="fi" id="vn-notes" style="resize:vertical;min-height:52px" placeholder="Payment terms, rep notes, minimums…"></textarea>
     </div>
+    <div style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <label class="fl">Brands carried <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-light);font-style:italic">(optional)</span></label>
+      <div id="vn-brands-picker" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r);min-height:40px"></div>
+    </div>
     <div id="vn-contacts-section" style="display:none;margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Contacts</div>
@@ -2249,6 +2254,33 @@ tr:hover .row-btns { opacity:1; }
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-vendor')">Cancel</button>
       <button class="btn btn-primary" onclick="saveVendor()">Save Vendor</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ BRAND EDITOR MODAL ═════════════════ -->
+<div class="overlay" id="modal-brand">
+  <div class="modal" style="width:500px">
+    <button class="modal-x" onclick="closeModal('modal-brand')">✕</button>
+    <div class="modal-title" id="br-modal-title">New Brand</div>
+    <input type="hidden" id="br-id">
+    <div class="fg">
+      <label class="fl">Brand Name</label>
+      <input type="text" class="fi" id="br-name" placeholder="e.g. Malabar, Visual Comfort">
+    </div>
+    <div class="fg">
+      <label class="fl">Categories <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-light);font-style:italic">(what this brand sells)</span></label>
+      <div id="br-categories" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r);min-height:40px"></div>
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="br-notes" style="resize:vertical;min-height:50px" placeholder="Rep program info, minimums, whatever's useful…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="br-delete-btn" style="display:none" onclick="deleteBrand($c('br-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-brand')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveBrand()">Save Brand</button>
     </div>
   </div>
 </div>
@@ -2289,6 +2321,10 @@ tr:hover .row-btns { opacity:1; }
         <input type="checkbox" id="vnc-primary" style="margin:0">
         Primary contact for this vendor
       </label>
+    </div>
+    <div class="fg">
+      <label class="fl">Brands this person reps <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-light);font-style:italic">(optional)</span></label>
+      <div id="vnc-brands-picker" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r);min-height:40px"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="vnc-delete-btn" style="display:none" onclick="deleteVendorContact($c('vnc-id').value)">Delete</button>
@@ -3570,7 +3606,7 @@ async function loadFromSupabase() {
   const [
     clientsRes, contactsRes, projectsRes,
     invoicesRes, expensesRes, documentsRes, timeRes,
-    vendorsRes, vendorContactsRes,
+    vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -3581,9 +3617,11 @@ async function loadFromSupabase() {
     sb.from('time_entries').select('*').eq('studio_id', studioId),
     sb.from('vendors').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('vendor_contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('brands').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('vendor_brands').select('*'),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -3611,6 +3649,14 @@ async function loadFromSupabase() {
   S.timeEntries    = (timeRes.data           || []).map(dbTimeToS);
   S.vendors        = (vendorsRes.data        || []).map(dbVendorToS);
   S.vendorContacts = (vendorContactsRes.data || []).map(dbVendorContactToS);
+  S.brands         = (brandsRes.data         || []).map(dbBrandToS);
+  // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
+  const vbByVendor = {};
+  (vendorBrandsRes.data || []).forEach(vb => {
+    if (!vbByVendor[vb.vendor_id]) vbByVendor[vb.vendor_id] = [];
+    vbByVendor[vb.vendor_id].push(vb.brand_id);
+  });
+  S.vendors.forEach(v => { v.brandIds = vbByVendor[v.id] || []; });
 
   S.proposals = {};
   spaces.forEach(sp => {
@@ -3757,6 +3803,16 @@ function dbVendorToS(v) {
     address: v.address || '',
     notes: v.notes || '',
     created: v.created_at,
+  };
+}
+
+function dbBrandToS(b) {
+  return {
+    id: b.id,
+    name: b.name || '',
+    notes: b.notes || '',
+    categories: Array.isArray(b.categories) ? b.categories : [],
+    created: b.created_at,
   };
 }
 
@@ -4019,6 +4075,8 @@ const _sbShadow = {
   components: new Map(),
   vendors: new Map(),
   vendorContacts: new Map(),
+  brands: new Map(),
+  vendorBrands: new Set(),       // "vendorId:brandId" strings
   studioSettings: {},
   studioInfo: {},
 };
@@ -4034,6 +4092,11 @@ function captureSbShadow() {
   _sbShadow.invoices       = new Map((S.invoices       || []).map(i => [i.id, snap(i)]));
   _sbShadow.vendors        = new Map((S.vendors        || []).map(v => [v.id, snap(v)]));
   _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
+  _sbShadow.brands         = new Map((S.brands         || []).map(b => [b.id, snap(b)]));
+  // vendor_brands: track which (vendor,brand) pairs were last synced so we can
+  // diff the M2M at save time and issue targeted inserts/deletes.
+  _sbShadow.vendorBrands = new Set();
+  (S.vendors || []).forEach(v => (v.brandIds || []).forEach(bid => _sbShadow.vendorBrands.add(v.id + ':' + bid)));
   _sbShadow.invoiceLineItems.clear();
   _sbShadow.invoicePayments.clear();
   (S.invoices || []).forEach(inv => {
@@ -4100,6 +4163,16 @@ function vendorToDB(v, studioId) {
     deleted_at: null,
   };
 }
+function brandToDB(b, studioId) {
+  return {
+    id: b.id, studio_id: studioId,
+    name: b.name || '',
+    notes: b.notes || null,
+    categories: Array.isArray(b.categories) ? b.categories : [],
+    deleted_at: null,
+  };
+}
+
 function vendorContactToDB(c) {
   return {
     id: c.id,
@@ -4356,6 +4429,31 @@ async function syncToSupabase() {
     // Vendors before vendor_contacts so FK targets exist before children
     await syncSafe('vendors',         current.vendors,        _sbShadow.vendors,        v => vendorToDB(v, studioId));
     await syncSafe('vendor_contacts', current.vendorContacts, _sbShadow.vendorContacts, c => vendorContactToDB(c));
+    // Brands before vendor_brands so FK targets exist before links
+    await syncSafe('brands', new Map((S.brands||[]).map(b => [b.id, b])), _sbShadow.brands, b => brandToDB(b, studioId));
+    // vendor_brands is a composite-PK M2M — custom diff instead of syncSafe
+    try {
+      const currentVBs = new Set();
+      (S.vendors || []).forEach(v => (v.brandIds || []).forEach(bid => {
+        if (bid) currentVBs.add(v.id + ':' + bid);
+      }));
+      const added = [...currentVBs].filter(k => !_sbShadow.vendorBrands.has(k));
+      const removed = [..._sbShadow.vendorBrands].filter(k => !currentVBs.has(k));
+      for (const key of added) {
+        const [vendorId, brandId] = key.split(':');
+        const { error } = await sb.from('vendor_brands').insert({ vendor_id: vendorId, brand_id: brandId });
+        if (error && !/duplicate/i.test(error.message)) console.warn('[sync vendor_brands insert]', error.message);
+      }
+      for (const key of removed) {
+        const [vendorId, brandId] = key.split(':');
+        const { error } = await sb.from('vendor_brands').delete().eq('vendor_id', vendorId).eq('brand_id', brandId);
+        if (error) console.warn('[sync vendor_brands delete]', error.message);
+      }
+      _sbShadow.vendorBrands = currentVBs;
+      if (added.length || removed.length) _syncOps++;
+    } catch (e) {
+      console.error('[sync vendor_brands] failed:', e.message);
+    }
     await syncSafe('projects',  current.projects, _sbShadow.projects, p => projectToDB(p, studioId));
     await syncSafe('proposal_spaces',     current.spaces,     _sbShadow.spaces,     s => spaceToDB(s));
     await syncSafe('proposal_items',      current.items,      _sbShadow.items,      i => itemToDB(i));
@@ -4537,6 +4635,7 @@ let S = {
   taskStatusColors: {},
   vendors: [],
   vendorContacts: [],
+  brands: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -9386,6 +9485,7 @@ function toggleClientView() {
 
 let _contactsSort = 'company';      // 'company' | 'person'
 let _contactsTypeFilter = null;     // null = all, else vendor_type string
+let _contactsBrandFilter = null;    // null = all, else brand id
 
 function setContactsSort(sort) {
   _contactsSort = sort;
@@ -9395,6 +9495,11 @@ function setContactsSort(sort) {
 
 function setContactsTypeFilter(type) {
   _contactsTypeFilter = (_contactsTypeFilter === type) ? null : type;
+  renderContacts();
+}
+
+function setContactsBrandFilter(brandId) {
+  _contactsBrandFilter = (_contactsBrandFilter === brandId) ? null : brandId;
   renderContacts();
 }
 
@@ -9412,6 +9517,7 @@ function renderContacts() {
   // Filter chips: every distinct vendor_type in use, plus an "All" chip.
   const typesInUse = Array.from(new Set(vendors.map(v => v.vendorType).filter(Boolean))).sort();
   renderContactsTypeFilters(typesInUse);
+  renderContactsBrandFilters();
 
   // Matches query?
   const matches = (txt) => !query || String(txt || '').toLowerCase().includes(query);
@@ -9445,10 +9551,21 @@ function renderContacts() {
   // Company-first (default). Vendors as primary cards; each card shows nested contacts.
   let filteredVendors = vendors;
   if (_contactsTypeFilter) filteredVendors = filteredVendors.filter(v => v.vendorType === _contactsTypeFilter);
+  if (_contactsBrandFilter) {
+    filteredVendors = filteredVendors.filter(v =>
+      (v.brandIds || []).includes(_contactsBrandFilter)
+      || vendorContacts.some(vc => vc.vendorId === v.id && (vc.brandIds || []).includes(_contactsBrandFilter))
+    );
+  }
   if (query) {
+    const brandNamesForVendor = (v) => {
+      const ids = new Set(v.brandIds || []);
+      vendorContacts.forEach(vc => { if (vc.vendorId === v.id) (vc.brandIds || []).forEach(id => ids.add(id)); });
+      return [...ids].map(id => (S.brands || []).find(b => b.id === id)?.name).filter(Boolean).join(' ');
+    };
     filteredVendors = filteredVendors.filter(v => {
       const vendorContactsHere = vendorContacts.filter(vc => vc.vendorId === v.id);
-      return matchesRecord([v.name, v.vendorType, v.email, v.phone, v.website, v.address, v.notes])
+      return matchesRecord([v.name, v.vendorType, v.email, v.phone, v.website, v.address, v.notes, brandNamesForVendor(v)])
           || vendorContactsHere.some(vc => matchesRecord([vc.name, vc.title, vc.email, vc.phone, vc.notes]));
     });
   }
@@ -9474,6 +9591,26 @@ function renderContacts() {
   body.innerHTML = `<div class="contacts-grid">${vendorCards}</div>${legacyCards}`;
 }
 
+function renderContactsBrandFilters() {
+  const host = $c('contacts-brand-filters');
+  if (!host) return;
+  const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const label = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">Filter by brand:</span>`;
+  const chip = (text, val, active) => `
+    <button onclick="setContactsBrandFilter(${val === null ? 'null' : `'${val}'`})"
+      style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? 'var(--russet)' : 'var(--border)'};background:${active ? 'rgba(122,74,16,0.12)' : 'white'};color:${active ? 'var(--russet)' : 'var(--text-mid)'};font-weight:700">${escH(text)}</button>`;
+  if (!brands.length) {
+    host.innerHTML = label
+      + chip('All', null, true)
+      + `<button onclick="openBrandEditor(null)" style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;border:1px dashed var(--border);background:white;color:var(--text-light);font-weight:700">+ Add brand</button>`;
+    return;
+  }
+  host.innerHTML = label
+    + chip('All', null, _contactsBrandFilter === null)
+    + brands.map(b => chip(b.name, b.id, _contactsBrandFilter === b.id)).join('')
+    + `<button onclick="openBrandEditor(null)" style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;border:1px dashed var(--border);background:white;color:var(--text-light);font-weight:700">+ Add brand</button>`;
+}
+
 function renderContactsTypeFilters(typesInUse) {
   const host = $c('contacts-type-filters');
   if (!host) return;
@@ -9496,6 +9633,17 @@ function vendorCardHtml(v, vendorContacts) {
   const reps = vendorContacts.filter(c => c.vendorId === v.id)
     .sort((a, b) => (b.primary - a.primary) || (a.name || '').localeCompare(b.name || ''));
   const itemCount = countItemsForVendor(v.id);
+  const brandIds = new Set(v.brandIds || []);
+  reps.forEach(r => (r.brandIds || []).forEach(id => brandIds.add(id)));
+  const brandsHtml = brandIds.size
+    ? '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:6px">'
+      + [...brandIds].map(id => {
+          const b = (S.brands || []).find(x => x.id === id);
+          if (!b) return '';
+          return `<span style="display:inline-block;font-size:9px;font-family:var(--font-b);background:rgba(122,74,16,0.08);color:var(--russet);padding:2px 7px;border-radius:10px;font-weight:700">${escH(b.name)}</span>`;
+        }).join('')
+      + '</div>'
+    : '';
   const repsHtml = reps.slice(0, 4).map(vc => `
     <div class="poc-row" onclick="event.stopPropagation(); openVendorContactEditor('${v.id}','${vc.id}')">
       <span class="poc-name">${escH(vc.name)}${vc.primary ? ' <span style="color:var(--russet);font-size:9px;text-transform:uppercase;letter-spacing:0.06em;margin-left:3px">primary</span>' : ''}</span>
@@ -9514,6 +9662,7 @@ function vendorCardHtml(v, vendorContacts) {
       ${v.phone ? `<div style="font-size:11.5px;color:var(--text-mid);margin-top:1px">${escH(v.phone)}</div>` : ''}
       ${v.website ? `<div style="font-size:11px;color:var(--text-light);margin-top:2px;font-style:italic">${escH(v.website)}</div>` : ''}
       ${repsHtml ? `<div class="poc-list" style="margin-top:6px">${repsHtml}${moreReps}</div>` : ''}
+      ${brandsHtml}
       ${(reps.length || itemCount) ? `<div style="font-size:10px;color:var(--text-light);margin-top:5px;font-family:var(--font-b)">${reps.length ? reps.length + ' contact' + (reps.length!==1?'s':'') : ''}${reps.length && itemCount ? ' · ' : ''}${itemCount ? itemCount + ' item' + (itemCount!==1?'s':'') : ''}</div>` : ''}
     </div>`;
 }
@@ -9561,6 +9710,222 @@ function countItemsForVendor(vendorId) {
 // Entry point for "+ New" on the Contacts page — creates a new vendor.
 // After save, user can add reps inside the vendor detail.
 function openNewVendorFromContacts() { openVendorEditor(null); }
+
+// ─── BRAND PICKER (reusable) ────────────────────────────────
+// A brand picker is a scratchpad UI element: shows pills for each currently-
+// selected brand, plus a "+ Add brand" button that opens a mini popover with
+// typeahead + inline "create new brand". Used on the vendor editor ("brands
+// carried") and vendor_contact editor ("brands this person reps"). Selections
+// live in a host-provided string array that the caller passes in + gets back.
+
+function renderBrandPicker(hostId, selectedIds, onChange) {
+  const host = $c(hostId);
+  if (!host) return;
+  const brands = S.brands || [];
+  const selected = Array.isArray(selectedIds) ? selectedIds : [];
+
+  const pillHtml = selected.map(bid => {
+    const b = brands.find(x => x.id === bid);
+    if (!b) return '';
+    const catTag = b.categories && b.categories.length
+      ? ` <span style="font-size:9px;color:var(--text-light);font-weight:400">· ${b.categories.slice(0,2).map(escH).join(', ')}${b.categories.length>2?'…':''}</span>`
+      : '';
+    return `
+      <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(122,74,16,0.08);border:1px solid rgba(122,74,16,0.2);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--russet);font-weight:700">
+        <span onclick="event.stopPropagation(); openBrandEditor('${b.id}')" title="Click to edit this brand" style="cursor:pointer">${escH(b.name)}${catTag}</span>
+        <button onclick="event.stopPropagation(); __bpRemove('${hostId}','${b.id}')" style="background:none;border:none;cursor:pointer;color:rgba(122,74,16,0.5);font-size:12px;line-height:1;padding:0 2px" title="Remove">✕</button>
+      </span>`;
+  }).join('');
+
+  host.innerHTML = pillHtml +
+    `<button onclick="event.stopPropagation(); __bpOpen('${hostId}')" style="background:none;border:1px dashed var(--border);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);cursor:pointer">+ Add brand</button>`
+    + `<div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:8px;min-width:260px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:4px"></div>`;
+
+  // Stash the change callback + selection list on the host so __bpRemove / __bpPick can access it.
+  host._selected = selected;
+  host._onChange = onChange;
+}
+
+function __bpRemove(hostId, brandId) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selected = (host._selected || []).filter(id => id !== brandId);
+  host._onChange?.(host._selected);
+  renderBrandPicker(hostId, host._selected, host._onChange);
+}
+
+function __bpPick(hostId, brandId) {
+  const host = $c(hostId);
+  if (!host) return;
+  if (!host._selected.includes(brandId)) {
+    host._selected = [...host._selected, brandId];
+    host._onChange?.(host._selected);
+  }
+  renderBrandPicker(hostId, host._selected, host._onChange);
+}
+
+function __bpOpen(hostId) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (!host || !pop) return;
+  const selected = new Set(host._selected || []);
+  const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const available = brands.filter(b => !selected.has(b.id));
+  const rows = available.map(b => {
+    const catTag = b.categories && b.categories.length
+      ? `<span style="font-size:9px;color:var(--text-light);font-weight:400;margin-left:4px">${b.categories.slice(0,2).map(escH).join(', ')}</span>` : '';
+    return `<div onclick="__bpPick('${hostId}','${b.id}'); $c('${hostId}-popover').style.display='none'" style="padding:5px 8px;cursor:pointer;font-size:12px;font-family:var(--font-b);color:var(--text-dark);border-radius:4px" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">${escH(b.name)}${catTag}</div>`;
+  }).join('');
+  pop.innerHTML = `
+    <input type="text" class="fi" placeholder="Search brands…" oninput="__bpFilter('${hostId}', this.value)" style="font-size:12px;margin-bottom:6px">
+    <div id="${hostId}-rows" style="max-height:220px;overflow-y:auto">${rows || '<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">No more brands to add.</div>'}</div>
+    <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+      <button onclick="__bpNew('${hostId}')" class="btn btn-ghost btn-sm" style="width:100%;font-size:11px;justify-content:flex-start">+ Create a new brand</button>
+    </div>`;
+  pop.style.display = 'block';
+  // Close on outside click
+  setTimeout(() => {
+    const closer = (e) => {
+      if (!pop.contains(e.target) && !e.target.closest(`#${hostId}`)) {
+        pop.style.display = 'none';
+        document.removeEventListener('click', closer);
+      }
+    };
+    document.addEventListener('click', closer);
+  }, 0);
+}
+
+function __bpFilter(hostId, query) {
+  const host = $c(hostId);
+  const rowsEl = $c(hostId + '-rows');
+  if (!rowsEl) return;
+  const q = (query || '').toLowerCase().trim();
+  const selected = new Set(host._selected || []);
+  const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const rows = brands
+    .filter(b => !selected.has(b.id))
+    .filter(b => !q || (b.name || '').toLowerCase().includes(q) || (b.categories || []).some(c => c.toLowerCase().includes(q)))
+    .map(b => {
+      const catTag = b.categories && b.categories.length
+        ? `<span style="font-size:9px;color:var(--text-light);font-weight:400;margin-left:4px">${b.categories.slice(0,2).map(escH).join(', ')}</span>` : '';
+      return `<div onclick="__bpPick('${hostId}','${b.id}'); $c('${hostId}-popover').style.display='none'" style="padding:5px 8px;cursor:pointer;font-size:12px;font-family:var(--font-b);color:var(--text-dark);border-radius:4px" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">${escH(b.name)}${catTag}</div>`;
+    }).join('');
+  rowsEl.innerHTML = rows || '<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">No matches.</div>';
+}
+
+function __bpNew(hostId) {
+  const host = $c(hostId);
+  if (!host) return;
+  const pop = $c(hostId + '-popover');
+  if (pop) pop.style.display = 'none';
+  // Open the brand editor with a callback that picks the new brand into this host
+  openBrandEditor(null, (newBrandId) => {
+    if (newBrandId) __bpPick(hostId, newBrandId);
+  });
+}
+
+// ─── BRAND CRUD ─────────────────────────────────────────────
+
+let _brandSaveCallback = null;
+
+function openBrandEditor(id, callback) {
+  _brandSaveCallback = callback || null;
+  const b = id ? (S.brands || []).find(x => x.id === id) : null;
+  $c('br-modal-title').textContent = b ? 'Edit Brand' : 'New Brand';
+  $c('br-id').value = b?.id || '';
+  $c('br-name').value = b?.name || '';
+  $c('br-notes').value = b?.notes || '';
+  $c('br-delete-btn').style.display = b ? '' : 'none';
+  renderBrandCategoriesEditor(b?.categories || []);
+  $c('modal-brand').classList.add('open');
+  setTimeout(() => $c('br-name').focus(), 80);
+}
+
+function renderBrandCategoriesEditor(selected) {
+  const host = $c('br-categories');
+  if (!host) return;
+  host._selected = Array.isArray(selected) ? selected.slice() : [];
+  const allCats = S.categories && S.categories.length ? S.categories : (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
+  const pills = host._selected.map(cat => `
+    <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(91,45,34,0.08);border:1px solid rgba(91,45,34,0.2);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--mahogany);font-weight:700">
+      ${escH(cat)}
+      <button onclick="event.preventDefault(); __brCatRemove('${escH(cat).replace(/'/g, "\\'")}')" style="background:none;border:none;cursor:pointer;color:rgba(91,45,34,0.5);font-size:12px;line-height:1;padding:0 2px">✕</button>
+    </span>`).join('');
+  const available = allCats.filter(c => !host._selected.includes(c));
+  const options = '<option value="">+ Add category…</option>' + available.map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join('');
+  host.innerHTML = pills
+    + `<select class="fi fsel" onchange="if(this.value){__brCatAdd(this.value);this.value=''}" style="font-size:11px;padding:3px 8px;max-width:160px">${options}</select>`;
+}
+
+function __brCatAdd(cat) {
+  const host = $c('br-categories');
+  if (!host) return;
+  if (!host._selected.includes(cat)) {
+    host._selected.push(cat);
+    renderBrandCategoriesEditor(host._selected);
+  }
+}
+
+function __brCatRemove(cat) {
+  const host = $c('br-categories');
+  if (!host) return;
+  host._selected = host._selected.filter(c => c !== cat);
+  renderBrandCategoriesEditor(host._selected);
+}
+
+function saveBrand() {
+  const id = $c('br-id').value;
+  const name = $c('br-name').value.trim();
+  if (!name) { toast('Brand name is required.'); return; }
+  const dupe = (S.brands || []).find(b => b.id !== id && (b.name || '').toLowerCase() === name.toLowerCase());
+  if (dupe) { toast('A brand named "' + name + '" already exists.'); return; }
+  const fields = {
+    name,
+    notes: $c('br-notes').value.trim(),
+    categories: ($c('br-categories')._selected || []).slice(),
+  };
+  let newId;
+  if (id) {
+    const b = (S.brands || []).find(x => x.id === id);
+    if (b) Object.assign(b, fields);
+    newId = id;
+  } else {
+    newId = uid();
+    S.brands = S.brands || [];
+    S.brands.push({ id: newId, ...fields, created: new Date().toISOString() });
+  }
+  save();
+  closeModal('modal-brand');
+  const cb = _brandSaveCallback; _brandSaveCallback = null;
+  cb?.(newId);
+  toast(id ? 'Brand updated.' : 'Brand created.');
+  // Re-render any visible brand pickers so the new/updated brand shows
+  if ($c('vn-brands-picker')) renderBrandPicker('vn-brands-picker', $c('vn-brands-picker')._selected || [], $c('vn-brands-picker')._onChange);
+  if ($c('vnc-brands-picker')) renderBrandPicker('vnc-brands-picker', $c('vnc-brands-picker')._selected || [], $c('vnc-brands-picker')._onChange);
+  renderContacts();
+}
+
+function deleteBrand(id) {
+  if (!id) return;
+  const b = (S.brands || []).find(x => x.id === id);
+  if (!b) return;
+  // Usage check
+  const vendorUsers = (S.vendors || []).filter(v => (v.brandIds || []).includes(id));
+  const contactUsers = (S.vendorContacts || []).filter(c => (c.brandIds || []).includes(id));
+  let msg = 'Delete brand "' + b.name + '"?';
+  if (vendorUsers.length || contactUsers.length) {
+    msg += '\n\nIt will be removed from ' + vendorUsers.length + ' vendor' + (vendorUsers.length!==1?'s':'')
+         + ' and ' + contactUsers.length + ' contact' + (contactUsers.length!==1?'s':'') + '.';
+  }
+  if (!confirm(msg)) return;
+  S.brands = (S.brands || []).filter(x => x.id !== id);
+  (S.vendors || []).forEach(v => { v.brandIds = (v.brandIds || []).filter(bid => bid !== id); });
+  (S.vendorContacts || []).forEach(c => { c.brandIds = (c.brandIds || []).filter(bid => bid !== id); });
+  save();
+  closeModal('modal-brand');
+  toast('Brand deleted.');
+  renderContacts();
+}
 
 // Legacy contact editor — opens the old modal if it still exists, otherwise no-op.
 // Used until any remaining legacy contacts get migrated.
@@ -9727,6 +10092,13 @@ function openVendorEditor(id) {
   $c('vn-notes').value   = v?.notes || '';
   $c('vn-delete-btn').style.display = v ? '' : 'none';
   populateVendorTypeDatalist();
+  // Brands-carried picker — lives on vendor.brandIds in-memory, synced via vendor_brands M2M
+  if (!v) { /* new vendor: create shell so the picker has something to mutate */ }
+  renderBrandPicker('vn-brands-picker', v?.brandIds || [], (newIds) => {
+    // Persist onto the vendor object as user edits. Save is deferred until Save Vendor.
+    if (v) v.brandIds = newIds.slice();
+    else $c('vn-brands-picker')._pendingBrandIds = newIds.slice();
+  });
   // Contacts + referenced-items sections only when editing an existing vendor
   if (v) {
     $c('vn-contacts-section').style.display = '';
@@ -9769,16 +10141,17 @@ function saveVendor() {
     address:    $c('vn-address').value.trim(),
     notes:      $c('vn-notes').value.trim(),
   };
+  const pendingBrands = $c('vn-brands-picker')?._pendingBrandIds || null;
   if (id) {
     const v = (S.vendors || []).find(x => x.id === id);
     if (v) Object.assign(v, fields);
   } else {
     S.vendors = S.vendors || [];
-    S.vendors.push({ id: uid(), ...fields, created: new Date().toISOString() });
+    S.vendors.push({ id: uid(), ...fields, brandIds: pendingBrands || [], created: new Date().toISOString() });
   }
   save();
   closeModal('modal-vendor');
-  renderVendors();
+  renderContacts();
   toast(id ? 'Vendor updated.' : 'Vendor created.');
 }
 
@@ -9813,7 +10186,7 @@ function deleteVendor(id) {
   });
   save();
   closeModal('modal-vendor');
-  renderVendors();
+  renderContacts();
   toast('Vendor deleted.');
 }
 
@@ -9853,6 +10226,10 @@ function openVendorContactEditor(vendorId, contactId) {
   $c('vnc-notes').value = c?.notes || '';
   $c('vnc-primary').checked = !!c?.primary;
   $c('vnc-delete-btn').style.display = c ? '' : 'none';
+  renderBrandPicker('vnc-brands-picker', c?.brandIds || [], (newIds) => {
+    if (c) c.brandIds = newIds.slice();
+    else $c('vnc-brands-picker')._pendingBrandIds = newIds.slice();
+  });
   $c('modal-vendor-contact').classList.add('open');
   setTimeout(() => $c('vnc-name').focus(), 80);
 }
@@ -9878,6 +10255,7 @@ function saveVendorContact() {
       if (c.vendorId === vendorId && c.id !== id && c.primary) c.primary = false;
     });
   }
+  const pendingBrands = $c('vnc-brands-picker')?._pendingBrandIds || null;
   if (id) {
     const c = (S.vendorContacts || []).find(x => x.id === id);
     if (c) Object.assign(c, fields);
@@ -9885,7 +10263,7 @@ function saveVendorContact() {
     S.vendorContacts = S.vendorContacts || [];
     S.vendorContacts.push({
       id: uid(),
-      brandIds: [],
+      brandIds: pendingBrands || [],
       sortOrder: 0,
       ...fields,
       created: new Date().toISOString(),
