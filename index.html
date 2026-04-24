@@ -5530,6 +5530,7 @@ function autoEngageFlags(pid, spId, itemId, status) {
 function savePMField(pid, spId, itemId, key, val) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
+  const oldVal = item[key];
   item[key] = val;
   if (key === 'status' && val === 'pending_status') {
     autoEngageFlags(pid, spId, itemId, val);
@@ -5540,6 +5541,17 @@ function savePMField(pid, spId, itemId, key, val) {
     });
   }
   save();
+  if (key === 'status' && oldVal !== val) {
+    const label = (v) => (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(v) : String(v || '');
+    emitSystemEvent({
+      projectId: pid,
+      entityType: 'proposal_item',
+      entityId: itemId,
+      eventType: 'item.status_changed',
+      body: `${item.name || 'Item'}: ${label(oldVal)} → ${label(val)}`,
+      payload: { item_id: itemId, item_name: item.name || '', from: oldVal || null, to: val || null, project_id: pid },
+    });
+  }
 }
 
 function toggleGroupComponents(pid, spId, itemId) {
@@ -5560,12 +5572,24 @@ function saveCompField(pid, spId, itemId, compId, key, val) {
   if (!item) return;
   const comp = (item.components||[]).find(c => c.id === compId);
   if (!comp) return;
+  const oldVal = comp[key];
   comp[key] = val;
   // Sync base component qty with item qty
   if (key === 'qty' && comp.componentType === 'base') {
     item.qty = val;
   }
   save();
+  if (key === 'status' && oldVal !== val) {
+    const label = (v) => (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(v) : String(v || '');
+    emitSystemEvent({
+      projectId: pid,
+      entityType: 'proposal_component',
+      entityId: compId,
+      eventType: 'item.status_changed',
+      body: `${item.name || 'Item'} · ${comp.name || comp.componentType || 'component'}: ${label(oldVal)} → ${label(val)}`,
+      payload: { item_id: itemId, component_id: compId, component_name: comp.name || '', from: oldVal || null, to: val || null, project_id: pid },
+    });
+  }
 }
 
 // ── Additional actual costs (item + component) ──
