@@ -9477,11 +9477,18 @@ function renderContacts() {
 function renderContactsTypeFilters(typesInUse) {
   const host = $c('contacts-type-filters');
   if (!host) return;
-  if (!typesInUse.length) { host.innerHTML = ''; return; }
   const chip = (label, val, active) => `
     <button onclick="setContactsTypeFilter(${val === null ? 'null' : `'${escH(val).replace(/'/g, "\\'")}'`})"
       style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? 'var(--russet)' : 'var(--border)'};background:${active ? 'rgba(122,74,16,0.12)' : 'white'};color:${active ? 'var(--russet)' : 'var(--text-mid)'};font-weight:700">${escH(label)}</button>`;
-  host.innerHTML = chip('All', null, _contactsTypeFilter === null)
+  const label = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">Filter by type:</span>`;
+  if (!typesInUse.length) {
+    host.innerHTML = label
+      + chip('All', null, true)
+      + '<span style="font-size:10px;color:var(--text-light);font-style:italic;align-self:center">Add vendor types when creating vendors to populate filters here.</span>';
+    return;
+  }
+  host.innerHTML = label
+    + chip('All', null, _contactsTypeFilter === null)
     + typesInUse.map(t => chip(t, t, _contactsTypeFilter === t)).join('');
 }
 
