@@ -1223,6 +1223,10 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◇</span>
         <span class="nav-label">Clients</span>
       </div>
+      <div class="nav-item" onclick="showView('vendors')" data-view="vendors">
+        <span class="nav-icon">◈</span>
+        <span class="nav-label">Vendors</span>
+      </div>
       <div class="nav-section-label" style="margin-top:10px">On the Horizon</div>
       <div class="nav-item" onclick="showView('time')" data-view="time">
         <span class="nav-icon">◷</span>
@@ -1383,6 +1387,23 @@ tr:hover .row-btns { opacity:1; }
         <input type="text" class="search-in" id="client-search" placeholder="Search clients…" oninput="renderClients()">
       </div>
       <div class="contacts-body" id="clients-body"><!-- rendered by JS --></div>
+    </div>
+
+    <!-- ─────────── VENDORS VIEW ─────────── -->
+    <div class="view" id="view-vendors">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Vendors</div>
+          <div class="page-sub">Workrooms, showrooms, artisans, receivers. Everyone you source from.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="openVendorEditor(null)">+ New Vendor</button>
+        </div>
+      </div>
+      <div class="contacts-toolbar">
+        <input type="text" class="search-in" id="vendor-search" placeholder="Search vendors…" oninput="renderVendors()">
+      </div>
+      <div class="contacts-body" id="vendors-body"><!-- rendered by JS --></div>
     </div>
 
     <!-- ─────────── TIME TRACKER VIEW ─────────── -->
@@ -2190,6 +2211,111 @@ tr:hover .row-btns { opacity:1; }
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-client')">Cancel</button>
       <button class="btn btn-primary" onclick="saveClient()">Save Client</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ VENDOR MODAL ═════════════════ -->
+<div class="overlay" id="modal-vendor">
+  <div class="modal" style="width:620px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-vendor')">✕</button>
+    <div class="modal-title" id="vn-modal-title">New Vendor</div>
+    <input type="hidden" id="vn-id">
+    <div class="frow">
+      <div class="fg" style="flex:2">
+        <label class="fl">Vendor Name</label>
+        <input type="text" class="fi" id="vn-name" placeholder="e.g. Quinn Ornamental Iron">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Type</label>
+        <input type="text" class="fi" id="vn-type" list="vn-type-list" placeholder="Manufacturer, Workroom, Receiver…">
+        <datalist id="vn-type-list"></datalist>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" id="vn-email" placeholder="sales@example.com">
+      </div>
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" id="vn-phone" placeholder="(555) 000-0000">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Website</label>
+      <input type="text" class="fi" id="vn-website" placeholder="https://…">
+    </div>
+    <div class="fg">
+      <label class="fl">Address</label>
+      <input type="text" class="fi" id="vn-address" placeholder="Street, city, state, zip">
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="vn-notes" style="resize:vertical;min-height:52px" placeholder="Payment terms, rep notes, minimums…"></textarea>
+    </div>
+    <div id="vn-contacts-section" style="display:none;margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Contacts</div>
+        <button class="btn btn-ghost btn-sm" onclick="openVendorContactEditor($c('vn-id').value, null)" style="font-size:10px">+ Add Contact</button>
+      </div>
+      <div id="vn-contacts-list"></div>
+    </div>
+    <div id="vn-items-section" style="display:none;margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Referenced on</div>
+      <div id="vn-items-list" style="font-size:11px;color:var(--text-mid);line-height:1.7"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="vn-delete-btn" style="display:none" onclick="deleteVendor($c('vn-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-vendor')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveVendor()">Save Vendor</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ VENDOR CONTACT MODAL ═════════════════ -->
+<div class="overlay" id="modal-vendor-contact">
+  <div class="modal" style="width:520px">
+    <button class="modal-x" onclick="closeModal('modal-vendor-contact')">✕</button>
+    <div class="modal-title" id="vnc-modal-title">New Contact</div>
+    <input type="hidden" id="vnc-id">
+    <input type="hidden" id="vnc-vendor-id">
+    <div class="frow">
+      <div class="fg" style="flex:2">
+        <label class="fl">Name</label>
+        <input type="text" class="fi" id="vnc-name" placeholder="Full name">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Title</label>
+        <input type="text" class="fi" id="vnc-title" placeholder="Sales Rep, CSR…">
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Email</label>
+        <input type="email" class="fi" id="vnc-email" placeholder="email@example.com">
+      </div>
+      <div class="fg">
+        <label class="fl">Phone</label>
+        <input type="text" class="fi" id="vnc-phone" placeholder="(555) 000-0000">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="vnc-notes" style="resize:vertical;min-height:52px" placeholder="Best times to reach, quirks, brands covered…"></textarea>
+    </div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="vnc-primary" style="margin:0">
+        Primary contact for this vendor
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="vnc-delete-btn" style="display:none" onclick="deleteVendorContact($c('vnc-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-vendor-contact')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveVendorContact()">Save Contact</button>
     </div>
   </div>
 </div>
@@ -3465,6 +3591,7 @@ async function loadFromSupabase() {
   const [
     clientsRes, contactsRes, projectsRes,
     invoicesRes, expensesRes, documentsRes, timeRes,
+    vendorsRes, vendorContactsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -3473,9 +3600,11 @@ async function loadFromSupabase() {
     sb.from('expenses').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('documents').select('*, document_versions!document_id(*)').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('time_entries').select('*').eq('studio_id', studioId),
+    sb.from('vendors').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('vendor_contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -3494,13 +3623,15 @@ async function loadFromSupabase() {
     spaces = spRes.data || [];
   }
 
-  S.clients     = (clientsRes.data   || []).map(dbClientToS);
-  S.contacts    = (contactsRes.data  || []).map(dbContactToS);
-  S.projects    = projects.map(dbProjectToS);
-  S.invoices    = (invoicesRes.data  || []).map(dbInvoiceToS);
-  S.expenses    = (expensesRes.data  || []).map(dbExpenseToS);
-  S.documents   = (documentsRes.data || []).map(dbDocumentToS);
-  S.timeEntries = (timeRes.data      || []).map(dbTimeToS);
+  S.clients        = (clientsRes.data        || []).map(dbClientToS);
+  S.contacts       = (contactsRes.data       || []).map(dbContactToS);
+  S.projects       = projects.map(dbProjectToS);
+  S.invoices       = (invoicesRes.data       || []).map(dbInvoiceToS);
+  S.expenses       = (expensesRes.data       || []).map(dbExpenseToS);
+  S.documents      = (documentsRes.data      || []).map(dbDocumentToS);
+  S.timeEntries    = (timeRes.data           || []).map(dbTimeToS);
+  S.vendors        = (vendorsRes.data        || []).map(dbVendorToS);
+  S.vendorContacts = (vendorContactsRes.data || []).map(dbVendorContactToS);
 
   S.proposals = {};
   spaces.forEach(sp => {
@@ -3540,6 +3671,36 @@ function dbContactToS(c) {
     company: c.company || '', role: c.role || '', notes: c.notes || '',
     clientId: c.client_id || '',
     lines: [],
+    created: c.created_at,
+  };
+}
+
+function dbVendorToS(v) {
+  return {
+    id: v.id,
+    name: v.name || '',
+    vendorType: v.vendor_type || '',
+    website: v.website || '',
+    phone: v.phone || '',
+    email: v.email || '',
+    address: v.address || '',
+    notes: v.notes || '',
+    created: v.created_at,
+  };
+}
+
+function dbVendorContactToS(c) {
+  return {
+    id: c.id,
+    vendorId: c.vendor_id,
+    name: c.name || '',
+    title: c.title || '',
+    email: c.email || '',
+    phone: c.phone || '',
+    notes: c.notes || '',
+    primary: !!c.primary_contact,
+    brandIds: Array.isArray(c.brand_ids) ? c.brand_ids : [],
+    sortOrder: c.sort_order || 0,
     created: c.created_at,
   };
 }
@@ -3720,6 +3881,11 @@ function dbItemToS(it) {
     _expenseId: it.expense_id || null,
     _invoiceLineId: it.invoice_line_id || null,
     _invoiceNumber: it.invoice_number || null,
+    vendorId: it.vendor_id || null,
+    vendorContactId: it.vendor_contact_id || null,
+    brandId: it.brand_id || null,
+    itemTypeId: it.item_type_id || null,
+    poId: it.po_id || null,
     files: it.files || [],
     links: it.links || [],
     trackingNumbers: it.tracking_numbers || [],
@@ -3737,6 +3903,8 @@ function dbCompToS(c) {
     name: c.name || '',
     componentType: c.component_type || '',
     contact: c.contact || '',
+    vendorId: c.vendor_id || null,
+    vendorContactId: c.vendor_contact_id || null,
     netCost: c.net_cost != null ? String(c.net_cost) : '',
     qty: c.qty != null ? Number(c.qty) : 1,
     qtyUnit: c.qty_unit || '',
@@ -3777,19 +3945,23 @@ const _sbShadow = {
   spaces: new Map(),
   items: new Map(),
   components: new Map(),
+  vendors: new Map(),
+  vendorContacts: new Map(),
   studioSettings: {},
   studioInfo: {},
 };
 
 function captureSbShadow() {
   const snap = x => JSON.parse(JSON.stringify(x));
-  _sbShadow.clients     = new Map((S.clients    || []).map(c => [c.id, snap(c)]));
-  _sbShadow.contacts    = new Map((S.contacts   || []).map(c => [c.id, snap(c)]));
-  _sbShadow.projects    = new Map((S.projects   || []).map(p => [p.id, snap(p)]));
-  _sbShadow.expenses    = new Map((S.expenses   || []).map(e => [e.id, snap(e)]));
-  _sbShadow.documents   = new Map((S.documents  || []).map(d => [d.id, snap(d)]));
-  _sbShadow.timeEntries = new Map((S.timeEntries|| []).map(t => [t.id, snap(t)]));
-  _sbShadow.invoices    = new Map((S.invoices   || []).map(i => [i.id, snap(i)]));
+  _sbShadow.clients        = new Map((S.clients        || []).map(c => [c.id, snap(c)]));
+  _sbShadow.contacts       = new Map((S.contacts       || []).map(c => [c.id, snap(c)]));
+  _sbShadow.projects       = new Map((S.projects       || []).map(p => [p.id, snap(p)]));
+  _sbShadow.expenses       = new Map((S.expenses       || []).map(e => [e.id, snap(e)]));
+  _sbShadow.documents      = new Map((S.documents      || []).map(d => [d.id, snap(d)]));
+  _sbShadow.timeEntries    = new Map((S.timeEntries    || []).map(t => [t.id, snap(t)]));
+  _sbShadow.invoices       = new Map((S.invoices       || []).map(i => [i.id, snap(i)]));
+  _sbShadow.vendors        = new Map((S.vendors        || []).map(v => [v.id, snap(v)]));
+  _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
   _sbShadow.invoiceLineItems.clear();
   _sbShadow.invoicePayments.clear();
   (S.invoices || []).forEach(inv => {
@@ -3840,6 +4012,35 @@ function contactToDB(c, studioId) {
     id: c.id, studio_id: studioId, client_id: c.clientId || null,
     name: c.name || '', email: c.email || null, phone: c.phone || null,
     company: c.company || null, role: c.role || null, notes: c.notes || null,
+    deleted_at: null,
+  };
+}
+function vendorToDB(v, studioId) {
+  return {
+    id: v.id, studio_id: studioId,
+    name: v.name || '',
+    vendor_type: v.vendorType || null,
+    website: v.website || null,
+    phone: v.phone || null,
+    email: v.email || null,
+    address: v.address || null,
+    notes: v.notes || null,
+    deleted_at: null,
+  };
+}
+function vendorContactToDB(c) {
+  return {
+    id: c.id,
+    studio_id: c._studioId,           // set by sync loop
+    vendor_id: c.vendorId,
+    name: c.name || '',
+    title: c.title || null,
+    email: c.email || null,
+    phone: c.phone || null,
+    notes: c.notes || null,
+    primary_contact: !!c.primary,
+    brand_ids: Array.isArray(c.brandIds) ? c.brandIds : [],
+    sort_order: c.sortOrder || 0,
     deleted_at: null,
   };
 }
@@ -3955,6 +4156,11 @@ function itemToDB(it) {
     additional_costs: it.additionalCosts || [],
     invoice_ids: it._invoiceIds || [], expense_id: it._expenseId || null,
     invoice_line_id: it._invoiceLineId || null, invoice_number: it._invoiceNumber || null,
+    vendor_id:         it.vendorId        || null,
+    vendor_contact_id: it.vendorContactId || null,
+    brand_id:          it.brandId         || null,
+    item_type_id:      it.itemTypeId      || null,
+    po_id:             it.poId            || null,
     files: it.files || [], links: it.links || [],
     tracking_numbers: it.trackingNumbers || [], activity_log: it.activityLog || [],
     sort_order: it._sortOrder || 0, deleted_at: null,
@@ -3964,6 +4170,8 @@ function componentToDB(c) {
   return {
     id: c.id, item_id: c._itemId, name: c.name || null,
     component_type: c.componentType || null, contact: c.contact || null,
+    vendor_id:         c.vendorId        || null,
+    vendor_contact_id: c.vendorContactId || null,
     net_cost: _parseMoney(c.netCost), qty: Number(c.qty || 1), qty_unit: c.qtyUnit || null,
     status: c.status || 'proposed', due_date: c.dueDate || null, invoice_phase: c.invoicePhase || null,
     description: c.description || null, note: c.note || null,
@@ -4038,6 +4246,8 @@ async function syncToSupabase() {
       invoices:    new Map((S.invoices   || []).map(i => [i.id, i])),
       documents:   new Map((S.documents  || []).map(d => [d.id, d])),
       timeEntries: new Map((S.timeEntries|| []).map(t => [t.id, t])),
+      vendors:     new Map((S.vendors    || []).map(v => [v.id, v])),
+      vendorContacts: new Map((S.vendorContacts || []).map(c => [c.id, { ...c, _studioId: studioId }])),
       invoiceLineItems: new Map(),
       invoicePayments:  new Map(),
       documentVersions: new Map(),
@@ -4070,6 +4280,9 @@ async function syncToSupabase() {
     };
     await syncSafe('clients',   current.clients,  _sbShadow.clients,  c => clientToDB(c, studioId));
     await syncSafe('contacts',  current.contacts, _sbShadow.contacts, c => contactToDB(c, studioId));
+    // Vendors before vendor_contacts so FK targets exist before children
+    await syncSafe('vendors',         current.vendors,        _sbShadow.vendors,        v => vendorToDB(v, studioId));
+    await syncSafe('vendor_contacts', current.vendorContacts, _sbShadow.vendorContacts, c => vendorContactToDB(c));
     await syncSafe('projects',  current.projects, _sbShadow.projects, p => projectToDB(p, studioId));
     await syncSafe('proposal_spaces',     current.spaces,     _sbShadow.spaces,     s => spaceToDB(s));
     await syncSafe('proposal_items',      current.items,      _sbShadow.items,      i => itemToDB(i));
@@ -4249,6 +4462,8 @@ let S = {
   customItemStatuses: [],
   taskStatuses: [],
   taskStatusColors: {},
+  vendors: [],
+  vendorContacts: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -4711,6 +4926,7 @@ function showView(v) {
   if (v === 'proposal') { updateProjSelect(); if (S.currentPropProject) loadProposal(S.currentPropProject); }
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
+  if (v === 'vendors')  renderVendors();
   if (v === 'time') renderTime();
   if (v === 'expenses') renderExpenses();
   if (v === 'dashboard') renderDashboard();
@@ -9250,6 +9466,263 @@ function renderClients() {
       ${count > 0 ? `<div style="font-size:10px;color:var(--russet);margin-top:6px;font-family:var(--font-b)">${count} project${count!==1?'s':''}</div>` : ''}
     </div>`;
   }).join('')}</div>`;
+}
+
+// ─── VENDORS ────────────────────────────────────────────────
+// Vendors are studio-scoped first-class entities. Each can have many
+// vendor_contacts (reps). Items/components/POs reference them by FK.
+// App settings have a free-text `vendor_type` field backed by a datalist
+// populated from existing types in use — no enum, studios pick their own.
+
+function renderVendors() {
+  const body = $c('vendors-body');
+  if (!body) return;
+  const query = ($c('vendor-search')?.value || '').toLowerCase().trim();
+  let vendors = S.vendors || [];
+  if (query) {
+    vendors = vendors.filter(v =>
+      [v.name, v.vendorType, v.email, v.phone, v.website, v.address, v.notes]
+        .join(' ').toLowerCase().includes(query)
+    );
+  }
+  if (!vendors.length) {
+    body.innerHTML = `<div class="no-results">${query ? 'No vendors match that search.' : 'No vendors yet. Add your first one.'}</div>`;
+    return;
+  }
+  const sorted = [...vendors].sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  // Count items + contacts per vendor for the card summary.
+  const itemCounts = {};
+  (S.proposals && Object.values(S.proposals) || []).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.vendorId) itemCounts[it.vendorId] = (itemCounts[it.vendorId]||0) + 1;
+    }));
+  });
+  const contactCounts = {};
+  (S.vendorContacts || []).forEach(c => {
+    if (c.vendorId) contactCounts[c.vendorId] = (contactCounts[c.vendorId]||0) + 1;
+  });
+  body.innerHTML = `<div class="contacts-grid">${sorted.map(v => {
+    const icount = itemCounts[v.id] || 0;
+    const ccount = contactCounts[v.id] || 0;
+    return `
+    <div class="contact-card" onclick="openVendorEditor('${v.id}')">
+      <div class="contact-name">${escH(v.name || '(unnamed)')}</div>
+      ${v.vendorType ? `<div style="font-size:10px;color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;margin-top:2px;font-family:var(--font-h);font-weight:700">${escH(v.vendorType)}</div>` : ''}
+      ${v.email ? `<div style="font-size:11.5px;color:var(--russet);margin-top:5px">${escH(v.email)}</div>` : ''}
+      ${v.phone ? `<div style="font-size:11.5px;color:var(--text-mid);margin-top:1px">${escH(v.phone)}</div>` : ''}
+      ${v.website ? `<div style="font-size:11px;color:var(--text-light);margin-top:3px;font-style:italic">${escH(v.website)}</div>` : ''}
+      ${(icount || ccount) ? `<div style="font-size:10px;color:var(--russet);margin-top:6px;font-family:var(--font-b)">${ccount ? ccount + ' contact' + (ccount!==1?'s':'') : ''}${ccount && icount ? ' · ' : ''}${icount ? icount + ' item' + (icount!==1?'s':'') : ''}</div>` : ''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function populateVendorTypeDatalist() {
+  const dl = $c('vn-type-list');
+  if (!dl) return;
+  const types = Array.from(new Set((S.vendors||[]).map(v => v.vendorType).filter(Boolean))).sort();
+  dl.innerHTML = types.map(t => `<option value="${escH(t)}">`).join('');
+}
+
+function openVendorEditor(id) {
+  const v = id ? (S.vendors || []).find(x => x.id === id) : null;
+  $c('vn-modal-title').textContent = v ? 'Edit Vendor' : 'New Vendor';
+  $c('vn-id').value = v?.id || '';
+  $c('vn-name').value    = v?.name || '';
+  $c('vn-type').value    = v?.vendorType || '';
+  $c('vn-email').value   = v?.email || '';
+  $c('vn-phone').value   = v?.phone || '';
+  $c('vn-website').value = v?.website || '';
+  $c('vn-address').value = v?.address || '';
+  $c('vn-notes').value   = v?.notes || '';
+  $c('vn-delete-btn').style.display = v ? '' : 'none';
+  populateVendorTypeDatalist();
+  // Contacts + referenced-items sections only when editing an existing vendor
+  if (v) {
+    $c('vn-contacts-section').style.display = '';
+    renderVendorContactsInModal(v.id);
+    const items = [];
+    Object.values(S.proposals || {}).forEach(prop => {
+      (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+        if (it.vendorId === v.id) items.push({ name: it.name, space: sp.name, status: it.status });
+      }));
+    });
+    if (items.length) {
+      $c('vn-items-section').style.display = '';
+      $c('vn-items-list').innerHTML = items.slice(0, 20).map(i =>
+        `<div>${escH(i.name || '(unnamed)')} <span style="color:var(--text-light)">· ${escH(i.space)}${i.status ? ' · ' + escH(getPipelineStatusLabel(i.status)) : ''}</span></div>`
+      ).join('') + (items.length > 20 ? `<div style="margin-top:4px;font-style:italic">+${items.length - 20} more…</div>` : '');
+    } else {
+      $c('vn-items-section').style.display = 'none';
+    }
+  } else {
+    $c('vn-contacts-section').style.display = 'none';
+    $c('vn-items-section').style.display = 'none';
+  }
+  $c('modal-vendor').classList.add('open');
+  setTimeout(() => $c('vn-name').focus(), 80);
+}
+
+function saveVendor() {
+  const id = $c('vn-id').value;
+  const name = $c('vn-name').value.trim();
+  if (!name) { toast('Vendor name is required.'); return; }
+  // Duplicate-name guard within studio (case-insensitive)
+  const dupe = (S.vendors || []).find(v => v.id !== id && (v.name||'').toLowerCase() === name.toLowerCase());
+  if (dupe) { toast('A vendor named "' + name + '" already exists.'); return; }
+  const fields = {
+    name,
+    vendorType: $c('vn-type').value.trim(),
+    email:      $c('vn-email').value.trim(),
+    phone:      $c('vn-phone').value.trim(),
+    website:    $c('vn-website').value.trim(),
+    address:    $c('vn-address').value.trim(),
+    notes:      $c('vn-notes').value.trim(),
+  };
+  if (id) {
+    const v = (S.vendors || []).find(x => x.id === id);
+    if (v) Object.assign(v, fields);
+  } else {
+    S.vendors = S.vendors || [];
+    S.vendors.push({ id: uid(), ...fields, created: new Date().toISOString() });
+  }
+  save();
+  closeModal('modal-vendor');
+  renderVendors();
+  toast(id ? 'Vendor updated.' : 'Vendor created.');
+}
+
+function deleteVendor(id) {
+  if (!id) return;
+  const v = (S.vendors || []).find(x => x.id === id);
+  if (!v) return;
+  // Warn if items/contacts reference this vendor — don't block, but make it visible.
+  let itemCount = 0;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.vendorId === id) itemCount++;
+    }));
+  });
+  const ccount = (S.vendorContacts || []).filter(c => c.vendorId === id).length;
+  let msg = 'Delete vendor "' + v.name + '"?';
+  if (itemCount || ccount) {
+    msg += '\n\n' +
+      (itemCount ? itemCount + ' item' + (itemCount!==1?'s':'') + ' will have their vendor cleared.\n' : '') +
+      (ccount ? ccount + ' contact' + (ccount!==1?'s':'') + ' will be deleted.\n' : '');
+  }
+  if (!confirm(msg)) return;
+  // Remove the vendor and any associated vendor_contacts. Item FKs will clear
+  // via DB `on delete set null` when the sync pushes the delete.
+  S.vendors = (S.vendors || []).filter(x => x.id !== id);
+  S.vendorContacts = (S.vendorContacts || []).filter(c => c.vendorId !== id);
+  // Clear in-memory item vendor references so UI reflects it immediately.
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.vendorId === id) { it.vendorId = null; it.vendorContactId = null; }
+    }));
+  });
+  save();
+  closeModal('modal-vendor');
+  renderVendors();
+  toast('Vendor deleted.');
+}
+
+// ── Vendor contacts ───────────────────────────────────────
+
+function renderVendorContactsInModal(vendorId) {
+  const list = $c('vn-contacts-list');
+  if (!list) return;
+  const contacts = (S.vendorContacts || [])
+    .filter(c => c.vendorId === vendorId)
+    .sort((a,b) => (b.primary - a.primary) || (a.sortOrder - b.sortOrder) || (a.name||'').localeCompare(b.name||''));
+  if (!contacts.length) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No contacts yet. Add a rep if you want to track who handles this vendor.</div>';
+    return;
+  }
+  list.innerHTML = contacts.map(c => `
+    <div onclick="openVendorContactEditor('${vendorId}','${c.id}')" style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--russet)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark)">${escH(c.name)}${c.title ? ' <span style="font-weight:400;color:var(--text-mid);font-size:11px">· ' + escH(c.title) + '</span>' : ''}</div>
+        ${c.primary ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Primary</span>' : ''}
+      </div>
+      ${c.email || c.phone ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${[escH(c.email||''), escH(c.phone||'')].filter(Boolean).join(' · ')}</div>` : ''}
+      ${c.notes ? `<div style="font-size:10px;color:var(--text-light);margin-top:3px;font-style:italic">${escH(c.notes)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function openVendorContactEditor(vendorId, contactId) {
+  const c = contactId ? (S.vendorContacts || []).find(x => x.id === contactId) : null;
+  $c('vnc-modal-title').textContent = c ? 'Edit Contact' : 'New Contact';
+  $c('vnc-id').value = c?.id || '';
+  $c('vnc-vendor-id').value = vendorId;
+  $c('vnc-name').value  = c?.name || '';
+  $c('vnc-title').value = c?.title || '';
+  $c('vnc-email').value = c?.email || '';
+  $c('vnc-phone').value = c?.phone || '';
+  $c('vnc-notes').value = c?.notes || '';
+  $c('vnc-primary').checked = !!c?.primary;
+  $c('vnc-delete-btn').style.display = c ? '' : 'none';
+  $c('modal-vendor-contact').classList.add('open');
+  setTimeout(() => $c('vnc-name').focus(), 80);
+}
+
+function saveVendorContact() {
+  const id = $c('vnc-id').value;
+  const vendorId = $c('vnc-vendor-id').value;
+  const name = $c('vnc-name').value.trim();
+  if (!name)     { toast('Contact name is required.'); return; }
+  if (!vendorId) { toast('Vendor missing.'); return; }
+  const fields = {
+    vendorId,
+    name,
+    title: $c('vnc-title').value.trim(),
+    email: $c('vnc-email').value.trim(),
+    phone: $c('vnc-phone').value.trim(),
+    notes: $c('vnc-notes').value.trim(),
+    primary: $c('vnc-primary').checked,
+  };
+  // Only one primary per vendor — clear others before saving this one
+  if (fields.primary) {
+    (S.vendorContacts || []).forEach(c => {
+      if (c.vendorId === vendorId && c.id !== id && c.primary) c.primary = false;
+    });
+  }
+  if (id) {
+    const c = (S.vendorContacts || []).find(x => x.id === id);
+    if (c) Object.assign(c, fields);
+  } else {
+    S.vendorContacts = S.vendorContacts || [];
+    S.vendorContacts.push({
+      id: uid(),
+      brandIds: [],
+      sortOrder: 0,
+      ...fields,
+      created: new Date().toISOString(),
+    });
+  }
+  save();
+  closeModal('modal-vendor-contact');
+  renderVendorContactsInModal(vendorId);
+  toast(id ? 'Contact updated.' : 'Contact added.');
+}
+
+function deleteVendorContact(id) {
+  if (!id) return;
+  const c = (S.vendorContacts || []).find(x => x.id === id);
+  if (!c) return;
+  if (!confirm('Delete contact "' + c.name + '"?')) return;
+  const vendorId = c.vendorId;
+  S.vendorContacts = (S.vendorContacts || []).filter(x => x.id !== id);
+  // Clear any item references that pointed at this contact
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.vendorContactId === id) it.vendorContactId = null;
+    }));
+  });
+  save();
+  closeModal('modal-vendor-contact');
+  renderVendorContactsInModal(vendorId);
+  toast('Contact deleted.');
 }
 
 let _clientSaveCallback = null;
