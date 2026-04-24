@@ -1641,12 +1641,11 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab active" data-settab="studio"  onclick="setSettingsTab('studio')"  style="margin-bottom:-1px">Studio Info</button>
         <button class="view-tab"        data-settab="team"    onclick="setSettingsTab('team')"    style="margin-bottom:-1px">Team</button>
         <button class="view-tab"        data-settab="units"   onclick="setSettingsTab('units')"   style="margin-bottom:-1px">Quantity Units</button>
-        <button class="view-tab"        data-settab="tasks"   onclick="setSettingsTab('tasks')"   style="margin-bottom:-1px">Task Statuses</button>
+        <button class="view-tab"        data-settab="statuses" onclick="setSettingsTab('statuses')" style="margin-bottom:-1px">Statuses</button>
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
         <button class="view-tab"        data-settab="emails"  onclick="setSettingsTab('emails')"  style="margin-bottom:-1px">Email Templates</button>
         <button class="view-tab"        data-settab="notes"   onclick="setSettingsTab('notes')"   style="margin-bottom:-1px">Invoice Notes</button>
         <button class="view-tab"        data-settab="reminders" onclick="setSettingsTab('reminders')" style="margin-bottom:-1px">Reminders</button>
-        <button class="view-tab"        data-settab="colors"  onclick="setSettingsTab('colors')"  style="margin-bottom:-1px">Status Colors</button>
       </div>
 
       <div class="contacts-body" style="padding:30px">
@@ -1717,11 +1716,22 @@ tr:hover .row-btns { opacity:1; }
           </div>
         </div>
 
-        <div id="settab-tasks" class="settings-panel" style="display:none;max-width:640px">
-          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">Status options for open project tasks.</div>
-          <div id="as-task-statuses" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px"></div>
-          <div style="display:flex;gap:6px;max-width:320px">
-            <input type="text" class="fi" id="as-task-status-input" placeholder="New status…" style="flex:1" onkeydown="if(event.key==='Enter'){addTaskStatus();event.preventDefault()}">
+        <div id="settab-statuses" class="settings-panel" style="display:none;max-width:780px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:16px;font-style:italic;line-height:1.5">
+            Two kinds of statuses live here. <strong>Item Pipeline</strong> statuses track proposal items through the order lifecycle — automations (invoice-sent, invoice-paid, cancel) depend on the internal codes, so built-in ones can't be deleted, but you can rename their display labels and change their colors. <strong>Project Task</strong> statuses are free-form labels for your project to-do lists.
+          </div>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px">Item Pipeline Statuses</div>
+          <div id="as-pipeline-statuses" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="margin-bottom:28px">
+            <button class="btn btn-ghost btn-sm" onclick="addCustomPipelineStatus()" style="font-size:11px">+ Add Pipeline Status</button>
+          </div>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Project Task Statuses</div>
+          <div id="as-task-statuses" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:6px;max-width:420px">
+            <input type="text" class="fi" id="as-task-status-input" placeholder="New task status…" style="flex:1" onkeydown="if(event.key==='Enter'){addTaskStatus();event.preventDefault()}">
+            <input type="color" id="as-task-status-color" value="#9f6640" style="width:36px;height:36px;padding:2px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer">
             <button class="btn btn-primary btn-sm" onclick="addTaskStatus()">Add</button>
           </div>
         </div>
@@ -1768,10 +1778,6 @@ tr:hover .row-btns { opacity:1; }
           <div id="as-reminders-panels" style="display:flex;flex-direction:column;gap:16px"></div>
         </div>
 
-        <div id="settab-colors" class="settings-panel" style="display:none;max-width:640px">
-          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:10px;font-style:italic">Click a color swatch to change the color for each proposal status.</div>
-          <div id="as-status-colors" style="display:flex;flex-direction:column;gap:6px"></div>
-        </div>
       </div>
     </div>
 
@@ -3503,11 +3509,14 @@ async function loadFromSupabase() {
   });
 
   const studioSettings = AUTH.studio.settings || {};
-  S.qtyUnits     = studioSettings.qty_units     || (typeof DEFAULT_QTY_UNITS !== 'undefined' ? DEFAULT_QTY_UNITS.slice() : []);
-  S.taskStatuses = studioSettings.task_statuses || (typeof DEFAULT_TASK_STATUSES !== 'undefined' ? DEFAULT_TASK_STATUSES.slice() : []);
-  S.paymentCards = studioSettings.payment_cards || [];
-  S.statusColors = studioSettings.status_colors || (typeof DEFAULT_STATUS_COLORS !== 'undefined' ? {...DEFAULT_STATUS_COLORS} : {});
-  S.categories   = studioSettings.categories   || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
+  S.qtyUnits         = studioSettings.qty_units         || (typeof DEFAULT_QTY_UNITS !== 'undefined' ? DEFAULT_QTY_UNITS.slice() : []);
+  S.taskStatuses     = studioSettings.task_statuses     || (typeof DEFAULT_TASK_STATUSES !== 'undefined' ? DEFAULT_TASK_STATUSES.slice() : []);
+  S.taskStatusColors = studioSettings.task_status_colors || {};
+  S.paymentCards     = studioSettings.payment_cards     || [];
+  S.statusColors     = studioSettings.status_colors     || (typeof DEFAULT_STATUS_COLORS !== 'undefined' ? {...DEFAULT_STATUS_COLORS} : {});
+  S.statusLabels     = studioSettings.status_labels     || {};
+  S.customItemStatuses = studioSettings.custom_item_statuses || [];
+  S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
   S.studio       = AUTH.studio.studio_info || {};
 
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
@@ -4076,8 +4085,11 @@ async function syncToSupabase() {
     const currentSettings = {
       qty_units:     S.qtyUnits     || [],
       task_statuses: S.taskStatuses || [],
+      task_status_colors:   S.taskStatusColors   || {},
       payment_cards: S.paymentCards || [],
       status_colors: S.statusColors || {},
+      status_labels: S.statusLabels || {},
+      custom_item_statuses: S.customItemStatuses || [],
       categories:    S.categories   || [],
     };
     const currentInfo = S.studio || {};
@@ -4231,7 +4243,10 @@ let S = {
   _dataVersion: 4,
   qtyUnits: [],
   statusColors: {},
+  statusLabels: {},
+  customItemStatuses: [],
   taskStatuses: [],
+  taskStatusColors: {},
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -5571,7 +5586,7 @@ function compMatchesFilter(comp) {
 
 function renderPMItemCard(item, sp, pid) {
   const client = getItemClient(item, pid);
-  const statusLabel = STATUSES.find(s => s.v === item.status)?.l || item.status;
+  const statusLabel = getPipelineStatusLabel(item.status);
   const statusColor = getStatusColor(item.status);
   const flags = (item.statusFlags||[]).map(f => {
     const flag = STATUS_FLAGS.find(sf => sf.v === f);
@@ -5638,7 +5653,7 @@ function renderPMItemCard(item, sp, pid) {
         const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || '';
         const cGrouped = isGrouped && !isExcludedFromGrouping(c);
         const cStatusColor = getStatusColor(c.status||'proposed');
-        const cStatusLabel = STATUSES.find(s => s.v === (c.status||'proposed'))?.l || 'Proposed';
+        const cStatusLabel = getPipelineStatusLabel(c.status || 'proposed');
         const cMatch = compMatchesFilter(c);
         const dimStyle = !cMatch ? 'opacity:0.35;filter:grayscale(1);' : '';
         return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 18px;font-size:11px;${dimStyle}transition:opacity 0.2s">
@@ -5949,7 +5964,7 @@ function renderProjectTasksSection(pid) {
     html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No project tasks yet.</div>';
   } else {
     active.forEach(t => {
-      const statusColor = t.status === 'In Progress' ? '#2d5a8a' : t.status === 'Purgatory' ? '#c47a20' : 'var(--text-light)';
+      const statusColor = t.status ? getTaskStatusColor(t.status) : 'var(--text-light)';
       html += `
       <div style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:6px;cursor:pointer;transition:var(--t);display:flex;align-items:center;gap:10px" onclick="openTaskDetail('${pid}','${t.id}')" onmouseover="this.style.borderColor='var(--pecan)'" onmouseout="this.style.borderColor='var(--border)'">
         ${t.status ? `<span class="status-dot" style="background:${statusColor}"></span>` : '<span style="width:8px"></span>'}
@@ -6024,9 +6039,9 @@ function renderPDManagement(proj, pid) {
   html += `<div id="pm-filter-panel" style="display:${_pmStatusFilters.length ? '' : 'none'};margin-bottom:16px;padding:12px 14px;background:rgba(91,45,34,0.03);border:1px solid var(--border);border-radius:var(--rl)">
     <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Filter by Status</div>
     <div style="display:flex;flex-wrap:wrap;gap:5px">
-      ${STATUSES.map(s => {
+      ${getAllPipelineStatuses().map(s => {
         const active = _pmStatusFilters.includes(s.v);
-        return `<button onclick="togglePMStatusFilter('${s.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?getStatusColor(s.v):'var(--border)'};background:${active?getStatusColor(s.v)+'18':'white'};color:${active?getStatusColor(s.v):'var(--text-mid)'}">${s.l}</button>`;
+        return `<button onclick="togglePMStatusFilter('${s.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?getStatusColor(s.v):'var(--border)'};background:${active?getStatusColor(s.v)+'18':'white'};color:${active?getStatusColor(s.v):'var(--text-mid)'}">${escH(s.l)}</button>`;
       }).join('')}
       <span style="width:8px"></span>
       ${STATUS_FLAGS.map(f => {
@@ -6077,7 +6092,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   const statusColor = getStatusColor(item.status);
   const statusIdx = STATUSES.findIndex(s => s.v === item.status);
   const isAllowance = !!item.allowance;
-  const statusOpts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${s.l}</option>`).join('');
+  const statusOpts = getAllPipelineStatuses().map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${escH(s.l)}</option>`).join('');
 
   // ── Components section for constructed orders ──
   let compSection = '';
@@ -7568,7 +7583,7 @@ function renderItemRow(item, spId, pid) {
   const client = getItemClient(item, pid);
   const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
   const total = item.type === 'constructed' ? client : client * qty;
-  const sopts = STATUSES.map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${s.l}</option>`).join('');
+  const sopts = getAllPipelineStatuses().map(s => `<option value="${s.v}" ${item.status===s.v?'selected':''} style="color:${getStatusColor(s.v)}">${escH(s.l)}</option>`).join('');
   const markupNote = item.billCostOnly ? '<span class="markup-tag">cost only</span>' :
     (item.adjustMarkup != null && item.adjustMarkup !== '' ? `<span class="markup-tag">${item.adjustMarkup}%</span>` : '');
 
@@ -9354,6 +9369,8 @@ function openAppSettings() {
 
 let _settingsTab = 'studio';
 function setSettingsTab(tab) {
+  // Remap legacy tab names from before the Statuses consolidation (2026-04-23).
+  if (tab === 'tasks' || tab === 'colors') tab = 'statuses';
   _settingsTab = tab;
   if (typeof saveUIState === 'function') saveUIState();
   $a('[data-settab]').forEach(b => b.classList.toggle('active', b.dataset.settab === tab));
@@ -9364,12 +9381,11 @@ function setSettingsTab(tab) {
   if (tab === 'studio') loadStudioSettings();
   if (tab === 'team')   renderTeamList();
   if (tab === 'units')  renderQtyUnitsList();
-  if (tab === 'tasks')  renderTaskStatusSettings();
+  if (tab === 'statuses') { renderPipelineStatusSettings(); renderTaskStatusSettings(); }
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'notes')  renderInvoiceNotesList();
   if (tab === 'reminders') renderRemindersPanel();
-  if (tab === 'colors') renderStatusColorSettings();
 }
 
 // ── Reminders settings ──
@@ -10144,17 +10160,43 @@ function removeQtyUnit(val) {
   renderQtyUnitsList();
 }
 
-function renderStatusColorSettings() {
-  const el = $c('as-status-colors');
+// ── Unified Statuses settings (pipeline + task) ──
+// Automations reference internal `v` codes (e.g. 'invoiced', 'ready_for_ordering').
+// Users can rename the display label (stored in S.statusLabels[v]) and change the color
+// (S.statusColors[v]) without touching any logic. Custom pipeline statuses live in
+// S.customItemStatuses = [{v, l}] — their v is slugified at creation time.
+
+function getAllPipelineStatuses() {
+  const base = STATUSES.map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: true }));
+  const custom = (S.customItemStatuses || []).map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: false }));
+  return [...base, ...custom];
+}
+
+function getPipelineStatusLabel(v) {
+  const override = S.statusLabels?.[v];
+  if (override) return override;
+  const builtin = STATUSES.find(s => s.v === v);
+  if (builtin) return builtin.l;
+  const custom = (S.customItemStatuses || []).find(s => s.v === v);
+  return custom?.l || v;
+}
+
+function renderPipelineStatusSettings() {
+  const el = $c('as-pipeline-statuses');
   if (!el) return;
-  el.innerHTML = STATUSES.map(s => {
+  const all = getAllPipelineStatuses();
+  el.innerHTML = all.map(s => {
     const color = getStatusColor(s.v);
     return `
-    <div style="display:flex;align-items:center;gap:10px;padding:5px 0">
-      <input type="color" value="${color}" style="width:28px;height:28px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
         onchange="updateStatusColor('${s.v}',this.value)">
-      <span style="font-family:var(--font-b);font-size:12px;color:${color};font-weight:700;min-width:160px">${s.l}</span>
-      <button onclick="resetStatusColor('${s.v}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">reset</button>
+      <input type="text" class="fi" value="${escH(s.l)}" style="flex:1;font-size:12px;color:${color};font-weight:700;font-family:var(--font-b);padding:6px 8px" onchange="updatePipelineStatusLabel('${s.v}', this.value)">
+      ${s.builtin
+        ? `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Built-in · ${s.v}</span>
+           <button onclick="resetStatusColor('${s.v}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">reset</button>`
+        : `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Custom · ${s.v}</span>
+           <button onclick="deleteCustomPipelineStatus('${s.v}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>`}
     </div>`;
   }).join('');
 }
@@ -10163,29 +10205,92 @@ function updateStatusColor(statusVal, color) {
   if (!S.statusColors) S.statusColors = {};
   S.statusColors[statusVal] = color;
   save();
-  renderStatusColorSettings();
+  renderPipelineStatusSettings();
   if (S.currentPropProject) renderPropBody();
 }
 
 function resetStatusColor(statusVal) {
   if (!S.statusColors) S.statusColors = {};
   S.statusColors[statusVal] = DEFAULT_STATUS_COLORS[statusVal] || '#8a8a8a';
+  // Also clear the label override so Reset feels complete
+  if (S.statusLabels?.[statusVal]) delete S.statusLabels[statusVal];
   save();
-  renderStatusColorSettings();
+  renderPipelineStatusSettings();
   if (S.currentPropProject) renderPropBody();
+}
+
+function updatePipelineStatusLabel(statusVal, newLabel) {
+  const trimmed = String(newLabel || '').trim();
+  if (!S.statusLabels) S.statusLabels = {};
+  const builtinDefault = STATUSES.find(s => s.v === statusVal)?.l;
+  const customDefault = (S.customItemStatuses || []).find(s => s.v === statusVal)?.l;
+  if (!trimmed) {
+    // Empty → revert label override (built-in falls back to default, custom keeps its stored l)
+    delete S.statusLabels[statusVal];
+  } else if (trimmed === builtinDefault) {
+    // Matches built-in default — don't bother storing an override
+    delete S.statusLabels[statusVal];
+  } else if (customDefault !== undefined && !builtinDefault) {
+    // It's a custom status — update the entry directly instead of using an override
+    const custom = S.customItemStatuses.find(s => s.v === statusVal);
+    if (custom) custom.l = trimmed;
+  } else {
+    S.statusLabels[statusVal] = trimmed;
+  }
+  save();
+  renderPipelineStatusSettings();
+  if (S.currentPropProject) renderPropBody();
+}
+
+function addCustomPipelineStatus() {
+  const label = prompt('Label for the new pipeline status:');
+  if (!label || !label.trim()) return;
+  const trimmed = label.trim();
+  // Slugify for the internal v code: lowercase, non-alphanumeric → underscore
+  let v = 'custom_' + trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  // Ensure uniqueness against built-ins and existing customs
+  const taken = new Set([...STATUSES.map(s => s.v), ...((S.customItemStatuses||[]).map(s => s.v))]);
+  let attempt = v, n = 2;
+  while (taken.has(attempt)) { attempt = `${v}_${n++}`; }
+  v = attempt;
+  if (!S.customItemStatuses) S.customItemStatuses = [];
+  S.customItemStatuses.push({ v, l: trimmed });
+  // Give it a starting color so it renders nicely
+  if (!S.statusColors) S.statusColors = {};
+  S.statusColors[v] = '#9F6640';
+  save();
+  renderPipelineStatusSettings();
+}
+
+function deleteCustomPipelineStatus(v) {
+  if (!confirm('Delete this custom status? Any items set to it will keep the value — you\'ll want to reassign them manually.')) return;
+  S.customItemStatuses = (S.customItemStatuses || []).filter(s => s.v !== v);
+  if (S.statusLabels) delete S.statusLabels[v];
+  if (S.statusColors) delete S.statusColors[v];
+  save();
+  renderPipelineStatusSettings();
+}
+
+// ── Project task statuses (free-form, with per-status color) ──
+
+function getTaskStatusColor(label) {
+  return S.taskStatusColors?.[label] || '#9F6640';
 }
 
 function renderTaskStatusSettings() {
   const el = $c('as-task-statuses');
   if (!el) return;
-  const statuses = S.taskStatuses || [];
-  el.innerHTML = statuses.map(s => `
-    <div style="display:inline-flex;align-items:center;gap:4px;background:white;border-radius:14px;padding:4px 10px;border:1px solid var(--border);font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-      ${escH(s)}
-      <button onclick="removeTaskStatus('${escH(s)}')"
-        style="background:none;border:none;cursor:pointer;color:rgba(91,45,34,0.3);font-size:12px;line-height:1;padding:0 2px;transition:var(--t)"
-        onmouseover="this.style.color='#b33'" onmouseout="this.style.color='rgba(91,45,34,0.3)'">✕</button>
-    </div>`).join('');
+  const statuses = S.taskStatuses && S.taskStatuses.length ? S.taskStatuses : DEFAULT_TASK_STATUSES;
+  el.innerHTML = statuses.map(s => {
+    const color = getTaskStatusColor(s);
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
+        onchange="updateTaskStatusColor('${escH(s)}', this.value)">
+      <span style="flex:1;font-family:var(--font-b);font-size:12px;color:${color};font-weight:700">${escH(s)}</span>
+      <button onclick="removeTaskStatus('${escH(s)}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+    </div>`;
+  }).join('');
 }
 
 function addTaskStatus() {
@@ -10193,13 +10298,29 @@ function addTaskStatus() {
   const val = input?.value.trim();
   if (!val) return;
   if (!S.taskStatuses) S.taskStatuses = [];
-  if (!S.taskStatuses.includes(val)) { S.taskStatuses.push(val); save(); }
+  if (!S.taskStatuses.includes(val)) {
+    S.taskStatuses.push(val);
+    const colorInput = $c('as-task-status-color');
+    if (colorInput?.value) {
+      if (!S.taskStatusColors) S.taskStatusColors = {};
+      S.taskStatusColors[val] = colorInput.value;
+    }
+    save();
+  }
   input.value = '';
+  renderTaskStatusSettings();
+}
+
+function updateTaskStatusColor(label, color) {
+  if (!S.taskStatusColors) S.taskStatusColors = {};
+  S.taskStatusColors[label] = color;
+  save();
   renderTaskStatusSettings();
 }
 
 function removeTaskStatus(val) {
   S.taskStatuses = (S.taskStatuses||[]).filter(s => s !== val);
+  if (S.taskStatusColors) delete S.taskStatusColors[val];
   save();
   renderTaskStatusSettings();
 }
@@ -12639,7 +12760,7 @@ function renderInvoiceBuilder() {
       const total = item.type === 'constructed' ? clientPrice : clientPrice * qty;
       const checked = _invSelectedProposalItems.has(item.id);
       const statusColor = getStatusColor(item.status);
-      const statusLabel = STATUSES.find(s=>s.v===item.status)?.l || item.status;
+      const statusLabel = getPipelineStatusLabel(item.status);
       const isConstructed = item.type === 'constructed' && (item.components||[]).length > 0;
       const expanded = _invExpandedItems.has(item.id);
       const hasCompSelections = _invSelectedComponents.has(item.id);
