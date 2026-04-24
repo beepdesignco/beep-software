@@ -2495,9 +2495,16 @@ tr:hover .row-btns { opacity:1; }
         <label class="fl">Rate ($/hr)</label>
         <input type="number" class="fi" id="tm-rate" min="0" step="5" placeholder="195">
       </div>
-      <div class="fg">
-        <label class="fl">Hours</label>
-        <input type="number" class="fi" id="tm-hours" min="0.25" step="0.25" placeholder="1.0" oninput="updateTimeFee()">
+      <div class="fg" style="min-width:220px">
+        <label class="fl">Duration</label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" class="fi" id="tm-h" min="0" step="1" placeholder="0" oninput="updateTimeFee()" style="width:56px;text-align:center">
+          <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">h</span>
+          <input type="number" class="fi" id="tm-m" min="0" max="59" step="1" placeholder="0" oninput="updateTimeFee()" style="width:56px;text-align:center">
+          <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">m</span>
+          <input type="number" class="fi" id="tm-s" min="0" max="59" step="1" placeholder="0" oninput="updateTimeFee()" style="width:56px;text-align:center">
+          <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">s</span>
+        </div>
       </div>
     </div>
  
@@ -12019,10 +12026,55 @@ function formatElapsed(ms) {
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
  
-function elapsedHours(ms) {
-  // Round to nearest 0.25hr (15-min increment), minimum 0.25
-  const raw = ms / 3600000;
-  return Math.max(0.25, Math.round(raw * 4) / 4);
+// Date + start-time label for a time entry row.
+// Shows "2026-04-24 · 9:08 PM" when a real timer timestamp is present,
+// or just the date for manual entries (whose started_at is a synthesized 09:00).
+function fmtEntryWhen(e) {
+  const startedAt = e?.startedAt || '';
+  const dateStr   = e?.date || (startedAt ? String(startedAt).slice(0, 10) : '');
+  if (!startedAt) return dateStr || '—';
+  // Manual entries synthesize 09:00 UTC — we hide the time in that case so it
+  // doesn't look falsely precise. Timer entries have millisecond-ish timestamps.
+  const synthetic = /T09:00:00(\.0+)?(Z|\+00:00)?$/.test(startedAt);
+  if (synthetic) return dateStr || '—';
+  try {
+    const d = new Date(startedAt);
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return `${dateStr} · ${time}`;
+  } catch {
+    return dateStr || '—';
+  }
+}
+
+// Breaks a duration in milliseconds into {h, m, s} integer components with NO rounding.
+function elapsedHMS(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  return {
+    h: Math.floor(total / 3600),
+    m: Math.floor((total % 3600) / 60),
+    s: total % 60,
+  };
+}
+
+// Decimal hours (for math / fee calc). Exact — no rounding.
+function hmsToDecimalHours(h, m, s) {
+  return (Number(h) || 0) + (Number(m) || 0) / 60 + (Number(s) || 0) / 3600;
+}
+
+// Human-readable duration string. "2h 34m 12s" / "0h 0m 13s" / "1h 0m".
+// Omits seconds segment only if s===0 AND either h>0 or m>0 (so "13s" is shown as "0h 0m 13s").
+function fmtDuration(totalSecondsOrDecimalHours) {
+  const seconds = totalSecondsOrDecimalHours > 0 && totalSecondsOrDecimalHours < 1e6
+    ? (Number.isInteger(totalSecondsOrDecimalHours) && totalSecondsOrDecimalHours >= 60
+        ? totalSecondsOrDecimalHours
+        : Math.round((Number(totalSecondsOrDecimalHours) || 0) * 3600))
+    : 0;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h === 0 && m === 0) return `${s}s`;
+  if (s === 0)            return `${h}h ${m}m`;
+  return `${h}h ${m}m ${s}s`;
 }
  
 function startTimer() {
@@ -12094,7 +12146,10 @@ function stopTimer() {
   if (isCustom) $c('tm-person-custom').value = t.person;
   const teamRate = TEAM.find(tm => tm.id === t.person)?.rate || 195;
   $c('tm-rate').value = teamRate;
-  $c('tm-hours').value = elapsedHours(elapsed);
+  const hms = elapsedHMS(elapsed);
+  $c('tm-h').value = hms.h || '';
+  $c('tm-m').value = hms.m || '';
+  $c('tm-s').value = hms.s || '';
   updateTimeFee();
 }
  
@@ -17362,10 +17417,10 @@ function renderTimeLog(entries) {
     const fee = (parseFloat(e.hours)||0) * (parseFloat(e.rate)||0);
     return `
       <tr class="${e.billed?'is-billed':''}">
-        <td>${e.date || '—'}</td>
+        <td>${escH(fmtEntryWhen(e))}</td>
         <td style="font-weight:600">${escH(proj?.name || 'Unknown')}</td>
         <td>${escH(personLabel)}</td>
-        <td style="text-align:right">${(parseFloat(e.hours)||0) % 1 === 0 ? parseFloat(e.hours) : (parseFloat(e.hours)||0).toFixed(2)}</td>
+        <td style="text-align:right;font-family:var(--font-b);white-space:nowrap">${escH(fmtDuration(parseFloat(e.hours) || 0))}</td>
         <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
         <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
         <td>${e.billed ? '<span class="tt-billed-pill">Billed</span>' : '<span class="tt-unbilled-pill">Unbilled</span>'}</td>
@@ -17554,7 +17609,9 @@ function openNewTimeModal() {
   $c('tm-person-custom-wrap').style.display = 'none';
   $c('tm-person-custom').value = '';
   $c('tm-rate').value = '195';
-  $c('tm-hours').value = '';
+  $c('tm-h').value = '';
+  $c('tm-m').value = '';
+  $c('tm-s').value = '';
   $c('tm-notes').value = '';
   $c('tm-billed').checked = false;
   $c('tm-fee-val').textContent = '$0.00';
@@ -17577,7 +17634,17 @@ function openEditTimeModal(id) {
   $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
   $c('tm-person-custom').value = isCustom ? e.person : '';
   $c('tm-rate').value = e.rate || '';
-  $c('tm-hours').value = e.hours || '';
+  // Derive h/m/s from whichever is authoritative — durationSeconds wins if present,
+  // else fall back to the legacy decimal-hours field (older rows).
+  const totalSec = (e.durationSeconds != null)
+    ? Number(e.durationSeconds)
+    : Math.round((parseFloat(e.hours) || 0) * 3600);
+  const _eh = Math.floor(totalSec / 3600);
+  const _em = Math.floor((totalSec % 3600) / 60);
+  const _es = totalSec % 60;
+  $c('tm-h').value = _eh || '';
+  $c('tm-m').value = _em || '';
+  $c('tm-s').value = _es || '';
   $c('tm-notes').value = e.notes || '';
   $c('tm-billed').checked = !!e.billed;
   updateTimeFee();
@@ -17600,10 +17667,13 @@ function tmProjectChange() {
 }
  
 function updateTimeFee() {
-  const h = parseFloat($c('tm-hours')?.value) || 0;
+  const h = parseFloat($c('tm-h')?.value) || 0;
+  const m = parseFloat($c('tm-m')?.value) || 0;
+  const s = parseFloat($c('tm-s')?.value) || 0;
+  const decimalHours = hmsToDecimalHours(h, m, s);
   const r = parseFloat($c('tm-rate')?.value) || 0;
   const el = $c('tm-fee-val');
-  if (el) el.textContent = fmt(h * r);
+  if (el) el.textContent = fmt(decimalHours * r);
 }
  
 function saveTimeEntry() {
@@ -17618,23 +17688,38 @@ function saveTimeEntry() {
   const rate     = rateRaw
     ? (parseFloat(rateRaw) || 0)
     : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null);
-  const hours    = parseFloat($c('tm-hours').value) || 0;
+  const hInput   = parseInt($c('tm-h').value, 10) || 0;
+  const mInput   = parseInt($c('tm-m').value, 10) || 0;
+  const sInput   = parseInt($c('tm-s').value, 10) || 0;
+  const hours    = hmsToDecimalHours(hInput, mInput, sInput);
+  const totalSec = Math.round(hours * 3600);
   const date     = $c('tm-date').value;
   const notes    = $c('tm-notes').value.trim();
   const billed   = $c('tm-billed').checked;  // captured for UI; does not drive DB status in Part 2
 
   if (!projId) { $c('tm-project').focus(); return; }
-  if (!hours)  { $c('tm-hours').focus(); return; }
+  if (totalSec <= 0) { $c('tm-h').focus(); toast('Enter a duration.'); return; }
 
-  const data = { projectId: projId, person, rate, hours, date, notes, billed };
+  const data = {
+    projectId: projId, person, rate, hours, date, notes, billed,
+    durationSeconds: totalSec,
+  };
 
-  // If this entry came from stopTimer, preserve the real wall-clock bounds so
-  // started_at / ended_at round-trip the timer precision (to the second).
+  // If this entry came from stopTimer AND the user didn't edit the H/M/S values,
+  // preserve the real wall-clock bounds so started_at / ended_at round-trip
+  // the timer precision (to the millisecond). If the user changed the duration,
+  // we synthesize fresh timestamps from the new total.
   if (_lastTimerBounds) {
-    data.startedAt       = new Date(_lastTimerBounds.startMs).toISOString();
-    data.endedAt         = new Date(_lastTimerBounds.stopMs).toISOString();
-    data.durationSeconds = Math.max(1, Math.round((_lastTimerBounds.stopMs - _lastTimerBounds.startMs) / 1000));
-    _lastTimerBounds = null;   // consume once
+    const timerSec = Math.max(1, Math.round((_lastTimerBounds.stopMs - _lastTimerBounds.startMs) / 1000));
+    if (timerSec === totalSec) {
+      data.startedAt = new Date(_lastTimerBounds.startMs).toISOString();
+      data.endedAt   = new Date(_lastTimerBounds.stopMs).toISOString();
+    } else {
+      // User edited duration — keep the original start, synthesize a new end.
+      data.startedAt = new Date(_lastTimerBounds.startMs).toISOString();
+      data.endedAt   = new Date(_lastTimerBounds.startMs + totalSec * 1000).toISOString();
+    }
+    _lastTimerBounds = null;
   }
 
   if (!S.timeEntries) S.timeEntries = [];
