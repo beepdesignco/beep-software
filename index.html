@@ -11970,7 +11970,7 @@ function renderBrandPicker(hostId, selectedIds, onChange) {
   }).join('');
 
   host.innerHTML = pillHtml +
-    `<button onclick="event.stopPropagation(); __bpOpen('${hostId}')" style="background:none;border:1px dashed var(--border);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);cursor:pointer">+ Add brand</button>`
+    `<button onclick="event.stopPropagation(); __bpNew('${hostId}')" style="background:none;border:1px dashed var(--border);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);cursor:pointer">+ Add brand</button>`
     + `<div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:8px;min-width:260px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:4px"></div>`;
 
   // Stash the change callback + selection list on the host so __bpRemove / __bpPick can access it.
@@ -12519,7 +12519,31 @@ function saveBrand() {
   const name = $c('br-name').value.trim();
   if (!name) { toast('Brand name is required.'); return; }
   const dupe = (S.brands || []).find(b => b.id !== id && (b.name || '').toLowerCase() === name.toLowerCase());
-  if (dupe) { toast('A brand named "' + name + '" already exists.'); return; }
+
+  // Editing an existing brand → still block dupe renames (forces a real
+  // disambiguating name). Creating a new brand → ask: link the existing
+  // entry, or save as a duplicate. Duplicates are intentionally allowed
+  // because a contact may legitimately rep the same brand under a separate
+  // record.
+  if (dupe) {
+    if (id) { toast('A brand named "' + name + '" already exists.'); return; }
+    const wantDupe = confirm(
+      `A brand named "${name}" already exists.\n\n` +
+      `OK = save as a duplicate (new brand entry).\n` +
+      `Cancel = link the existing brand instead.`
+    );
+    if (!wantDupe) {
+      closeModal('modal-brand');
+      const cb0 = _brandSaveCallback; _brandSaveCallback = null;
+      cb0?.(dupe.id);
+      toast(`Linked existing brand "${dupe.name}".`);
+      if ($c('vn-brands-picker')) renderBrandPicker('vn-brands-picker', $c('vn-brands-picker')._selected || [], $c('vn-brands-picker')._onChange);
+      if ($c('vnc-brands-picker')) renderBrandPicker('vnc-brands-picker', $c('vnc-brands-picker')._selected || [], $c('vnc-brands-picker')._onChange);
+      renderContacts();
+      return;
+    }
+    // else fall through and save as a duplicate
+  }
   const fields = {
     name,
     notes: $c('br-notes').value.trim(),
