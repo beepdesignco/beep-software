@@ -6671,8 +6671,10 @@ function renderPMItemCard(item, sp, pid) {
         ${renderInvoiceRefBadges(item.id, 'sm')}
       </div>
       <div style="text-align:right;flex-shrink:0">
-        ${userItemTypePill(item.itemTypeId) ? `<div style="margin-bottom:4px">${userItemTypePill(item.itemTypeId)}</div>` : ''}
-        <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end">
+          ${userItemTypePill(item.itemTypeId)}
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
+        </div>
         ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
         ${item.dueDate ? `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Due: ${escH(item.dueDate)}</div>` : ''}
       </div>
