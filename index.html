@@ -16339,7 +16339,11 @@ function toggleInvLineTrack(idx, checked) {
 }
 
 function recalcInvoice() {
-  const pid = $c('inv-project').value;
+  // The `inv-project` select only exists inside the New Invoice modal. Inside the
+  // invoice builder we have to read the project id off the current invoice itself
+  // — otherwise tax rate falls to 0 because `proj` is undefined.
+  const inv = _currentInvoiceId ? (S.invoices||[]).find(i => i.id === _currentInvoiceId) : null;
+  const pid = inv ? inv.projectId : ($c('inv-project')?.value || '');
   const proj = S.projects.find(p => p.id === pid);
   const taxRate = (proj?.taxRate || 0) / 100;
 
