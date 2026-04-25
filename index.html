@@ -5666,11 +5666,12 @@ function openProjectDetail(pid) {
   S.currentPropProject = pid;
   if (!S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
   // Entering a project from the Projects list always lands on Overview.
-  // Item detail panels and management tab state are local to a session;
-  // reset them so the project opens "fresh."
+  // Item detail panels, management tab state, and any cross-view return flag
+  // are session-local; reset them so the project opens "fresh."
   _projDetailTab = 'overview';
   _pmDetailItem  = null;
   _pmDetailTask  = null;
+  S._returnView  = null;
   save();
   showView('project-detail');
 }
@@ -5688,6 +5689,10 @@ function renderProjectDetail() {
 
   $c('pd-title').textContent = proj.name;
   $c('pd-subtitle').textContent = (getClientName(proj.clientId) || '') + (proj.city ? ' \u00b7 ' + proj.city : '');
+  // Keep the active tab indicator in sync with _projDetailTab — without this,
+  // navigating directly into an item (which forces the Management tab) leaves
+  // Overview highlighted from the initial HTML markup.
+  $a('[data-pdtab]').forEach(b => b.classList.toggle('active', b.dataset.pdtab === _projDetailTab));
   // Top header button reflects the entry context:
   //   • Came from Work + viewing item detail → "Go to Project" (zoom out to overview)
   //   • Otherwise → "Back to Projects" (escape the project entirely)
@@ -7263,15 +7268,15 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   const allNotes = (item.activityLog||[]).slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
   const activityHtml = allNotes.map(note => renderActivityNote(note, pid, spId, itemId)).join('');
 
-  // Show "Back to Work" only when the user came from the Work view.
-  // The previous "Back to Items" button was removed — the items list lives
-  // right under the Management tab, so a one-click escape there is redundant.
-  const backToWorkBtn = (S._returnView === 'work')
+  // Conditional back button on the item detail panel:
+  //   • Came from Work        → "← Back to Work"  (closePMItemDetail handles the redirect)
+  //   • Normal in-project flow → "← Back to Items" (returns to the Management items list)
+  const panelBackBtn = (S._returnView === 'work')
     ? `<button class="btn btn-ghost btn-sm" onclick="closePMItemDetail()" style="margin-bottom:14px;padding-left:0">← Back to Work</button>`
-    : '';
+    : `<button class="btn btn-ghost btn-sm" onclick="closePMItemDetail()" style="margin-bottom:14px;padding-left:0">← Back to Items</button>`;
   return `
   <div>
-    ${backToWorkBtn}
+    ${panelBackBtn}
 
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px">
       <div>
