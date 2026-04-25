@@ -251,7 +251,25 @@ html,body { height:100%; font-family:var(--font-b); background:var(--cloud); col
 .col-cards::-webkit-scrollbar { width:4px; }
 .col-cards::-webkit-scrollbar-thumb { background:rgba(91,45,34,0.15); border-radius:2px; }
 .col-cards.drag-over { background:rgba(150,61,39,0.07); border-radius:4px; }
- 
+
+/* Proposal-row drag-to-reorder. Handle replaces the status dot on hover.
+   Drop targets get a russet top border indicating "insert before this row"
+   or — on the +Add row — "append to this space". */
+.prop-leftcol .prop-drag-handle {
+  display: none;
+  cursor: grab;
+  color: var(--text-light);
+  font-size: 13px;
+  letter-spacing: -2px;
+  user-select: none;
+  padding: 0 2px;
+}
+.prop-leftcol .prop-drag-handle:active { cursor: grabbing; color: var(--russet); }
+.prop-table tr:hover .prop-leftcol .prop-drag-handle { display: inline-block; }
+.prop-table tr:hover .prop-leftcol .prop-status-pill { display: none; }
+.prop-table tr.drag-target-above > td { border-top: 2px solid var(--russet); }
+.prop-table tr.drag-target-end    > td { border-top: 2px solid var(--russet); }
+
 .proj-card {
   background:var(--white);
   border-radius:var(--r);
@@ -10107,7 +10125,10 @@ function renderSpace(sp, pid) {
         </thead>
         <tbody>
           ${rows}
-          <tr class="add-item-tr">
+          <tr class="add-item-tr"
+              ondragover="onAddRowDragOver(event,'${pid}','${sp.id}')"
+              ondragleave="onItemRowDragLeave(event)"
+              ondrop="onAddRowDrop(event,'${pid}','${sp.id}')">
             <td colspan="9">
               <button class="add-item-btn" onclick="openAddItemModal('${pid}','${sp.id}')">+ Add item</button>
             </td>
@@ -10214,8 +10235,19 @@ function renderItemRow(item, spId, pid) {
     : `<span class="status-dot" style="background:${getStatusColor(item.status)}"></span>`;
 
   return `
-    <tr id="row-${item.id}" class="${item._open?'expanded-row':''}" style="cursor:pointer" onclick="openEditItemModal('${pid}','${spId}','${item.id}')">
-      <td style="padding:6px 4px 6px 10px;text-align:center">${statusIndicator}</td>
+    <tr id="row-${item.id}" class="${item._open?'expanded-row':''}" style="cursor:pointer"
+        onclick="openEditItemModal('${pid}','${spId}','${item.id}')"
+        ondragover="onItemRowDragOver(event,'${pid}','${spId}','${item.id}')"
+        ondragleave="onItemRowDragLeave(event)"
+        ondrop="onItemRowDrop(event,'${pid}','${spId}','${item.id}')">
+      <td class="prop-leftcol" style="padding:6px 4px 6px 10px;text-align:center">
+        <span class="prop-status-pill">${statusIndicator}</span>
+        <span class="prop-drag-handle" draggable="true"
+          ondragstart="onItemDragStart(event,'${pid}','${spId}','${item.id}')"
+          ondragend="onItemDragEnd(event)"
+          onclick="event.stopPropagation()"
+          title="Drag to reorder">⋮⋮</span>
+      </td>
       <td style="padding:6px 4px 6px 4px">${itemTypeBadge(item.type)}</td>
       <td style="padding:9px 10px">
         <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.02em;color:var(--mahogany)">${escH(item.name||'—')}</span>
@@ -10250,6 +10282,107 @@ function renderItemRow(item, spId, pid) {
         ${item.notes ? `<div style="padding:8px 14px;font-size:12px;color:var(--text-mid);font-style:italic">${escH(item.notes)}</div>` : ''}
       </td>
     </tr>` : ''}`;
+}
+
+// ── Proposal-row drag-to-reorder ─────────────────────────────
+// Items live in S.proposals[pid].spaces[i].items as an ordered array;
+// dbSpaceToS sorts by sort_order on load (index.html:5879) and the sync
+// engine writes sort_order = array index (6043). So all this UI does is
+// mutate the array order then save() — sort_order is computed downstream.
+let _proposalDrag = null; // { pid, fromSpaceId, itemId }
+
+function onItemDragStart(e, pid, spId, itemId) {
+  e.stopPropagation();
+  _proposalDrag = { pid, fromSpaceId: spId, itemId };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', itemId);
+  const row = $c(`row-${itemId}`);
+  if (row) row.style.opacity = '0.4';
+}
+
+function onItemDragEnd(e) {
+  if (_proposalDrag) {
+    const row = $c(`row-${_proposalDrag.itemId}`);
+    if (row) row.style.opacity = '';
+  }
+  _clearItemDragMarkers();
+  _proposalDrag = null;
+}
+
+function _clearItemDragMarkers() {
+  document.querySelectorAll('.prop-table tr.drag-target-above, .prop-table tr.drag-target-end')
+    .forEach(r => { r.classList.remove('drag-target-above'); r.classList.remove('drag-target-end'); });
+}
+
+function onItemRowDragOver(e, pid, spId, itemId) {
+  if (!_proposalDrag) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  _clearItemDragMarkers();
+  // Don't draw a marker on the row that's being dragged — it'd be a no-op drop.
+  if (itemId !== _proposalDrag.itemId) {
+    e.currentTarget.classList.add('drag-target-above');
+  }
+}
+
+function onItemRowDragLeave(e) {
+  // Only clear if leaving the row entirely (not bubbling from a child)
+  if (e.currentTarget.contains(e.relatedTarget)) return;
+  e.currentTarget.classList.remove('drag-target-above');
+  e.currentTarget.classList.remove('drag-target-end');
+}
+
+function onItemRowDrop(e, pid, spId, itemId) {
+  if (!_proposalDrag) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const drag = _proposalDrag;
+  _proposalDrag = null;
+  _clearItemDragMarkers();
+  if (drag.itemId === itemId) return; // dropped on itself
+  performItemReorder(drag.pid, drag.fromSpaceId, drag.itemId, spId, itemId);
+}
+
+function onAddRowDragOver(e, pid, spId) {
+  if (!_proposalDrag) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  _clearItemDragMarkers();
+  e.currentTarget.classList.add('drag-target-end');
+}
+
+function onAddRowDrop(e, pid, spId) {
+  if (!_proposalDrag) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const drag = _proposalDrag;
+  _proposalDrag = null;
+  _clearItemDragMarkers();
+  performItemReorder(drag.pid, drag.fromSpaceId, drag.itemId, spId, null);
+}
+
+// Move an item within or across spaces. `beforeItemId` = null → append.
+function performItemReorder(pid, fromSpaceId, itemId, toSpaceId, beforeItemId) {
+  const prop = S.proposals[pid];
+  const fromSpace = prop?.spaces.find(s => s.id === fromSpaceId);
+  const toSpace   = prop?.spaces.find(s => s.id === toSpaceId);
+  if (!fromSpace || !toSpace) return;
+
+  const fromIdx = fromSpace.items.findIndex(i => i.id === itemId);
+  if (fromIdx < 0) return;
+  const [item] = fromSpace.items.splice(fromIdx, 1);
+
+  if (beforeItemId) {
+    const targetIdx = toSpace.items.findIndex(i => i.id === beforeItemId);
+    if (targetIdx >= 0) toSpace.items.splice(targetIdx, 0, item);
+    else toSpace.items.push(item);
+  } else {
+    toSpace.items.push(item);
+  }
+
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+  else renderPropBody();
 }
 
 function isFreightItem(item) {
