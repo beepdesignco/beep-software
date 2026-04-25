@@ -1729,6 +1729,13 @@ tr:hover .row-btns { opacity:1; }
           <div class="fg" style="margin-top:8px"><label class="fl">Wire Transfer Instructions <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown when a client chooses to pay by wire (bank, routing #, account #)</span></label>
             <textarea class="fi" id="as-studio-wire" style="min-height:80px;resize:vertical" onchange="saveStudioField('wireInstructions',this.value.trim())" placeholder="Bank: Chase&#10;Routing #: 021000021&#10;Account #: 1234567890&#10;Account Holder: Beep Design LLC"></textarea>
           </div>
+          <div class="fg" style="margin-top:8px">
+            <label class="fl">PO Sidemark Template <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— default sidemark on new POs (manual override always wins)</span></label>
+            <input type="text" class="fi" id="as-studio-sidemark-tpl" onchange="saveStudioField('sidemarkTemplate',this.value.trim())" placeholder="{client.lastName}-{space.name}">
+            <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:6px;line-height:1.6">
+              Tokens: <code>{client.lastName}</code> <code>{client.firstName}</code> <code>{project.name}</code> <code>{project.code}</code> <code>{vendor.name}</code> <code>{space.name}</code> <code>{po.number}</code>
+            </div>
+          </div>
         </div>
 
         <div id="settab-team" class="settings-panel" style="display:none;max-width:780px">
@@ -2314,6 +2321,22 @@ tr:hover .row-btns { opacity:1; }
     <div class="fg">
       <label class="fl">Notes</label>
       <textarea class="fi" id="po-notes" style="resize:vertical;min-height:60px" placeholder="Internal notes about this PO"></textarea>
+    </div>
+    <div id="po-items-section" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <label class="fl">Items on this PO</label>
+      <div id="po-items-list" style="margin-top:6px"></div>
+      <div id="po-add-item-row" style="margin-top:8px;display:flex;gap:6px">
+        <select class="fi fsel" id="po-add-item-select" style="flex:1;font-size:12px"></select>
+        <button class="btn btn-secondary btn-sm" onclick="addItemToPO()">Add</button>
+      </div>
+    </div>
+    <div id="po-files-section" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <label class="fl">Attachments <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(quotes, vendor acknowledgements, packing slips)</span></label>
+      <div id="po-files-list" style="margin-top:6px"></div>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0;margin-top:4px">
+        <span>+ Upload File</span>
+        <input type="file" multiple style="display:none" onchange="handlePOFileUpload(this)">
+      </label>
     </div>
     <div id="po-action-bar" style="display:flex;flex-wrap:wrap;gap:6px;padding-top:14px;border-top:1px solid var(--border);margin-top:4px"></div>
     <div id="po-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-top:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
@@ -4059,6 +4082,18 @@ function openPOEditor(id) {
   $c('po-delete-btn').style.display = po ? '' : 'none';
   $c('po-error').style.display = 'none';
   renderPOActionBar(po);
+  renderPOItemsList(po);
+  renderPOFilesList(po);
+  // Lock the project select once the PO has items attached — switching projects
+  // would orphan their po_id references. User can clear all items first to unlock.
+  const projEl = $c('po-project');
+  if (po && countItemsOnPO(po.id) > 0) {
+    projEl.disabled = true;
+    projEl.style.background = 'rgba(91,45,34,0.04)';
+  } else {
+    projEl.disabled = false;
+    projEl.style.background = '';
+  }
   // For a new PO, propose a sidemark from the template once the user picks
   // a project (resolveSidemark needs project + client + first space).
   if (!po) {
@@ -4098,6 +4133,184 @@ function renderPOActionBar(po) {
     <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-mid);margin-right:8px;align-self:center">Move to:</div>
     ${transitions.map(t => `<button class="btn btn-secondary btn-sm" style="font-size:11px;background:${t.color}18;border-color:${t.color}40;color:${t.color}" onclick="advancePOStatus('${po.id}','${t.v}')">${escH(t.l)}</button>`).join('')}
     ${transitions.length === 0 ? '<div style="font-size:11px;color:var(--text-light);font-style:italic">No further transitions from this state.</div>' : ''}`;
+}
+
+// ── Items on a PO ──────────────────────────────────────────
+// One item belongs to at most one PO at a time. Items can only be on a PO from
+// the same project. Toggle via item.poId.
+
+function getItemsForPO(po) {
+  if (!po || !po.id) return [];
+  const out = [];
+  Object.entries(S.proposals || {}).forEach(([pid, prop]) => {
+    if (po.projectId && pid !== po.projectId) return;
+    (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+      if (it.poId === po.id) out.push({ item: it, pid, spId: sp.id, spaceName: sp.name });
+    }));
+  });
+  return out;
+}
+
+function getAvailableItemsForPO(po) {
+  // Items in the PO's project that aren't on any other PO
+  if (!po || !po.projectId) return [];
+  const prop = S.proposals?.[po.projectId];
+  if (!prop) return [];
+  const out = [];
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+    if (it.poId && it.poId !== po.id) return;     // already on another PO
+    if (it.poId === po.id) return;                 // already on this one (shown in attached list)
+    out.push({ item: it, pid: po.projectId, spId: sp.id, spaceName: sp.name });
+  }));
+  return out.sort((a, b) => (a.spaceName || '').localeCompare(b.spaceName || '') || (a.item.name || '').localeCompare(b.item.name || ''));
+}
+
+function renderPOItemsList(po) {
+  const list = $c('po-items-list');
+  const addRow = $c('po-add-item-row');
+  if (!list) return;
+  if (!po) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">Save the PO first, then add items.</div>';
+    if (addRow) addRow.style.display = 'none';
+    return;
+  }
+  const attached = getItemsForPO(po);
+  if (attached.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No items on this PO yet.</div>';
+  } else {
+    list.innerHTML = attached.map(({ item, pid, spId, spaceName }) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:4px">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(item.name || '(unnamed)')}</div>
+          <div style="font-size:10px;color:var(--text-light)">${escH(spaceName || '')}${item.netPrice ? ' · ' + escH(item.netPrice) : ''}</div>
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="removeItemFromPO('${pid}','${spId}','${item.id}')" style="font-size:10px;padding:3px 8px">Remove</button>
+      </div>`).join('');
+  }
+  // Picker
+  const sel = $c('po-add-item-select');
+  if (sel) {
+    if (!po.projectId) {
+      sel.innerHTML = '<option value="">Pick a project first</option>';
+      sel.disabled = true;
+    } else {
+      const avail = getAvailableItemsForPO(po);
+      sel.disabled = avail.length === 0;
+      sel.innerHTML = avail.length
+        ? '<option value="">— Select an item to add —</option>'
+          + avail.map(({ item, spId, spaceName }) =>
+              `<option value="${spId}|${item.id}">${escH(spaceName || '')} · ${escH(item.name || '(unnamed)')}${item.netPrice ? ' (' + escH(item.netPrice) + ')' : ''}</option>`
+            ).join('')
+        : '<option value="">No unassigned items in this project.</option>';
+    }
+  }
+  if (addRow) addRow.style.display = '';
+}
+
+function addItemToPO() {
+  const poId = $c('po-id').value;
+  if (!poId) { toast('Save the PO first.'); return; }
+  const po = (S.purchaseOrders || []).find(p => p.id === poId);
+  if (!po) return;
+  const sel = $c('po-add-item-select');
+  if (!sel || !sel.value) return;
+  const [spId, itemId] = sel.value.split('|');
+  const prop = S.proposals?.[po.projectId];
+  const sp   = prop?.spaces?.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  if (!item) return;
+  item.poId = po.id;
+  save();
+  renderPOItemsList(po);
+  // Lock the project select now that an item is attached
+  const projEl = $c('po-project');
+  if (projEl) { projEl.disabled = true; projEl.style.background = 'rgba(91,45,34,0.04)'; }
+  toast('Item added to PO.');
+}
+
+function removeItemFromPO(pid, spId, itemId) {
+  const prop = S.proposals?.[pid];
+  const sp   = prop?.spaces?.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  if (!item) return;
+  item.poId = null;
+  save();
+  const po = (S.purchaseOrders || []).find(p => p.id === $c('po-id').value);
+  renderPOItemsList(po);
+  // Unlock the project select if no items remain
+  if (po && countItemsOnPO(po.id) === 0) {
+    const projEl = $c('po-project');
+    if (projEl) { projEl.disabled = false; projEl.style.background = ''; }
+  }
+}
+
+// ── Attachments on a PO ────────────────────────────────────
+
+function renderPOFilesList(po) {
+  const list = $c('po-files-list');
+  if (!list) return;
+  if (!po) { list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">Save the PO first, then attach files.</div>'; return; }
+  const files = po.files || [];
+  if (files.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No attachments yet.</div>';
+    return;
+  }
+  list.innerHTML = files.map(f => `
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:4px">
+      <span style="color:var(--text-light)">📎</span>
+      <a href="#" onclick="event.preventDefault(); viewPOFile('${f.id}')" style="flex:1;font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--russet);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(f.name || 'file')}</a>
+      <span style="font-size:10px;color:var(--text-light)">${f.size ? Math.round(f.size / 1024) + ' KB' : ''}</span>
+      <button class="btn btn-danger btn-sm" onclick="removePOFile('${f.id}')" style="font-size:10px;padding:3px 8px">✕</button>
+    </div>`).join('');
+}
+
+async function handlePOFileUpload(input) {
+  const poId = $c('po-id').value;
+  if (!poId) { toast('Save the PO first.'); input.value = ''; return; }
+  const po = (S.purchaseOrders || []).find(p => p.id === poId);
+  if (!po) return;
+  const files = Array.from(input.files || []);
+  for (const f of files) {
+    try {
+      const record = await uploadFile(f, 'purchase_orders', po.id);
+      if (!Array.isArray(po.files)) po.files = [];
+      po.files.push(record);
+    } catch (e) {
+      console.error('[po file upload]', e);
+      toast('Upload failed: ' + (e?.message || e));
+    }
+  }
+  input.value = '';
+  save();
+  renderPOFilesList(po);
+}
+
+async function viewPOFile(fileId) {
+  const poId = $c('po-id').value;
+  const po = (S.purchaseOrders || []).find(p => p.id === poId);
+  const rec = po?.files?.find(f => f.id === fileId);
+  if (!rec) return;
+  try {
+    const url = await getFileSignedUrl(rec.storagePath);
+    window.open(url, '_blank', 'noopener');
+  } catch (e) {
+    toast('Could not open file: ' + (e?.message || e));
+  }
+}
+
+async function removePOFile(fileId) {
+  const poId = $c('po-id').value;
+  const po = (S.purchaseOrders || []).find(p => p.id === poId);
+  if (!po) return;
+  const rec = po.files?.find(f => f.id === fileId);
+  if (!rec) return;
+  if (!confirm('Remove "' + (rec.name || 'this file') + '"?')) return;
+  if (rec.storagePath && typeof sb !== 'undefined' && sb) {
+    try { await sb.storage.from('files').remove([rec.storagePath]); } catch (_e) {}
+  }
+  po.files = (po.files || []).filter(f => f.id !== fileId);
+  save();
+  renderPOFilesList(po);
 }
 
 // Allowed forward transitions from each status. Cancelled is terminal.
@@ -7129,7 +7342,8 @@ function renderPMItemCard(item, sp, pid) {
         ${renderInvoiceRefBadges(item.id, 'sm')}
       </div>
       <div style="text-align:right;flex-shrink:0">
-        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end">
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          ${itemPOPill(item.poId)}
           ${userItemTypePill(item.itemTypeId)}
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
         </div>
@@ -11906,6 +12120,15 @@ function populateItemTypeSelect(selectedId) {
   sel.innerHTML = opts;
 }
 
+// "On PO #N" pill for items that are on a purchase order. Click opens that PO.
+function itemPOPill(poId) {
+  if (!poId) return '';
+  const po = (S.purchaseOrders || []).find(p => p.id === poId);
+  if (!po) return '';
+  const status = (typeof getPOStatus === 'function') ? getPOStatus(po.status) : { color: 'var(--russet)', l: '' };
+  return `<span onclick="event.stopPropagation(); openPOEditor('${po.id}')" title="Open PO #${po.poNumber}" style="display:inline-block;font-size:9px;font-family:var(--font-b);font-weight:800;letter-spacing:.04em;padding:2px 8px;border-radius:10px;background:${status.color}18;color:${status.color};border:1px solid ${status.color}30;white-space:nowrap;line-height:1.3;cursor:pointer">PO #${po.poNumber}</span>`;
+}
+
 // Small colored pill for the item-type taxonomy. Distinct visual treatment from
 // the legacy itemTypeBadge (RM/CO/OL kind). Returns empty string when no type set.
 function userItemTypePill(itemTypeId) {
@@ -12403,7 +12626,7 @@ function getStudio() {
 
 function loadStudioSettings() {
   const s = getStudio();
-  const map = { 'as-studio-name':'name', 'as-studio-addr1':'address1', 'as-studio-addr2':'address2', 'as-studio-phone':'phone', 'as-studio-email':'email', 'as-studio-website':'website', 'as-studio-check-addr':'checkMailingAddress', 'as-studio-wire':'wireInstructions' };
+  const map = { 'as-studio-name':'name', 'as-studio-addr1':'address1', 'as-studio-addr2':'address2', 'as-studio-phone':'phone', 'as-studio-email':'email', 'as-studio-website':'website', 'as-studio-check-addr':'checkMailingAddress', 'as-studio-wire':'wireInstructions', 'as-studio-sidemark-tpl':'sidemarkTemplate' };
   Object.entries(map).forEach(([id, key]) => {
     const el = $c(id);
     if (el) el.value = s[key] || '';
