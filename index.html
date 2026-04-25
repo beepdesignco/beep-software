@@ -1841,11 +1841,16 @@ tr:hover .row-btns { opacity:1; }
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Item Types</div>
           <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">Optional taxonomy for proposal items — picked when creating or editing an item (e.g. Furniture, Lighting, Plumbing, Hardware, Window Treatment). Pick a color so type pills are easy to scan.</div>
           <div id="as-item-types-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <div style="display:flex;gap:6px;max-width:420px;align-items:center">
+          <div style="display:flex;gap:6px;max-width:420px;align-items:center;margin-bottom:28px">
             <input type="text" class="fi" id="as-item-type-input" placeholder="New item type…" style="flex:1" onkeydown="if(event.key==='Enter'){addItemType();event.preventDefault()}">
             <input type="color" id="as-item-type-color" value="#9F6640" style="width:36px;height:36px;padding:2px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer">
             <button class="btn btn-primary btn-sm" onclick="addItemType()">Add</button>
           </div>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Tax States</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">States where you collect sales tax. Each entry: state name, tax rate, your resale # in that state, and how often you file. Project Settings → State picks from this list and auto-fills the tax rate.</div>
+          <div id="as-tax-states-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+          <button class="btn btn-primary btn-sm" onclick="openTaxStateEditor(null)">+ Add Tax State</button>
         </div>
 
         <div id="settab-reminders" class="settings-panel" style="display:none;max-width:820px">
@@ -3157,6 +3162,50 @@ tr:hover .row-btns { opacity:1; }
 </div>
 
 <!-- ═════════════════ INVOICE NOTE PRESET EDITOR ═════════════════ -->
+<!-- ═════════════════ TAX STATE MODAL ═════════════════ -->
+<div class="overlay" id="modal-tax-state">
+  <div class="modal" style="width:520px">
+    <button class="modal-x" onclick="closeModal('modal-tax-state')">✕</button>
+    <div class="modal-title" id="ts-modal-title">Tax State</div>
+    <input type="hidden" id="ts-id">
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">State</label>
+        <input type="text" class="fi" id="ts-name" placeholder="e.g. Louisiana">
+      </div>
+      <div class="fg" style="max-width:140px">
+        <label class="fl">Tax Rate %</label>
+        <input type="number" class="fi" id="ts-rate" min="0" step="0.01" placeholder="9.45">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Resale # <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(your studio's resale certificate number for this state)</span></label>
+      <input type="text" class="fi" id="ts-resale" placeholder="Resale or seller's permit number">
+    </div>
+    <div class="fg">
+      <label class="fl">Filing Frequency</label>
+      <select class="fi fsel" id="ts-frequency">
+        <option value="">— Pick one —</option>
+        <option value="monthly">Monthly</option>
+        <option value="quarterly">Quarterly</option>
+        <option value="bi-annually">Bi-annually</option>
+        <option value="annually">Annually</option>
+      </select>
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="ts-notes" style="resize:vertical;min-height:50px" placeholder="Filing portal URL, payment dates, anything useful at filing time…"></textarea>
+    </div>
+    <div id="ts-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="ts-delete-btn" style="display:none" onclick="deleteTaxState($c('ts-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-tax-state')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTaxState()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="modal-invoice-note">
   <div class="modal" style="width:520px">
     <button class="modal-x" onclick="closeModal('modal-invoice-note')">✕</button>
@@ -5421,6 +5470,7 @@ async function loadFromSupabase() {
   S.pipelineStatusOrder  = studioSettings.pipeline_status_order || [];
   S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
   S.vendorTypes      = Array.isArray(studioSettings.vendor_types) ? studioSettings.vendor_types : [];
+  S.taxStates        = Array.isArray(studioSettings.tax_states)   ? studioSettings.tax_states   : [];
   S.studio       = AUTH.studio.studio_info || {};
 
   // One-time fold of legacy S.contacts → vendors + vendor_contacts. Runs on
@@ -6438,6 +6488,7 @@ async function syncToSupabase() {
       pipeline_status_order: S.pipelineStatusOrder || [],
       categories:    S.categories   || [],
       vendor_types:  S.vendorTypes  || [],
+      tax_states:    S.taxStates    || [],
     };
     const currentInfo = S.studio || {};
     if (!_deepEq(currentSettings, _sbShadow.studioSettings) || !_deepEq(currentInfo, _sbShadow.studioInfo)) {
@@ -6601,6 +6652,7 @@ let S = {
   itemTypes: [],
   purchaseOrders: [],
   submittals: [],
+  taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -9611,8 +9663,9 @@ function renderPDSettings(proj, pid) {
         <input type="number" class="fi" id="pds-markup" min="0" step="1" value="${proj.markupPct != null ? proj.markupPct : 25}" onchange="savePDSetting('${pid}','markupPct',parseFloat(this.value)||25)">
       </div>
       <div class="fg">
-        <label class="fl">State</label>
-        <input type="text" class="fi" id="pds-state" value="${escH(proj.state||'')}" onchange="savePDSetting('${pid}','state',this.value.trim())">
+        <label class="fl">State <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(picks tax rate from App Settings → Categories → Tax States)</span></label>
+        <input type="text" class="fi" id="pds-state" value="${escH(proj.state||'')}" list="pds-state-list" onchange="onProjectStateChange('${pid}', this.value.trim())">
+        <datalist id="pds-state-list">${(S.taxStates||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(s => `<option value="${escH(s.name)}">`).join('')}</datalist>
       </div>
     </div>
     <div class="frow">
@@ -9643,6 +9696,23 @@ function savePDSetting(pid, key, val) {
   p[key] = val;
   save();
   toast('Setting updated.');
+}
+
+// State change on the project — if the typed state matches one in App Settings
+// → Tax States, auto-fill the project's tax rate from the matched entry.
+// Manual override still works: the user can edit Tax Rate % afterward.
+function onProjectStateChange(pid, name) {
+  const p = S.projects.find(x => x.id === pid);
+  if (!p) return;
+  p.state = name;
+  const matched = name ? getTaxState(name) : null;
+  if (matched) {
+    p.taxRate = Number(matched.taxRate) || 0;
+    const rateInput = $c('pds-taxrate');
+    if (rateInput) rateInput.value = p.taxRate;
+    toast('Tax rate filled from "' + matched.name + '" (' + p.taxRate + '%).');
+  }
+  save();
 }
 
 // ─── PROJECTS ─────────────────────────────────────────────
@@ -12502,7 +12572,7 @@ function setSettingsTab(tab) {
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'notes')  renderInvoiceNotesList();
-  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); }
+  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); }
   if (tab === 'reminders') renderRemindersPanel();
 }
 
@@ -12958,6 +13028,121 @@ function removeItemType(id) {
   });
   save();
   renderItemTypesList();
+}
+
+// ── Tax States ──────────────────────────────────────────────
+// One studio-managed list of states where the studio collects sales tax.
+// Project Settings → State picks from this list and auto-fills the project's
+// tax rate. Reports break out by state so filing season is bearable.
+
+function getTaxState(name) {
+  return (S.taxStates || []).find(s => (s.name || '').toLowerCase() === String(name || '').toLowerCase()) || null;
+}
+
+function projectsUsingTaxState(name) {
+  const lower = String(name || '').toLowerCase();
+  return (S.projects || []).filter(p => (p.state || '').toLowerCase() === lower);
+}
+
+function fmtFreq(f) {
+  return ({ 'monthly':'Monthly', 'quarterly':'Quarterly', 'bi-annually':'Bi-annually', 'annually':'Annually' })[f] || '—';
+}
+
+function renderTaxStatesList() {
+  const el = $c('as-tax-states-list');
+  if (!el) return;
+  const states = (S.taxStates || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  if (!states.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:8px 0">No tax states yet. Add one below.</div>';
+    return;
+  }
+  el.innerHTML = states.map(t => {
+    const projCount = projectsUsingTaxState(t.name).length;
+    return `
+    <div onclick="openTaxStateEditor('${t.id}')" style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--russet)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(t.name)}</span>
+          <span style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-mid);margin-left:10px">${(Number(t.taxRate)||0).toFixed(2)}%</span>
+        </div>
+        <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b);text-transform:uppercase;letter-spacing:0.06em">${fmtFreq(t.filingFrequency)}${projCount ? ' · ' + projCount + ' project' + (projCount!==1?'s':'') : ''}</div>
+      </div>
+      ${t.resaleNumber ? `<div style="font-size:11px;color:var(--text-mid);margin-top:4px">Resale # ${escH(t.resaleNumber)}</div>` : ''}
+      ${t.notes ? `<div style="font-size:10px;color:var(--text-light);margin-top:3px;font-style:italic">${escH(t.notes)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function openTaxStateEditor(id) {
+  const t = id ? (S.taxStates || []).find(x => x.id === id) : null;
+  $c('ts-modal-title').textContent = t ? 'Edit Tax State' : 'New Tax State';
+  $c('ts-id').value = t?.id || '';
+  $c('ts-name').value = t?.name || '';
+  $c('ts-rate').value = t?.taxRate != null ? t.taxRate : '';
+  $c('ts-resale').value = t?.resaleNumber || '';
+  $c('ts-frequency').value = t?.filingFrequency || '';
+  $c('ts-notes').value = t?.notes || '';
+  $c('ts-delete-btn').style.display = t ? '' : 'none';
+  $c('ts-error').style.display = 'none';
+  $c('modal-tax-state').classList.add('open');
+  setTimeout(() => $c('ts-name').focus(), 80);
+}
+
+function saveTaxState() {
+  const id = $c('ts-id').value;
+  const name = $c('ts-name').value.trim();
+  if (!name) { showTaxStateErr('Enter the state name.'); return; }
+  const dupe = (S.taxStates || []).find(s => s.id !== id && (s.name||'').toLowerCase() === name.toLowerCase());
+  if (dupe) { showTaxStateErr('"' + name + '" already exists.'); return; }
+  const fields = {
+    name,
+    taxRate: parseFloat($c('ts-rate').value) || 0,
+    resaleNumber: $c('ts-resale').value.trim(),
+    filingFrequency: $c('ts-frequency').value,
+    notes: $c('ts-notes').value.trim(),
+  };
+  if (id) {
+    const t = (S.taxStates || []).find(x => x.id === id);
+    if (t) Object.assign(t, fields);
+    // If the tax rate changed, prompt to cascade to existing projects on this state
+    cascadeTaxRateToProjects(name, fields.taxRate);
+  } else {
+    if (!S.taxStates) S.taxStates = [];
+    S.taxStates.push({ id: uid(), ...fields });
+  }
+  save();
+  closeModal('modal-tax-state');
+  renderTaxStatesList();
+  toast(id ? 'Tax state updated.' : 'Tax state added.');
+}
+
+// When a state's rate changes, offer to update existing projects on that state.
+// Without this, projects keep their original rate even though the state moved.
+function cascadeTaxRateToProjects(stateName, newRate) {
+  const projs = projectsUsingTaxState(stateName).filter(p => Number(p.taxRate) !== Number(newRate));
+  if (projs.length === 0) return;
+  if (!confirm(projs.length + ' project' + (projs.length!==1?'s':'') + ' on "' + stateName + '" currently use a different tax rate. Update them all to ' + newRate + '%?')) return;
+  projs.forEach(p => { p.taxRate = newRate; });
+}
+
+function deleteTaxState(id) {
+  const t = (S.taxStates || []).find(x => x.id === id);
+  if (!t) return;
+  const projCount = projectsUsingTaxState(t.name).length;
+  let msg = 'Delete tax state "' + t.name + '"?';
+  if (projCount) msg += '\n\n' + projCount + ' project' + (projCount!==1?'s':'') + ' currently use this state — they keep their state name and tax rate, but will no longer auto-fill from this entry.';
+  if (!confirm(msg)) return;
+  S.taxStates = (S.taxStates || []).filter(x => x.id !== id);
+  save();
+  closeModal('modal-tax-state');
+  renderTaxStatesList();
+}
+
+function showTaxStateErr(msg) {
+  const el = $c('ts-error');
+  if (!el) return;
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else     { el.style.display = 'none'; }
 }
 
 // Combine selected preset bodies + the invoice's free-form notes into a single
