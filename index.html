@@ -4577,8 +4577,8 @@ function renderSubStatusFilters() {
     + chip('Complete', 'complete', _subStatusFilter === 'complete', '#1a6e3a', complete);
 }
 
-// Resolve a signer to a display name. Prefer vendor_contact lookup; fall back
-// to legacy contact lookup; final fallback is the stored snapshot.
+// Resolve a signer to a display name. A signer is one of: vendor_contact,
+// client, or legacy contact (in priority order).
 function signerDisplayName(r) {
   if (r.vendorContactId) {
     const vc = (S.vendorContacts || []).find(c => c.id === r.vendorContactId);
@@ -4586,6 +4586,10 @@ function signerDisplayName(r) {
       const v = (S.vendors || []).find(x => x.id === vc.vendorId);
       return vc.name + (v?.name ? ' · ' + v.name : '');
     }
+  }
+  if (r.clientId) {
+    const cl = (S.clients || []).find(x => x.id === r.clientId);
+    if (cl) return cl.name + ' · Client';
   }
   if (r.contactId) {
     const c = (S.contacts || []).find(x => x.id === r.contactId);
@@ -4644,19 +4648,33 @@ function renderSubSignersList(sub) {
         </div>`;
     }).join('');
   }
-  // Picker for available vendor_contacts not already added as signers
+  // Picker for available signers — a mix of vendor_contacts and clients,
+  // grouped under <optgroup> headers. Encoded as "kind:id" so the add handler
+  // knows which FK column to populate.
   const sel = $c('sub-add-signer-select');
   if (sel) {
-    const taken = new Set((sub.signers || []).map(r => r.vendorContactId).filter(Boolean));
-    const avail = (S.vendorContacts || []).filter(vc => !taken.has(vc.id))
+    const takenVC = new Set((sub.signers || []).map(r => r.vendorContactId).filter(Boolean));
+    const takenCl = new Set((sub.signers || []).map(r => r.clientId).filter(Boolean));
+    const vcs = (S.vendorContacts || []).filter(vc => !takenVC.has(vc.id))
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    sel.innerHTML = avail.length
-      ? '<option value="">— Add a signer —</option>'
-        + avail.map(vc => {
+    const cls = (S.clients || []).filter(cl => !takenCl.has(cl.id))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    let html = '<option value="">— Add a signer —</option>';
+    if (cls.length) {
+      html += '<optgroup label="Clients">'
+        + cls.map(cl => `<option value="client:${cl.id}">${escH(cl.name)}</option>`).join('')
+        + '</optgroup>';
+    }
+    if (vcs.length) {
+      html += '<optgroup label="Contacts">'
+        + vcs.map(vc => {
             const v = (S.vendors || []).find(x => x.id === vc.vendorId);
-            return `<option value="${vc.id}">${escH(vc.name)}${v?.name ? ' · ' + escH(v.name) : ''}</option>`;
+            return `<option value="vc:${vc.id}">${escH(vc.name)}${v?.name ? ' · ' + escH(v.name) : ''}</option>`;
           }).join('')
-      : '<option value="">No more contacts to add. Create one in Contacts first.</option>';
+        + '</optgroup>';
+    }
+    if (!cls.length && !vcs.length) html = '<option value="">No more clients/contacts to add.</option>';
+    sel.innerHTML = html;
   }
   if (addRow) addRow.style.display = '';
 }
@@ -4667,12 +4685,14 @@ function addSubmittalSigner() {
   const sub = (S.submittals || []).find(s => s.id === subId);
   if (!sub) return;
   const sel = $c('sub-add-signer-select');
-  const vendorContactId = sel?.value;
-  if (!vendorContactId) return;
+  const raw = sel?.value || '';
+  if (!raw) return;
+  const [kind, refId] = raw.split(':');
   if (!sub.signers) sub.signers = [];
   sub.signers.push({
     id: uid(),
-    vendorContactId,
+    vendorContactId: kind === 'vc'     ? refId : null,
+    clientId:        kind === 'client' ? refId : null,
     contactId: null,
     signedOff: false,
     signedOffAt: null,
@@ -5442,6 +5462,7 @@ function dbSubmittalSignerToS(r) {
     id: r.id,
     submittalId: r.submittal_id,
     vendorContactId: r.vendor_contact_id || null,
+    clientId: r.client_id || null,
     contactId: r.contact_id || null,         // legacy fallback only
     signedOff: !!r.signed_off,
     signedOffAt: r.signed_off_at || null,
@@ -5908,6 +5929,7 @@ function submittalSignerToDB(r) {
     id: r.id,
     submittal_id: r._submittalId,
     vendor_contact_id: r.vendorContactId || null,
+    client_id: r.clientId || null,
     contact_id: r.contactId || null,
     signed_off: !!r.signedOff,
     signed_off_at: r.signedOffAt || null,
