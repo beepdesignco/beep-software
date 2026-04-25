@@ -1308,7 +1308,7 @@ tr:hover .row-btns { opacity:1; }
     <div class="view" id="view-project-detail">
       <div class="page-header" style="border-bottom:none;padding-bottom:0">
         <div>
-          <button class="btn btn-ghost btn-sm" onclick="showView('projects')" style="margin-bottom:6px;padding-left:0">← Back to Projects</button>
+          <button class="btn btn-ghost btn-sm" onclick="backFromProjectDetail()" style="margin-bottom:6px;padding-left:0" id="pd-back-btn">← Back to Projects</button>
           <div class="page-title" id="pd-title"></div>
           <div class="page-sub" id="pd-subtitle"></div>
         </div>
@@ -1641,7 +1641,7 @@ tr:hover .row-btns { opacity:1; }
     <div class="view" id="view-invoice-builder">
       <div class="page-header" style="border-bottom:none;padding-bottom:0">
         <div>
-          <button class="btn btn-ghost btn-sm" onclick="showView('invoices')" style="margin-bottom:6px;padding-left:0">← Back to Invoices</button>
+          <button class="btn btn-ghost btn-sm" onclick="backFromInvoiceBuilder()" style="margin-bottom:6px;padding-left:0">← Back to Invoices</button>
           <div class="page-title" id="invb-title">Invoice</div>
           <div class="page-sub" id="invb-subtitle"></div>
         </div>
@@ -3539,7 +3539,7 @@ function _workItemRowHtml(r) {
   const statusLabel = (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(r.statusV) : r.statusV;
   const color = (typeof getStatusColor === 'function') ? getStatusColor(r.statusV) : 'var(--text-mid)';
   return `
-    <div onclick="_workOpenRow('item', '${r.id}', '${r.pid}')" style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
+    <div onclick="_workOpenItem('${r.pid}','${r.spaceId}','${r.id}')" style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
       <div style="flex:1;min-width:0">
         <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(r.item?.name || '(unnamed)')}</div>
         <div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(r.project?.name || '')}${r.vendorName ? ' · ' + escH(r.vendorName) : ' · —'}</div>
@@ -3547,6 +3547,39 @@ function _workItemRowHtml(r) {
       <span style="display:inline-block;font-size:10px;font-family:var(--font-b);font-weight:700;padding:3px 9px;border-radius:10px;background:${color}18;color:${color};border:1px solid ${color}30;flex-shrink:0">${escH(statusLabel)}</span>
       <span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>
     </div>`;
+}
+
+// Open an item directly to its detail panel inside the Project Management
+// tab, and remember that we came from Work so back navigation returns there
+// instead of bouncing through the items list / project detail.
+function _workOpenItem(pid, spId, itemId) {
+  S._returnView = 'work';
+  S._detailProjectId = pid;
+  S.currentPropProject = pid;
+  if (!S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
+  _projDetailTab = 'management';
+  _pmDetailItem = { pid, spId, itemId };
+  _pmDetailTask = null;
+  showView('project-detail');
+}
+
+// Back-button routing helper. When the user came from the Work view, route
+// straight back to it; otherwise fall through to the natural default.
+function backFromProjectDetail() {
+  if (S._returnView === 'work') {
+    S._returnView = null;
+    showView('work');
+  } else {
+    showView('projects');
+  }
+}
+function backFromInvoiceBuilder() {
+  if (S._returnView === 'work') {
+    S._returnView = null;
+    showView('work');
+  } else {
+    showView('invoices');
+  }
 }
 
 function _workSystemEventRowHtml(e) {
@@ -3690,15 +3723,18 @@ function _workOpenRow(kind, id, pid) {
     return;
   }
   if (kind === 'invoice') {
+    S._returnView = 'work';
     if (typeof openInvoiceBuilder === 'function') openInvoiceBuilder(id);
     return;
   }
-  if (kind === 'task' || kind === 'item') {
+  if (kind === 'task') {
     if (pid) {
+      S._returnView = 'work';
       S._detailProjectId = pid;
-      if (kind === 'task') _pmDetailTask = id;
+      _pmDetailTask = id;
       showView('project-detail');
     }
+    return;
   }
 }
 
@@ -5639,6 +5675,9 @@ function renderProjectDetail() {
 
   $c('pd-title').textContent = proj.name;
   $c('pd-subtitle').textContent = (getClientName(proj.clientId) || '') + (proj.city ? ' \u00b7 ' + proj.city : '');
+  // Reflect the return-view in the back button label
+  const backBtn = $c('pd-back-btn');
+  if (backBtn) backBtn.textContent = (S._returnView === 'work') ? '← Back to Work' : '← Back to Projects';
 
   const body = $c('pd-body');
   if (_projDetailTab === 'overview')    body.innerHTML = renderPDOverview(proj, pid);
@@ -5928,6 +5967,13 @@ function openPMItemDetail(pid, spId, itemId) {
 
 function closePMItemDetail() {
   _pmDetailItem = null;
+  // If we were brought here from Work, jump straight back instead of dropping
+  // the user on the items list of the project they may not have wanted to be in.
+  if (S._returnView === 'work') {
+    S._returnView = null;
+    showView('work');
+    return;
+  }
   renderProjectDetail();
 }
 
