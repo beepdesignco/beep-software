@@ -1308,7 +1308,7 @@ tr:hover .row-btns { opacity:1; }
     <div class="view" id="view-project-detail">
       <div class="page-header" style="border-bottom:none;padding-bottom:0">
         <div>
-          <button class="btn btn-ghost btn-sm" onclick="backFromProjectDetail()" style="margin-bottom:6px;padding-left:0" id="pd-back-btn">← Back to Projects</button>
+          <button class="btn btn-ghost btn-sm" id="pd-back-btn" style="margin-bottom:6px;padding-left:0">← Back to Projects</button>
           <div class="page-title" id="pd-title"></div>
           <div class="page-sub" id="pd-subtitle"></div>
         </div>
@@ -3565,13 +3565,20 @@ function _workOpenItem(pid, spId, itemId) {
 
 // Back-button routing helper. When the user came from the Work view, route
 // straight back to it; otherwise fall through to the natural default.
+// "Go to Project" when the user came from Work: keep them on this project,
+// drop the item detail panel, switch to Overview, and clear the return-view
+// flag so subsequent back-button presses behave normally.
+function goToProjectFromItem() {
+  S._returnView = null;
+  _pmDetailItem = null;
+  _pmDetailTask = null;
+  _projDetailTab = 'overview';
+  renderProjectDetail();
+}
+
+// Default top-header back button — used when there's no special return-view set.
 function backFromProjectDetail() {
-  if (S._returnView === 'work') {
-    S._returnView = null;
-    showView('work');
-  } else {
-    showView('projects');
-  }
+  showView('projects');
 }
 function backFromInvoiceBuilder() {
   if (S._returnView === 'work') {
@@ -5658,6 +5665,12 @@ function openProjectDetail(pid) {
   S._detailProjectId = pid;
   S.currentPropProject = pid;
   if (!S.proposals[pid]) S.proposals[pid] = { spaces:[], freight:'', tax:'' };
+  // Entering a project from the Projects list always lands on Overview.
+  // Item detail panels and management tab state are local to a session;
+  // reset them so the project opens "fresh."
+  _projDetailTab = 'overview';
+  _pmDetailItem  = null;
+  _pmDetailTask  = null;
   save();
   showView('project-detail');
 }
@@ -5675,9 +5688,19 @@ function renderProjectDetail() {
 
   $c('pd-title').textContent = proj.name;
   $c('pd-subtitle').textContent = (getClientName(proj.clientId) || '') + (proj.city ? ' \u00b7 ' + proj.city : '');
-  // Reflect the return-view in the back button label
+  // Top header button reflects the entry context:
+  //   • Came from Work + viewing item detail → "Go to Project" (zoom out to overview)
+  //   • Otherwise → "Back to Projects" (escape the project entirely)
   const backBtn = $c('pd-back-btn');
-  if (backBtn) backBtn.textContent = (S._returnView === 'work') ? '← Back to Work' : '← Back to Projects';
+  if (backBtn) {
+    if (S._returnView === 'work' && _pmDetailItem) {
+      backBtn.textContent = 'Go to Project';
+      backBtn.onclick = goToProjectFromItem;
+    } else {
+      backBtn.textContent = '← Back to Projects';
+      backBtn.onclick = backFromProjectDetail;
+    }
+  }
 
   const body = $c('pd-body');
   if (_projDetailTab === 'overview')    body.innerHTML = renderPDOverview(proj, pid);
@@ -7240,9 +7263,15 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   const allNotes = (item.activityLog||[]).slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
   const activityHtml = allNotes.map(note => renderActivityNote(note, pid, spId, itemId)).join('');
 
+  // Show "Back to Work" only when the user came from the Work view.
+  // The previous "Back to Items" button was removed — the items list lives
+  // right under the Management tab, so a one-click escape there is redundant.
+  const backToWorkBtn = (S._returnView === 'work')
+    ? `<button class="btn btn-ghost btn-sm" onclick="closePMItemDetail()" style="margin-bottom:14px;padding-left:0">← Back to Work</button>`
+    : '';
   return `
   <div>
-    <button class="btn btn-ghost btn-sm" onclick="closePMItemDetail()" style="margin-bottom:14px;padding-left:0">← Back to Items</button>
+    ${backToWorkBtn}
 
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px">
       <div>
