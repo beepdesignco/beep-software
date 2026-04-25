@@ -1219,6 +1219,11 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◈</span>
         <span class="nav-label">Projects</span>
       </div>
+      <div class="nav-item" onclick="showView('work')" data-view="work">
+        <span class="nav-icon">▣</span>
+        <span class="nav-label">Work</span>
+        <span class="nav-badge" id="nav-work-badge" style="display:none;margin-left:auto;background:var(--russet);color:white;font-family:var(--font-b);font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;min-width:18px;text-align:center">0</span>
+      </div>
       <div class="nav-item" onclick="showView('clients')" data-view="clients">
         <span class="nav-icon">◇</span>
         <span class="nav-label">Clients</span>
@@ -1282,6 +1287,21 @@ tr:hover .row-btns { opacity:1; }
         <button class="btn btn-primary" onclick="openNewProjModal()">+ New Project</button>
       </div>
       <div class="projects-body" id="projects-board"><!-- rendered by JS --></div>
+    </div>
+
+    <!-- ─────────── WORK QUEUE VIEW ─────────── -->
+    <div class="view" id="view-work">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Work</div>
+          <div class="page-sub">Everything asking for attention across the studio.</div>
+        </div>
+        <div class="view-tabs">
+          <button class="view-tab active" data-wscope="my"  onclick="setWorkScope('my')">My Work</button>
+          <button class="view-tab"        data-wscope="all" onclick="setWorkScope('all')">All Work</button>
+        </div>
+      </div>
+      <div id="work-body" style="padding:20px 30px"></div>
     </div>
 
     <!-- ─────────── PROJECT DETAIL VIEW ─────────── -->
@@ -3369,6 +3389,378 @@ async function markAllNotificationsRead() {
   renderNotificationPanel();
 }
 
+// ═════════════════════════════════════════════════════════════
+// WORK QUEUE v1 (U1.5)
+// Cross-project "awaiting action" / "in progress" / "recent activity" roll-up.
+// Pulls from existing in-memory state (S.proposals, S.invoices, NOTIFICATIONS)
+// and, for Section C, from the activity_entries table directly.
+// No new DB objects (other than proposal_items.assignee_user_id from phase0_10).
+// ═════════════════════════════════════════════════════════════
+
+let _workScope = 'all';              // 'my' | 'all' — default set below based on role
+let _workScopeInitialized = false;
+let _workSystemEvents = [];          // Cache of recent activity_entries rows (source='system')
+const _workChannels = [];            // Realtime channels, created on first Work view mount
+
+function initWorkScopeDefault() {
+  if (_workScopeInitialized) return;
+  const role = AUTH.member?.role;
+  const finOk = !!AUTH.member?.can_view_financials;
+  _workScope = (role === 'owner' || finOk) ? 'all' : 'my';
+  _workScopeInitialized = true;
+}
+
+function setWorkScope(scope) {
+  _workScope = scope;
+  $a('[data-wscope]').forEach(b => b.classList.toggle('active', b.dataset.wscope === scope));
+  renderWork();
+  updateWorkBadge();
+}
+
+// ── Data accessors ──
+
+function _workOpenTasks() {
+  // Tasks live in S.proposals[pid].projectTasks (jsonb array). Terminal status
+  // per convention: 'Completed'. Task shape has no assignee field today, so My
+  // Work shows nothing task-wise until a future pass adds one. Expected per spec.
+  const out = [];
+  Object.keys(S.proposals || {}).forEach(pid => {
+    const prop = S.proposals[pid]; if (!prop) return;
+    const proj = (S.projects || []).find(p => p.id === pid);
+    (prop.projectTasks || []).forEach(t => {
+      if ((t.status || '').toLowerCase() === 'completed') return;
+      if (_workScope === 'my') {
+        if (!t.assigneeUserId || t.assigneeUserId !== AUTH.user?.id) return;
+      }
+      out.push({ kind: 'task', id: t.id, title: t.name || '(untitled task)', project: proj, pid, subtitle: t.status || '', updatedAt: t.created || null });
+    });
+  });
+  return out;
+}
+
+function _workOverdueInvoices() {
+  const today = new Date().toISOString().slice(0, 10);
+  return (S.invoices || [])
+    .filter(inv => !inv.deletedAt && (inv.status === 'sent' || inv.status === 'partial'))
+    .filter(inv => inv.dueDate && inv.dueDate < today)
+    .filter(inv => _workScope === 'all' || inv.createdByUserId === AUTH.user?.id)
+    .map(inv => {
+      const proj = (S.projects || []).find(p => p.id === inv.projectId);
+      return { kind: 'invoice', id: inv.id, title: 'Invoice ' + (inv.number || '') + ' overdue', project: proj, pid: inv.projectId, subtitle: 'Due ' + inv.dueDate, updatedAt: inv.dueDate };
+    });
+}
+
+function _workUnreadNotifications() {
+  // Always the current user's unread — scope toggle doesn't apply to personal notifications.
+  return (NOTIFICATIONS.items || [])
+    .filter(n => !n.read_at)
+    .map(n => {
+      const linkPid = n.link_entity_type === 'project' ? n.link_entity_id : null;
+      const proj = linkPid ? (S.projects || []).find(p => p.id === linkPid) : null;
+      return { kind: 'notification', id: n.id, title: n.message || n.type || 'Notification', project: proj, pid: linkPid, subtitle: '', updatedAt: n.created_at };
+    });
+}
+
+function _workInProgressItems() {
+  // Every proposal_item whose status v-code is NOT 'installed' (terminal preset).
+  // Custom statuses pass through as-is — treated as non-terminal in v1.
+  const out = [];
+  Object.keys(S.proposals || {}).forEach(pid => {
+    const prop = S.proposals[pid]; if (!prop) return;
+    const proj = (S.projects || []).find(p => p.id === pid);
+    (prop.spaces || []).forEach(sp => {
+      (sp.items || []).forEach(it => {
+        if (it.status === 'installed') return;
+        if (_workScope === 'my') {
+          if (!it.assigneeUserId || it.assigneeUserId !== AUTH.user?.id) return;
+        }
+        const vendor = it.vendorId ? (S.vendors || []).find(v => v.id === it.vendorId) : null;
+        out.push({
+          kind: 'item', id: it.id, item: it, project: proj, pid, spaceId: sp.id,
+          vendorName: vendor?.name || '',
+          statusV: it.status || 'proposed',
+          updatedAt: it.updatedAt || it.created || null,
+        });
+      });
+    });
+  });
+  // Most recently updated first
+  out.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return out;
+}
+
+// ── Helpers ──
+
+function _workAge(ts) {
+  if (!ts) return '';
+  const t = new Date(ts).getTime();
+  if (isNaN(t)) return '';
+  const diff = Date.now() - t;
+  const days = Math.floor(diff / 86400000);
+  if (days < 1) {
+    const hours = Math.floor(diff / 3600000);
+    if (hours < 1) return 'just now';
+    return hours + 'h';
+  }
+  if (days < 14) return days + 'd';
+  if (days < 60) return Math.floor(days / 7) + 'w';
+  return Math.floor(days / 30) + 'mo';
+}
+
+function _workEventIcon(eventType) {
+  const prefix = String(eventType || '').split('.')[0];
+  return {
+    invoice: '◎',
+    item:    '◆',
+    po:      '⊞',
+    rfi:     '?',
+    submittal:'✓',
+    task:    '☐',
+  }[prefix] || '•';
+}
+
+function _workRowHtml(row) {
+  const iconByKind = { task: '☐', invoice: '◎', notification: '🔔' };
+  const icon = iconByKind[row.kind] || '•';
+  const age = _workAge(row.updatedAt);
+  const projName = row.project?.name || '';
+  return `
+    <div onclick="_workOpenRow('${row.kind}', '${row.id}', '${row.pid || ''}')" style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
+      <span style="width:20px;text-align:center;color:var(--russet);font-size:13px;flex-shrink:0">${icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(row.title)}</div>
+        <div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(projName)}${row.subtitle ? ' · ' + escH(row.subtitle) : ''}${age ? ' · ' + age : ''}</div>
+      </div>
+      <span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>
+    </div>`;
+}
+
+function _workItemRowHtml(r) {
+  const statusLabel = (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(r.statusV) : r.statusV;
+  const color = (typeof getStatusColor === 'function') ? getStatusColor(r.statusV) : 'var(--text-mid)';
+  return `
+    <div onclick="_workOpenRow('item', '${r.id}', '${r.pid}')" style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(r.item?.name || '(unnamed)')}</div>
+        <div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(r.project?.name || '')}${r.vendorName ? ' · ' + escH(r.vendorName) : ' · —'}</div>
+      </div>
+      <span style="display:inline-block;font-size:10px;font-family:var(--font-b);font-weight:700;padding:3px 9px;border-radius:10px;background:${color}18;color:${color};border:1px solid ${color}30;flex-shrink:0">${escH(statusLabel)}</span>
+      <span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>
+    </div>`;
+}
+
+function _workSystemEventRowHtml(e) {
+  const icon = _workEventIcon(e.event_type);
+  const proj = (S.projects || []).find(p => p.id === e.parent_id);
+  const age = _workAge(e.created_at);
+  return `
+    <div onclick="_workOpenEntity('${e.entity_type}', '${e.entity_id}', '${e.parent_id || ''}')" style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
+      <span style="width:20px;text-align:center;color:var(--russet);font-size:13px;flex-shrink:0">${icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.text || e.event_type || '')}</div>
+        <div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(proj?.name || '')}${age ? ' · ' + age : ''}</div>
+      </div>
+      <span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>
+    </div>`;
+}
+
+function _workSectionCard(title, count, bodyHtml) {
+  return `
+    <div style="margin-bottom:22px;background:white;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden">
+      <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:rgba(91,45,34,0.02)">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mahogany)">${escH(title)}</div>
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-weight:700">${count}</span>
+      </div>
+      ${bodyHtml}
+    </div>`;
+}
+
+function _workEmpty(msg) {
+  return `<div style="padding:14px 18px;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">${escH(msg)}</div>`;
+}
+
+// ── Renderers ──
+
+function _workSectionA() {
+  const tasks = _workOpenTasks();
+  const invs  = _workOverdueInvoices();
+  const notes = _workUnreadNotifications();
+  const rows  = [...notes, ...invs, ...tasks];
+  const count = rows.length;
+  const body = rows.length
+    ? rows.map(_workRowHtml).join('')
+    : _workEmpty('No open items. Clear desk.');
+  return { html: _workSectionCard('Awaiting Action', count, body), count };
+}
+
+function _workSectionB() {
+  const items = _workInProgressItems();
+  const order = Array.isArray(S.pipelineStatusOrder) && S.pipelineStatusOrder.length
+    ? S.pipelineStatusOrder
+    : (typeof STATUSES !== 'undefined' ? STATUSES.map(s => s.v) : []);
+  // Cap 50 rows, most-recently-updated across groups
+  const capped = items.slice(0, 50);
+  const overflow = items.length - capped.length;
+  // Group by status v-code, respecting pipelineStatusOrder
+  const groups = new Map();
+  capped.forEach(r => {
+    if (!groups.has(r.statusV)) groups.set(r.statusV, []);
+    groups.get(r.statusV).push(r);
+  });
+  const sortedKeys = [...groups.keys()].sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+  let body = '';
+  if (!capped.length) {
+    body = _workEmpty('Nothing in flight.');
+  } else {
+    sortedKeys.forEach(k => {
+      const label = (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(k) : k;
+      const groupRows = groups.get(k);
+      body += `<div style="padding:8px 18px 4px;background:rgba(91,45,34,0.015);font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">${escH(label)} <span style="color:var(--text-light);margin-left:6px">${groupRows.length}</span></div>`;
+      body += groupRows.map(_workItemRowHtml).join('');
+    });
+    if (overflow > 0) {
+      body += `<div style="padding:10px 18px;font-size:11px;color:var(--text-light);font-style:italic;text-align:center">… and ${overflow} more not shown</div>`;
+    }
+  }
+  return { html: _workSectionCard('In Progress', items.length, body), count: items.length };
+}
+
+function _workSectionC() {
+  const events = (_workSystemEvents || []).slice(0, 25);
+  const body = events.length
+    ? events.map(_workSystemEventRowHtml).join('')
+    : _workEmpty('No recent activity.');
+  return { html: _workSectionCard('Recent Activity', events.length, body), count: events.length };
+}
+
+async function _workLoadSystemEvents() {
+  if (!AUTH.studio?.id) return;
+  try {
+    const since = new Date(Date.now() - 14 * 86400000).toISOString();
+    const { data, error } = await sb
+      .from('activity_entries')
+      .select('id, entity_type, entity_id, parent_type, parent_id, event_type, text, payload, created_at')
+      .eq('studio_id', AUTH.studio.id)
+      .eq('source', 'system')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(25);
+    if (error) { console.warn('[work] system events load:', error.message); return; }
+    _workSystemEvents = data || [];
+  } catch (e) {
+    console.warn('[work] system events threw', e?.message || e);
+  }
+}
+
+async function renderWork() {
+  initWorkScopeDefault();
+  // Reflect toggle state in the DOM
+  $a('[data-wscope]').forEach(b => b.classList.toggle('active', b.dataset.wscope === _workScope));
+  // Load system events for Section C (fresh each time the view opens)
+  await _workLoadSystemEvents();
+  // Set up Realtime once
+  _workSubscribeRealtime();
+  const body = $c('work-body');
+  if (!body) return;
+  const A = _workSectionA();
+  const B = _workSectionB();
+  const C = _workSectionC();
+  if (A.count === 0 && B.count === 0 && C.count === 0) {
+    body.innerHTML = `
+      <div style="max-width:480px;margin:80px auto;background:white;border:1px solid var(--border);border-radius:var(--rl);padding:48px 32px;text-align:center">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:15px;color:var(--mahogany);letter-spacing:.04em">No open work — nice.</div>
+      </div>`;
+  } else {
+    body.innerHTML = A.html + B.html + C.html;
+  }
+  // Keep sidebar badge synced with Section A
+  updateWorkBadge(A.count);
+}
+
+function _workOpenRow(kind, id, pid) {
+  if (kind === 'notification') {
+    if (typeof openNotification === 'function') openNotification(id);
+    return;
+  }
+  if (kind === 'invoice') {
+    if (typeof openInvoiceBuilder === 'function') openInvoiceBuilder(id);
+    return;
+  }
+  if (kind === 'task' || kind === 'item') {
+    if (pid) {
+      S._detailProjectId = pid;
+      if (kind === 'task') _pmDetailTask = id;
+      showView('project-detail');
+    }
+  }
+}
+
+function _workOpenEntity(entityType, entityId, parentId) {
+  if (entityType === 'invoice' && typeof openInvoiceBuilder === 'function') {
+    openInvoiceBuilder(entityId);
+    return;
+  }
+  if ((entityType === 'proposal_item' || entityType === 'proposal_component') && parentId) {
+    S._detailProjectId = parentId;
+    showView('project-detail');
+    return;
+  }
+  if (parentId) {
+    S._detailProjectId = parentId;
+    showView('project-detail');
+  }
+}
+
+// ── Sidebar badge ──
+
+function updateWorkBadge(countOverride) {
+  const el = $c('nav-work-badge');
+  if (!el) return;
+  const count = countOverride != null ? countOverride : _workSectionA().count;
+  if (count > 0) {
+    el.style.display = 'inline-block';
+    el.textContent = count > 99 ? '99+' : String(count);
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+// ── Realtime ──
+
+function _workSubscribeRealtime() {
+  if (!AUTH.studio?.id || _workChannels.length) return; // already set up
+  const studioFilter = 'studio_id=eq.' + AUTH.studio.id;
+  const onChange = () => {
+    // Re-render the Work view if it's currently visible; always refresh the badge.
+    const workView = $c('view-work');
+    const visible = workView && workView.classList.contains('active');
+    if (visible) renderWork();
+    else         updateWorkBadge();
+  };
+  try {
+    const ch1 = sb.channel('work-items-' + AUTH.studio.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'proposal_items' }, onChange)
+      .subscribe();
+    const ch2 = sb.channel('work-invoices-' + AUTH.studio.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'invoices', filter: studioFilter }, onChange)
+      .subscribe();
+    const ch3 = sb.channel('work-activity-' + AUTH.studio.id)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_entries', filter: studioFilter },
+          async () => { await _workLoadSystemEvents(); onChange(); })
+      .subscribe();
+    _workChannels.push(ch1, ch2, ch3);
+  } catch (e) {
+    console.warn('[work] realtime setup failed:', e?.message || e);
+  }
+}
+
 function renderNotificationBell() {
   const bell = document.getElementById('notif-bell');
   const badge = document.getElementById('notif-badge');
@@ -3736,6 +4128,11 @@ async function loadFromSupabase() {
 
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
   if (typeof captureSbShadow === 'function') captureSbShadow();
+
+  // Initial Work Queue badge
+  if (typeof updateWorkBadge === 'function') {
+    try { updateWorkBadge(); } catch (_e) {}
+  }
 }
 
 // ─── ONE-TIME FOLD: contacts → vendors + vendor_contacts ──
@@ -4086,6 +4483,8 @@ function dbItemToS(it) {
     brandId: it.brand_id || null,
     itemTypeId: it.item_type_id || null,
     poId: it.po_id || null,
+    assigneeUserId: it.assignee_user_id || null,
+    updatedAt: it.updated_at || null,
     files: it.files || [],
     links: it.links || [],
     trackingNumbers: it.tracking_numbers || [],
@@ -4404,6 +4803,7 @@ function itemToDB(it) {
     brand_id:          it.brandId         || null,
     item_type_id:      it.itemTypeId      || null,
     po_id:             it.poId            || null,
+    assignee_user_id:  it.assigneeUserId  || null,
     files: it.files || [], links: it.links || [],
     tracking_numbers: it.trackingNumbers || [], activity_log: it.activityLog || [],
     sort_order: it._sortOrder || 0, deleted_at: null,
@@ -4743,6 +5143,8 @@ function save() {
   try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch(e){}
   // Phase C: also push the diff to Supabase (debounced)
   if (typeof scheduleSync === 'function') scheduleSync();
+  // Keep the Work Queue sidebar badge live on local changes without waiting for Realtime
+  if (typeof updateWorkBadge === 'function') { try { updateWorkBadge(); } catch (_e) {} }
 }
 
 // ── UI state persistence ──
@@ -5197,6 +5599,7 @@ function showView(v) {
   if (v === 'proposal') { updateProjSelect(); if (S.currentPropProject) loadProposal(S.currentPropProject); }
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
+  if (v === 'work')    renderWork();
   // Legacy redirect — old "vendors" nav was folded into contacts
   if (v === 'vendors') { showView('contacts'); return; }
   if (v === 'time') renderTime();
