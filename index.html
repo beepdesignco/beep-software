@@ -2280,6 +2280,65 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ ADD UNBILLED TIME MODAL ═════════════════ -->
+<div class="overlay" id="modal-unbilled-time">
+  <div class="modal" style="width:760px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-unbilled-time')">✕</button>
+    <div class="modal-title">Add Unbilled Time to Invoice</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);font-style:italic;margin-bottom:14px;line-height:1.5">
+      Pick which entries to add. Internal records keep the per-employee breakdown regardless of how it's presented to the client.
+    </div>
+
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Round Each Entry Up To</label>
+        <select class="fi fsel" id="unb-round" onchange="renderUnbilledEntries()">
+          <option value="0">No rounding (exact)</option>
+          <option value="15">Nearest 15 minutes (up)</option>
+          <option value="30">Nearest 30 minutes (up)</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">Group as</label>
+        <select class="fi fsel" id="unb-collation" onchange="renderUnbilledEntries()">
+          <option value="single">Single combined line</option>
+          <option value="employee" selected>Separate line per employee</option>
+          <option value="entry">Separate line per entry</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Description Override <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(blank = "Hours worked &lt;date range&gt;")</span></label>
+      <input type="text" class="fi" id="unb-desc" placeholder="Leave blank to auto-fill">
+    </div>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <label class="fl" style="margin:0">Unbilled Entries on this Project</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="toggleAllUnbilled(true)" style="font-size:10px">Select All</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleAllUnbilled(false)" style="font-size:10px">None</button>
+        </div>
+      </div>
+      <div id="unb-entries-list" style="border:1px solid var(--border);border-radius:var(--r);max-height:300px;overflow-y:auto"></div>
+    </div>
+
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);background:rgba(91,45,34,0.03);border-radius:var(--r);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-family:var(--font-b);font-size:13px">
+        <span style="color:var(--text-mid)">Preview</span>
+        <span id="unb-preview-summary" style="font-weight:700;color:var(--mahogany)"></span>
+      </div>
+      <div id="unb-preview-lines" style="margin-top:6px;font-size:11px;color:var(--text-mid);line-height:1.5"></div>
+    </div>
+
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-unbilled-time')">Cancel</button>
+      <button class="btn btn-primary" onclick="commitUnbilledTime()">Add to Invoice</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ SUBMITTAL MODAL ═════════════════ -->
 <div class="overlay" id="modal-submittal">
   <div class="modal" style="width:680px;max-height:90vh;overflow-y:auto">
@@ -5617,6 +5676,7 @@ function dbProjectToS(p) {
     markupPct: p.markup_pct != null ? Number(p.markup_pct) : 25,
     taxRate: p.tax_rate != null ? Number(p.tax_rate) : 0,
     taxFreight: !!p.tax_freight,
+    timeTaxable: !!p.time_taxable,
     addressBook: p.address_book || {},
     quickReferences: p.quick_references || [],
     settings: p.settings || {},
@@ -6060,6 +6120,7 @@ function projectToDB(p, studioId) {
     markup_pct: p.markupPct != null ? Number(p.markupPct) : null,
     tax_rate: p.taxRate != null ? Number(p.taxRate) : null,
     tax_freight: !!p.taxFreight,
+    time_taxable: !!p.timeTaxable,
     address_book: p.addressBook || {},
     quick_references: p.quickReferences || [],
     settings: p.settings || {},
@@ -9555,6 +9616,12 @@ function renderPDSettings(proj, pid) {
           Tax freight in this state
         </label>
       </div>
+    </div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" ${proj.timeTaxable?'checked':''} style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer" onchange="savePDSetting('${pid}','timeTaxable',this.checked)">
+        Time is taxable in this state
+      </label>
     </div>
     <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:8px">Changes save automatically.</div>
   </div>`;
@@ -16337,6 +16404,20 @@ function renderInvoiceBuilder() {
     </div>`;
   }
 
+  // Unbilled-time banner (shown when this project has any time entries with status='unbilled')
+  const unbilled = unbilledTimeForProject(inv.projectId);
+  if (unbilled.length) {
+    const totalSec = unbilled.reduce((s, e) => s + (Number(e.durationSeconds) || 0), 0);
+    html += `
+      <div style="background:rgba(122,74,16,0.08);border:1px solid rgba(122,74,16,0.25);border-radius:var(--rl);padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:14px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--russet);text-transform:uppercase;letter-spacing:.06em">Unbilled Time on this Project</div>
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-top:3px">${unbilled.length} entr${unbilled.length===1?'y':'ies'} · ${escH(fmtDurationFromSeconds(totalSec))}</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="openUnbilledTimeModal()" style="font-size:11px">Add to invoice…</button>
+      </div>`;
+  }
+
   // Line items
   html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Line Items</div>
@@ -19663,6 +19744,11 @@ function openNewTimeModal() {
 function openEditTimeModal(id) {
   const e = (S.timeEntries||[]).find(x => x.id === id);
   if (!e) return;
+  if (e.status === 'billed') {
+    const inv = (S.invoices || []).find(i => (i.lineItems||[]).some(l => l.id === e.invoiceLineItemId)) || null;
+    toast('This entry is on a sent invoice and is locked. ' + (inv ? 'Void invoice ' + inv.number + ' to edit.' : 'Void the invoice to edit.'));
+    return;
+  }
   $c('tm-title').textContent = 'Edit Entry';
   $c('tm-id').value = e.id;
   $c('tm-delete-btn').style.display = '';
@@ -19785,12 +19871,270 @@ function deleteCurrentTimeEntry() {
  
 function deleteTimeEntry(id) {
   if (!id || !confirm('Delete this time entry?')) return;
+  const e = (S.timeEntries||[]).find(x => x.id === id);
+  if (e && e.status === 'billed') { toast('Billed entries are locked. Void the invoice first.'); return; }
   S.timeEntries = (S.timeEntries||[]).filter(e => e.id !== id);
   save();
 
   closeModal('modal-time');
   renderTime();
   toast('Entry deleted.');
+}
+
+// ═════════════════════════════════════════════════════════════
+// UNBILLED TIME → INVOICE
+// ═════════════════════════════════════════════════════════════
+
+// Returns the unbilled time entries for a project. Sorted oldest-first so the
+// auto-generated date range reads naturally ("Apr 1–Apr 25").
+function unbilledTimeForProject(projectId) {
+  if (!projectId) return [];
+  return (S.timeEntries || [])
+    .filter(e => e.projectId === projectId)
+    .filter(e => e.status !== 'billed')
+    .filter(e => (Number(e.durationSeconds) || 0) > 0)
+    .sort((a, b) => String(a.startedAt || a.date || '').localeCompare(String(b.startedAt || b.date || '')));
+}
+
+// Round a duration in seconds up to the nearest `minutes` boundary. 0 = no rounding.
+function roundDurationSeconds(seconds, minutes) {
+  const sec = Math.max(0, Math.round(Number(seconds) || 0));
+  if (!minutes || minutes <= 0) return sec;
+  const block = minutes * 60;
+  if (sec === 0) return 0;
+  return Math.ceil(sec / block) * block;
+}
+
+// Resolve a member's display name + rate. Falls back to whatever was stored on
+// the time entry itself if the member can't be looked up.
+function unbilledMemberInfo(entry) {
+  const userId = entry.userId || null;
+  let name = '';
+  let rate = (Number(entry.rate) || 0);
+  if (userId && Array.isArray(S.studioMembers)) {
+    const m = S.studioMembers.find(x => x.userId === userId);
+    if (m) {
+      name = m.displayName || m.email || '';
+      if (!entry.rate && m.hourlyRate != null) rate = Number(m.hourlyRate) || 0;
+    }
+  }
+  if (!name) name = entry.person || (userId ? userId.slice(0, 8) : 'Unknown');
+  return { name, rate };
+}
+
+// Selection state for the modal — keyed by entry id, value = boolean
+let _unbSelected = new Set();
+let _unbInvoiceId = null;
+
+function openUnbilledTimeModal() {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  _unbInvoiceId = inv.id;
+  const entries = unbilledTimeForProject(inv.projectId);
+  if (!entries.length) { toast('No unbilled time on this project.'); return; }
+  // Default: select all, no rounding, group by employee
+  _unbSelected = new Set(entries.map(e => e.id));
+  $c('unb-round').value = '0';
+  $c('unb-collation').value = 'employee';
+  $c('unb-desc').value = '';
+  renderUnbilledEntries();
+  $c('modal-unbilled-time').classList.add('open');
+}
+
+function toggleAllUnbilled(on) {
+  const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
+  const entries = unbilledTimeForProject(inv?.projectId);
+  _unbSelected = new Set(on ? entries.map(e => e.id) : []);
+  renderUnbilledEntries();
+}
+
+function toggleUnbilledRow(entryId) {
+  if (_unbSelected.has(entryId)) _unbSelected.delete(entryId);
+  else _unbSelected.add(entryId);
+  renderUnbilledEntries();
+}
+
+function renderUnbilledEntries() {
+  const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
+  if (!inv) return;
+  const entries = unbilledTimeForProject(inv.projectId);
+  const round = parseInt($c('unb-round').value, 10) || 0;
+  // Group entries by user for the list display
+  const byUser = new Map();
+  entries.forEach(e => {
+    const { name, rate } = unbilledMemberInfo(e);
+    const key = (e.userId || 'anon') + '|' + name + '|' + rate;
+    if (!byUser.has(key)) byUser.set(key, { name, rate, items: [] });
+    byUser.get(key).items.push(e);
+  });
+  const list = $c('unb-entries-list');
+  list.innerHTML = [...byUser.values()].map(group => {
+    const rows = group.items.map(e => {
+      const sec = roundDurationSeconds(e.durationSeconds, round);
+      const hrs = sec / 3600;
+      const fee = hrs * (Number(e.rate) || group.rate || 0);
+      const checked = _unbSelected.has(e.id) ? 'checked' : '';
+      const dateLabel = e.startedAt ? String(e.startedAt).slice(0, 10) : (e.date || '');
+      return `
+        <label style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" ${checked} onchange="toggleUnbilledRow('${e.id}')" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+          <span style="flex:0 0 90px;font-size:11px;color:var(--text-mid)">${escH(dateLabel)}</span>
+          <span style="flex:1;font-size:12px;color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(e.notes || e.description || '')}</span>
+          <span style="flex:0 0 90px;text-align:right;font-family:var(--font-b);font-weight:700;font-size:11px">${escH(fmtDurationFromSeconds(sec))}</span>
+          <span style="flex:0 0 90px;text-align:right;font-family:var(--font-b);font-size:11px;color:var(--pecan)">${fmt(fee)}</span>
+        </label>`;
+    }).join('');
+    const groupTotalSec = group.items.reduce((s,e) => _unbSelected.has(e.id) ? s + roundDurationSeconds(e.durationSeconds, round) : s, 0);
+    const groupTotalFee = group.items.reduce((s,e) => _unbSelected.has(e.id) ? s + (roundDurationSeconds(e.durationSeconds, round) / 3600) * (Number(e.rate) || group.rate || 0) : s, 0);
+    return `
+      <div>
+        <div style="padding:8px 14px;background:rgba(91,45,34,0.04);font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);display:flex;justify-content:space-between">
+          <span>${escH(group.name)} <span style="color:var(--text-light);margin-left:8px">${fmt(group.rate)}/hr</span></span>
+          <span style="color:var(--text-mid)">${escH(fmtDurationFromSeconds(groupTotalSec))} · ${fmt(groupTotalFee)}</span>
+        </div>
+        ${rows}
+      </div>`;
+  }).join('');
+  renderUnbilledPreview();
+}
+
+function renderUnbilledPreview() {
+  const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
+  if (!inv) return;
+  const round = parseInt($c('unb-round').value, 10) || 0;
+  const collation = $c('unb-collation').value;
+  const lines = computeUnbilledLines(inv.projectId, round, collation);
+  const totalFee = lines.reduce((s, l) => s + l.fee, 0);
+  const totalSec = lines.reduce((s, l) => s + l.totalSeconds, 0);
+  $c('unb-preview-summary').textContent = lines.length + ' line' + (lines.length!==1?'s':'') + ' · ' + fmtDurationFromSeconds(totalSec) + ' · ' + fmt(totalFee);
+  $c('unb-preview-lines').innerHTML = lines.map(l => `<div>${escH(l.name)} <span style="color:var(--text-light)">— ${escH(fmtDurationFromSeconds(l.totalSeconds))} · ${fmt(l.fee)}</span></div>`).join('');
+}
+
+// Compute the invoice lines that will be created from current selections.
+// Each line carries the entry ids it covers so the commit step can flip them
+// to billed atomically.
+function computeUnbilledLines(projectId, round, collation) {
+  const entries = unbilledTimeForProject(projectId).filter(e => _unbSelected.has(e.id));
+  if (!entries.length) return [];
+  const dateRange = entryDateRangeLabel(entries);
+  const customDesc = $c('unb-desc').value.trim();
+  const baseDesc = customDesc || ('Hours worked ' + dateRange);
+
+  // Per-entry: one line per time entry
+  if (collation === 'entry') {
+    return entries.map(e => {
+      const sec = roundDurationSeconds(e.durationSeconds, round);
+      const hrs = sec / 3600;
+      const rate = Number(e.rate) || 0;
+      return {
+        name: (e.notes || e.description || baseDesc) + ' · ' + entryDateLabel(e),
+        qty: hrs,
+        rate,
+        fee: hrs * rate,
+        totalSeconds: sec,
+        entryIds: [e.id],
+      };
+    });
+  }
+
+  // Per-employee: one line per unique user/rate combo
+  if (collation === 'employee') {
+    const groups = new Map();
+    entries.forEach(e => {
+      const { name, rate } = unbilledMemberInfo(e);
+      const key = (e.userId || 'anon') + '|' + (Number(e.rate) || rate || 0);
+      if (!groups.has(key)) groups.set(key, { name, rate: Number(e.rate) || rate || 0, items: [] });
+      groups.get(key).items.push(e);
+    });
+    return [...groups.values()].map(g => {
+      const totalSec = g.items.reduce((s,e) => s + roundDurationSeconds(e.durationSeconds, round), 0);
+      const hrs = totalSec / 3600;
+      return {
+        name: baseDesc + ' — ' + g.name,
+        qty: hrs,
+        rate: g.rate,
+        fee: hrs * g.rate,
+        totalSeconds: totalSec,
+        entryIds: g.items.map(x => x.id),
+      };
+    });
+  }
+
+  // Single line: blend everyone into one client-facing line. Client doesn't
+  // see individual rates — they see hours × blended rate. Internal records
+  // keep the per-employee breakdown via time_entries.invoice_line_item_id.
+  const totalSec = entries.reduce((s,e) => s + roundDurationSeconds(e.durationSeconds, round), 0);
+  const totalFee = entries.reduce((s,e) => {
+    const sec = roundDurationSeconds(e.durationSeconds, round);
+    return s + (sec / 3600) * (Number(e.rate) || 0);
+  }, 0);
+  const hrs = totalSec / 3600;
+  const blendedRate = hrs > 0 ? (totalFee / hrs) : 0;
+  return [{
+    name: baseDesc,
+    qty: hrs,
+    rate: blendedRate,
+    fee: totalFee,
+    totalSeconds: totalSec,
+    entryIds: entries.map(x => x.id),
+  }];
+}
+
+function entryDateLabel(e) {
+  const d = e.startedAt ? String(e.startedAt).slice(0, 10) : (e.date || '');
+  return d;
+}
+
+function entryDateRangeLabel(entries) {
+  if (!entries.length) return '';
+  const dates = entries.map(entryDateLabel).filter(Boolean).sort();
+  if (!dates.length) return '';
+  const first = new Date(dates[0]);
+  const last  = new Date(dates[dates.length - 1]);
+  const fmtShort = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (dates[0] === dates[dates.length - 1]) return fmtShort(first);
+  return fmtShort(first) + '–' + fmtShort(last);
+}
+
+// Commits the modal — creates invoice line items and stamps each contributing
+// time_entry as billed.
+function commitUnbilledTime() {
+  const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
+  if (!inv) return;
+  const round = parseInt($c('unb-round').value, 10) || 0;
+  const collation = $c('unb-collation').value;
+  const lines = computeUnbilledLines(inv.projectId, round, collation);
+  if (!lines.length) { toast('Pick at least one entry.'); return; }
+  const proj = S.projects.find(p => p.id === inv.projectId);
+  const taxable = !!proj?.timeTaxable;
+  const nowIso = new Date().toISOString();
+
+  lines.forEach(line => {
+    const lineId = uid();
+    _invLineItems.push({
+      id: lineId,
+      name: line.name,
+      qty: Number(line.qty.toFixed(4)),
+      price: Number(line.rate.toFixed(2)),
+      taxable,
+      trackInPM: false,
+      manual: false,
+    });
+    // Mark the contributing entries as billed and link them to this line
+    line.entryIds.forEach(eid => {
+      const e = (S.timeEntries || []).find(x => x.id === eid);
+      if (!e) return;
+      e.status = 'billed';
+      e.billed = true;
+      e.invoiceLineItemId = lineId;
+      e.billedAt = nowIso;
+    });
+  });
+  save();
+  closeModal('modal-unbilled-time');
+  renderInvoiceBuilder();
+  recalcInvoice();
+  toast('Time added — ' + lines.length + ' line' + (lines.length!==1?'s':'') + ' added to invoice.');
 }
  
 function addSampleData() {
