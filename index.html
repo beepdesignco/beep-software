@@ -2307,9 +2307,9 @@ tr:hover .row-btns { opacity:1; }
     <div style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
       <label class="fl">Required Signers</label>
       <div id="sub-signers-list" style="margin-top:6px"></div>
-      <div id="sub-add-signer-row" style="margin-top:8px;display:flex;gap:6px">
-        <select class="fi fsel" id="sub-add-signer-select" style="flex:1;font-size:12px"></select>
-        <button class="btn btn-secondary btn-sm" onclick="addSubmittalSigner()">Add</button>
+      <div id="sub-add-signer-row" style="margin-top:8px;position:relative">
+        <input type="text" class="fi" id="sub-signer-search" placeholder="Type a client or contact name…" oninput="renderSignerSuggestions(this.value)" onfocus="renderSignerSuggestions(this.value)" autocomplete="off">
+        <div id="sub-signer-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
       </div>
     </div>
     <div id="sub-files-section" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
@@ -4648,35 +4648,107 @@ function renderSubSignersList(sub) {
         </div>`;
     }).join('');
   }
-  // Picker for available signers — a mix of vendor_contacts and clients,
-  // grouped under <optgroup> headers. Encoded as "kind:id" so the add handler
-  // knows which FK column to populate.
-  const sel = $c('sub-add-signer-select');
-  if (sel) {
-    const takenVC = new Set((sub.signers || []).map(r => r.vendorContactId).filter(Boolean));
-    const takenCl = new Set((sub.signers || []).map(r => r.clientId).filter(Boolean));
-    const vcs = (S.vendorContacts || []).filter(vc => !takenVC.has(vc.id))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    const cls = (S.clients || []).filter(cl => !takenCl.has(cl.id))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    let html = '<option value="">— Add a signer —</option>';
-    if (cls.length) {
-      html += '<optgroup label="Clients">'
-        + cls.map(cl => `<option value="client:${cl.id}">${escH(cl.name)}</option>`).join('')
-        + '</optgroup>';
-    }
-    if (vcs.length) {
-      html += '<optgroup label="Contacts">'
-        + vcs.map(vc => {
-            const v = (S.vendors || []).find(x => x.id === vc.vendorId);
-            return `<option value="vc:${vc.id}">${escH(vc.name)}${v?.name ? ' · ' + escH(v.name) : ''}</option>`;
-          }).join('')
-        + '</optgroup>';
-    }
-    if (!cls.length && !vcs.length) html = '<option value="">No more clients/contacts to add.</option>';
-    sel.innerHTML = html;
-  }
+  // Typeahead: clear the search box + close the popover when (re-)opening
+  const searchEl = $c('sub-signer-search');
+  if (searchEl) searchEl.value = '';
+  const popEl = $c('sub-signer-suggestions');
+  if (popEl) popEl.style.display = 'none';
   if (addRow) addRow.style.display = '';
+}
+
+// Filter clients + vendor_contacts by the typed query and render a suggestion
+// list under the search input. Clicking a row adds that signer to the current
+// submittal. Closes on outside-click or after a selection.
+function renderSignerSuggestions(query) {
+  const subId = $c('sub-id').value;
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  const pop = $c('sub-signer-suggestions');
+  if (!pop) return;
+  if (!sub) {
+    pop.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:var(--text-light);font-style:italic">Save first, then add signers.</div>';
+    pop.style.display = 'block';
+    return;
+  }
+  const q = String(query || '').toLowerCase().trim();
+  const takenVC = new Set((sub.signers || []).map(r => r.vendorContactId).filter(Boolean));
+  const takenCl = new Set((sub.signers || []).map(r => r.clientId).filter(Boolean));
+  // Clients first
+  const clientHits = (S.clients || [])
+    .filter(cl => !takenCl.has(cl.id))
+    .filter(cl => !q || (cl.name || '').toLowerCase().includes(q))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .slice(0, 10);
+  // Then vendor contacts — match on contact name OR parent vendor name
+  const vcHits = (S.vendorContacts || [])
+    .filter(vc => !takenVC.has(vc.id))
+    .map(vc => {
+      const v = (S.vendors || []).find(x => x.id === vc.vendorId);
+      return { vc, vendorName: v?.name || '' };
+    })
+    .filter(({ vc, vendorName }) => !q || `${vc.name} ${vendorName}`.toLowerCase().includes(q))
+    .sort((a, b) => (a.vc.name || '').localeCompare(b.vc.name || ''))
+    .slice(0, 12);
+
+  let html = '';
+  if (clientHits.length) {
+    html += '<div style="padding:6px 12px;background:rgba(91,45,34,0.04);font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid)">Clients</div>';
+    html += clientHits.map(cl => `
+      <div onclick="pickSubmittalSigner('client','${cl.id}')" style="padding:8px 12px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);border-bottom:1px solid var(--border)" onmouseover="this.style.background='rgba(91,45,34,0.04)'" onmouseout="this.style.background='transparent'">
+        ${escH(cl.name)}
+      </div>`).join('');
+  }
+  if (vcHits.length) {
+    html += '<div style="padding:6px 12px;background:rgba(91,45,34,0.04);font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid)">Contacts</div>';
+    html += vcHits.map(({ vc, vendorName }) => `
+      <div onclick="pickSubmittalSigner('vc','${vc.id}')" style="padding:8px 12px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);border-bottom:1px solid var(--border)" onmouseover="this.style.background='rgba(91,45,34,0.04)'" onmouseout="this.style.background='transparent'">
+        <div>${escH(vc.name)}</div>
+        ${vendorName ? `<div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(vendorName)}</div>` : ''}
+      </div>`).join('');
+  }
+  if (!clientHits.length && !vcHits.length) {
+    html = `<div style="padding:10px 12px;font-size:11px;color:var(--text-light);font-style:italic">${q ? 'No matches.' : 'Start typing a name…'}</div>`;
+  }
+  pop.innerHTML = html;
+  pop.style.display = 'block';
+
+  // Outside-click closer (set once per open)
+  if (!pop._closerBound) {
+    pop._closerBound = true;
+    setTimeout(() => {
+      const closer = (e) => {
+        if (!pop.contains(e.target) && e.target?.id !== 'sub-signer-search') {
+          pop.style.display = 'none';
+          document.removeEventListener('click', closer);
+          pop._closerBound = false;
+        }
+      };
+      document.addEventListener('click', closer);
+    }, 0);
+  }
+}
+
+// Selection handler from the typeahead popover. kind = 'client' | 'vc'.
+function pickSubmittalSigner(kind, refId) {
+  const subId = $c('sub-id').value;
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  if (!sub) return;
+  if (!sub.signers) sub.signers = [];
+  sub.signers.push({
+    id: uid(),
+    vendorContactId: kind === 'vc'     ? refId : null,
+    clientId:        kind === 'client' ? refId : null,
+    contactId: null,
+    signedOff: false,
+    signedOffAt: null,
+    signedOffByUserId: null,
+    signerNotes: '',
+    sortOrder: sub.signers.length,
+  });
+  save();
+  // Clear input + close popover
+  const searchEl = $c('sub-signer-search'); if (searchEl) searchEl.value = '';
+  const pop = $c('sub-signer-suggestions'); if (pop) pop.style.display = 'none';
+  renderSubSignersList(sub);
 }
 
 function addSubmittalSigner() {
