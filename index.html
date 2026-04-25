@@ -2139,15 +2139,26 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
     <div class="frow">
-      <div class="fg" id="ai-contact-wrap">
-        <label class="fl">Contact</label>
-        <input type="text" class="fi" id="ai-contact" placeholder="Vendor, showroom, workroom…">
+      <div class="fg">
+        <label class="fl">Vendor</label>
+        <div id="ai-vendor-picker" style="position:relative"></div>
       </div>
       <div class="fg">
         <label class="fl">Room / Location</label>
         <select class="fi fsel" id="ai-room"><!-- populated by JS --></select>
       </div>
     </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Vendor Contact</label>
+        <div id="ai-contact-picker" style="position:relative"></div>
+      </div>
+      <div class="fg">
+        <label class="fl">Brand <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+        <div id="ai-brand-picker" style="position:relative"></div>
+      </div>
+    </div>
+    <div id="ai-legacy-contact" style="display:none;font-size:11px;color:var(--text-light);font-style:italic;margin:-6px 0 10px 0"></div>
     <div class="frow">
       <div class="fg">
         <label class="fl">Item Type <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — manage list in App Settings → Categories)</span></label>
@@ -8115,7 +8126,7 @@ function renderPMItemCard(item, sp, pid) {
           ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
           ${flags}
         </div>
-        ${item.contact ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${escH(item.contact)}</div>` : ''}
+        ${(() => { const d = itemContactDisplay(item); return d ? `<div style="font-size:11px;color:var(--text-mid);margin-top:3px">${escH(d)}</div>` : ''; })()}
         ${renderInvoiceRefBadges(item.id, 'sm')}
       </div>
       <div style="text-align:right;flex-shrink:0">
@@ -8786,7 +8797,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
           <span style="font-family:var(--font-h);font-weight:900;font-size:22px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'—')}</span>
           ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
         </div>
-        <div style="font-size:12px;color:var(--text-mid);font-family:var(--font-b)">${escH(sp.name||'')}${item.contact ? ' · '+escH(item.contact) : ''}</div>
+        <div style="font-size:12px;color:var(--text-mid);font-family:var(--font-b)">${escH(sp.name||'')}${(() => { const d = itemContactDisplay(item); return d ? ' · '+escH(d) : ''; })()}</div>
         ${renderInvoiceRefBadges(itemId, 'lg')}
       </div>
       <div style="text-align:right">
@@ -10192,7 +10203,11 @@ function renderItemRow(item, spId, pid) {
 
   const isAllowance = !!item.allowance;
   const hasExpandable = !isAllowance && ((item.type === 'constructed' && compRows) || (item.type === 'readymade' && chargeRows) || item.notes);
-  const contactStr = !isAllowance && item.contact ? `<span style="font-size:10.5px;color:var(--text-mid);margin-left:6px">· ${escH(item.contact)}</span>` : '';
+  const contactStr = (() => {
+    if (isAllowance) return '';
+    const d = itemContactDisplay(item);
+    return d ? `<span style="font-size:10.5px;color:var(--text-mid);margin-left:6px">· ${escH(d)}</span>` : '';
+  })();
   const allowanceBadge = isAllowance ? '<span class="allowance-badge">A</span>' : '';
   const statusIndicator = isAllowance
     ? `<span class="allowance-a">A</span>`
@@ -11280,7 +11295,6 @@ function setItemType(type) {
   $c('ai-charges-section').style.display = type === 'readymade' ? '' : 'none';
   $c('ai-price-row').style.display = type === 'constructed' ? 'none' : '';
   $c('ai-category-wrap').style.display = type === 'openline' ? '' : 'none';
-  $c('ai-contact-wrap').style.display = type === 'constructed' ? 'none' : '';
 }
 
 function populateRoomSelect(pid) {
@@ -11464,7 +11478,7 @@ function openAddItemModal(pid, spId) {
   const prop = S.proposals[pid];
   const sp = prop?.spaces.find(s => s.id === spId);
   if (sp && sp.name) $c('ai-room').value = sp.name;
-  ['ai-name','ai-contact','ai-net','ai-notes','ai-itemcode','ai-cost-actual'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  ['ai-name','ai-net','ai-notes','ai-itemcode','ai-cost-actual'].forEach(id => { if($c(id)) $c(id).value = ''; });
   $c('ai-qty').value = '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
@@ -11477,8 +11491,65 @@ function openAddItemModal(pid, spId) {
   _modalCharges = [];
   renderModalComponents();
   renderModalCharges();
+  initItemPickers(null);
   $c('modal-add-item').classList.add('open');
   setTimeout(() => $c('ai-name').focus(), 80);
+}
+
+// Wire up the three item-level pickers (vendor / vendor-contact / brand).
+// Called from openAddItemModal (item=null → all empty) and openEditItemModal
+// (item populated → fields seeded). Brand changes refresh the contact
+// picker's "Suggested" sub-header; vendor changes reset the contact picker
+// since the prior selection is no longer valid for the new vendor.
+function initItemPickers(item) {
+  const initialVendorId  = item?.vendorId        || null;
+  const initialContactId = item?.vendorContactId || null;
+  const initialBrandId   = item?.brandId         || null;
+
+  renderItemBrandPicker('ai-brand-picker', initialBrandId, (newBrandId) => {
+    __icpRefreshBrand('ai-contact-picker', newBrandId);
+    updateLegacyContactLine();
+  });
+
+  renderItemContactPicker('ai-contact-picker', initialVendorId, initialContactId, initialBrandId, () => {
+    updateLegacyContactLine();
+  });
+
+  renderItemVendorPicker('ai-vendor-picker', initialVendorId, (newVendorId) => {
+    // Reset contact when vendor changes (or clears)
+    const cur = $c('ai-contact-picker');
+    const stillValid = cur?._selectedId && (S.vendorContacts || []).some(c => c.id === cur._selectedId && c.vendorId === newVendorId);
+    const nextContact = stillValid ? cur._selectedId : null;
+    const brandId = $c('ai-brand-picker')?._selectedId || null;
+    renderItemContactPicker('ai-contact-picker', newVendorId, nextContact, brandId, () => {
+      updateLegacyContactLine();
+    });
+    updateLegacyContactLine();
+  });
+
+  updateLegacyContactLine();
+}
+
+// Show the muted "Legacy contact:" line below the pickers when the item
+// has a legacy `contact` text value AND no vendor is selected. Hides as
+// soon as a vendor is picked.
+function updateLegacyContactLine() {
+  const host = $c('ai-legacy-contact');
+  if (!host) return;
+  const itemId = $c('ai-id').value;
+  if (!itemId) { host.style.display = 'none'; return; }
+  const pid = $c('ai-pid').value;
+  const spId = $c('ai-spid').value;
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  const item = sp?.items.find(i => i.id === itemId);
+  const legacy = item?.contact || '';
+  const vendorId = $c('ai-vendor-picker')?._selectedId || null;
+  if (legacy && !vendorId) {
+    host.textContent = `Legacy contact: ${legacy}`;
+    host.style.display = '';
+  } else {
+    host.style.display = 'none';
+  }
 }
 
 function openEditItemModal(pid, spId, itemId) {
@@ -11498,7 +11569,6 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-room').value = item.room || '';
   $c('ai-name').value = item.name || '';
   $c('ai-itemcode').value = item.itemCode || '';
-  $c('ai-contact').value = item.contact || '';
   $c('ai-net').value = item.netPrice || '';
   $c('ai-cost-actual').value = item.costActual || '';
   $c('ai-qty').value = item.qty || '1';
@@ -11515,6 +11585,7 @@ function openEditItemModal(pid, spId, itemId) {
   _modalCharges = (item.additionalCharges || []).map(ch => ({ ...ch }));
   renderModalComponents();
   renderModalCharges();
+  initItemPickers(item);
   $c('modal-add-item').classList.add('open');
 }
 
@@ -11531,6 +11602,17 @@ function saveItem() {
 
   const adjVal = $c('ai-adj-markup').value;
   const itemTypeId = $c('ai-item-type')?.value || null;
+
+  // Picker selections + preserved legacy contact text from the existing item
+  // (the legacy text field is no longer editable from the modal, but we don't
+  // wipe it on save in case there's no vendor yet — it stays visible as the
+  // muted "Legacy contact:" line until a vendor is picked).
+  const pickedVendorId  = getItemPickerVendorId();
+  const pickedContactId = getItemPickerContactId();
+  const pickedBrandId   = getItemPickerBrandId();
+  const existingItem = itemId ? S.proposals[pid]?.spaces.find(s => s.id === spId)?.items.find(i => i.id === itemId) : null;
+  const legacyContact = existingItem?.contact || '';
+
   const base = {
     type,
     name,
@@ -11545,6 +11627,10 @@ function saveItem() {
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
     costActual: $c('ai-cost-actual').value.trim(),
     itemTypeId: itemTypeId || null,
+    vendorId: pickedVendorId,
+    vendorContactId: pickedContactId,
+    brandId: pickedBrandId,
+    contact: legacyContact,
   };
 
   const qtyUnit = $c('ai-qty-unit')?.value || '';
@@ -11554,10 +11640,10 @@ function saveItem() {
     const baseComp = comps.find(c => c.componentType === 'base');
     item = { ...base, qty: baseComp ? (baseComp.qty || '1') : '1', components: comps };
   } else if (type === 'readymade') {
-    item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
+    item = { ...base, netPrice: $c('ai-net').value.trim(),
       qty: $c('ai-qty').value || '1', qtyUnit, link: '', additionalCharges: _modalCharges.filter(ch => ch.name || ch.amount) };
   } else {
-    item = { ...base, contact: $c('ai-contact').value.trim(), netPrice: $c('ai-net').value.trim(),
+    item = { ...base, netPrice: $c('ai-net').value.trim(),
       qty: $c('ai-qty').value || '1', qtyUnit, category: $c('ai-category').value };
   }
 
@@ -11970,6 +12056,412 @@ function __bpNew(hostId) {
   });
 }
 
+// ─── ITEM-LEVEL PICKERS (single-select) ─────────────────────
+// Three pickers used on the Add/Edit Item modal:
+//   • Vendor       → proposal_items.vendor_id
+//   • VendorContact → proposal_items.vendor_contact_id (depends on vendor)
+//   • Brand         → proposal_items.brand_id (optional, single-select)
+// Each stashes its current selection on the host via `_selectedId`. The
+// host also carries an `_onChange` callback so callers can react (e.g. the
+// brand picker triggers a re-render of the contact picker so the
+// "Suggested" sub-header refreshes when a brand is set or cleared).
+//
+// All three follow the renderBrandPicker shape: the host element receives
+// one of two displays — a "selected pill" with ✕ to clear, or an input
+// that opens a popover with typeahead + an inline create-new action.
+
+// ── Vendor ──────────────────────────────────────────────────
+function renderItemVendorPicker(hostId, vendorId, onChange) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selectedId = vendorId || null;
+  host._onChange = onChange;
+  const v = vendorId ? (S.vendors || []).find(x => x.id === vendorId) : null;
+  if (v) {
+    host.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;background:rgba(122,74,16,0.08);border:1px solid rgba(122,74,16,0.2);border-radius:var(--r);padding:6px 10px">
+        <span style="font-family:var(--font-b);font-size:12px;font-weight:700;color:var(--russet)">${escH(v.name)}</span>
+        ${v.vendorType ? `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.05em;font-weight:600">${escH(v.vendorType)}</span>` : ''}
+        <div style="flex:1"></div>
+        <button onclick="event.stopPropagation(); __ivpClear('${hostId}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:14px;line-height:1;padding:0 2px" title="Clear">✕</button>
+      </div>
+      <div id="${hostId}-popover" style="display:none"></div>`;
+    return;
+  }
+  host.innerHTML = `
+    <input type="text" class="fi" id="${hostId}-input" placeholder="Search vendors…"
+      autocomplete="off"
+      oninput="__ivpFilter('${hostId}', this.value)"
+      onfocus="__ivpFilter('${hostId}', this.value)"
+      onkeydown="if(event.key==='Escape'){__ivpClose('${hostId}')}">
+    <div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:6px;min-width:280px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:2px;max-height:260px;overflow-y:auto"></div>`;
+}
+
+function __ivpClear(hostId) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selectedId = null;
+  renderItemVendorPicker(hostId, null, host._onChange);
+  host._onChange?.(null);
+}
+
+function __ivpFilter(hostId, query) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (!host || !pop) return;
+  const q = (query || '').toLowerCase().trim();
+  const vendors = (S.vendors || []).slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const matches = vendors.filter(v => !q || (v.name || '').toLowerCase().includes(q) || (v.vendorType || '').toLowerCase().includes(q));
+  const exactMatch = vendors.some(v => (v.name || '').toLowerCase() === q);
+
+  const rows = matches.slice(0, 12).map(v => `
+    <div onclick="__ivpPick('${hostId}','${v.id}')" style="padding:6px 8px;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:6px" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">
+      <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:600">${escH(v.name)}</span>
+      ${v.vendorType ? `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.05em;font-weight:600">${escH(v.vendorType)}</span>` : ''}
+    </div>`).join('');
+
+  const noMatchHint = matches.length === 0
+    ? '<div style="font-size:11px;color:var(--text-light);padding:6px 8px;font-style:italic">No vendors match.</div>'
+    : '';
+
+  const addNew = (q && !exactMatch)
+    ? `<div onclick="__ivpNew('${hostId}', ${JSON.stringify(query).replace(/"/g, '&quot;')})" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Add new vendor "${escH(query)}"</div>`
+    : `<div onclick="__ivpNew('${hostId}', '')" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Add new vendor</div>`;
+
+  pop.innerHTML = rows + noMatchHint + addNew;
+  pop.style.display = 'block';
+
+  // Close on outside click — registered once per open
+  if (!host._ivpCloser) {
+    const closer = (e) => {
+      if (!pop.contains(e.target) && e.target.id !== hostId + '-input') {
+        __ivpClose(hostId);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closer), 0);
+    host._ivpCloser = closer;
+  }
+}
+
+function __ivpClose(hostId) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (pop) pop.style.display = 'none';
+  if (host && host._ivpCloser) {
+    document.removeEventListener('click', host._ivpCloser);
+    host._ivpCloser = null;
+  }
+}
+
+function __ivpPick(hostId, vendorId) {
+  const host = $c(hostId);
+  if (!host) return;
+  __ivpClose(hostId);
+  host._selectedId = vendorId;
+  const cb = host._onChange;
+  renderItemVendorPicker(hostId, vendorId, cb);
+  cb?.(vendorId);
+}
+
+function __ivpNew(hostId, prefill) {
+  const host = $c(hostId);
+  if (!host) return;
+  __ivpClose(hostId);
+  openVendorEditor(null, (newVendorId) => {
+    if (newVendorId) __ivpPick(hostId, newVendorId);
+  }, prefill || '');
+}
+
+// ── Vendor Contact ──────────────────────────────────────────
+// Depends on which vendor is currently selected on the item. Pass the
+// vendor id explicitly (read from the vendor picker host at call time)
+// plus the current item brand id, which drives the "Suggested" sub-header
+// when a contact reps that brand.
+function renderItemContactPicker(hostId, vendorId, contactId, brandId, onChange) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selectedId = contactId || null;
+  host._vendorId = vendorId || null;
+  host._brandId = brandId || null;
+  host._onChange = onChange;
+
+  if (!vendorId) {
+    host.innerHTML = `<input type="text" class="fi" disabled placeholder="Pick a vendor first…" style="background:rgba(91,45,34,0.04)">
+      <div id="${hostId}-popover" style="display:none"></div>`;
+    return;
+  }
+
+  const c = contactId ? (S.vendorContacts || []).find(x => x.id === contactId) : null;
+  // Drop a stale selection if the contact no longer belongs to this vendor
+  if (c && c.vendorId !== vendorId) {
+    host._selectedId = null;
+    host._onChange?.(null);
+    return renderItemContactPicker(hostId, vendorId, null, brandId, onChange);
+  }
+
+  if (c) {
+    host.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;background:rgba(122,74,16,0.08);border:1px solid rgba(122,74,16,0.2);border-radius:var(--r);padding:6px 10px">
+        <span style="font-family:var(--font-b);font-size:12px;font-weight:700;color:var(--russet)">${escH(c.name)}</span>
+        ${c.title ? `<span style="font-size:10px;color:var(--text-mid);font-weight:500">· ${escH(c.title)}</span>` : ''}
+        ${c.primary ? '<span style="font-size:9px;color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Primary</span>' : ''}
+        <div style="flex:1"></div>
+        <button onclick="event.stopPropagation(); __icpClear('${hostId}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:14px;line-height:1;padding:0 2px" title="Clear">✕</button>
+      </div>
+      <div id="${hostId}-popover" style="display:none"></div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <input type="text" class="fi" id="${hostId}-input" placeholder="Search contacts at this vendor…"
+      autocomplete="off"
+      oninput="__icpFilter('${hostId}', this.value)"
+      onfocus="__icpFilter('${hostId}', this.value)"
+      onkeydown="if(event.key==='Escape'){__icpClose('${hostId}')}">
+    <div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:6px;min-width:280px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:2px;max-height:260px;overflow-y:auto"></div>`;
+}
+
+function __icpClear(hostId) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selectedId = null;
+  const cb = host._onChange;
+  renderItemContactPicker(hostId, host._vendorId, null, host._brandId, cb);
+  cb?.(null);
+}
+
+function __icpFilter(hostId, query) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (!host || !pop) return;
+  const vendorId = host._vendorId;
+  const brandId = host._brandId;
+  if (!vendorId) return;
+  const q = (query || '').toLowerCase().trim();
+
+  const all = (S.vendorContacts || [])
+    .filter(c => c.vendorId === vendorId)
+    .filter(c => !q || (c.name || '').toLowerCase().includes(q) || (c.title || '').toLowerCase().includes(q))
+    .sort((a, b) => (b.primary - a.primary) || (a.name || '').localeCompare(b.name || ''));
+
+  const suggested = brandId
+    ? all.filter(c => Array.isArray(c.brandIds) && c.brandIds.includes(brandId))
+    : [];
+  const suggestedIds = new Set(suggested.map(c => c.id));
+  const others = all.filter(c => !suggestedIds.has(c.id));
+
+  const renderRow = (c) => `
+    <div onclick="__icpPick('${hostId}','${c.id}')" style="padding:6px 8px;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:6px" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">
+      <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:600">${escH(c.name)}</span>
+      ${c.title ? `<span style="font-size:10px;color:var(--text-mid)">· ${escH(c.title)}</span>` : ''}
+      ${c.primary ? '<span style="font-size:9px;color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700;margin-left:auto">Primary</span>' : ''}
+    </div>`;
+
+  let html = '';
+  if (suggested.length) {
+    html += `<div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);padding:4px 8px 2px">Suggested (reps this brand)</div>`;
+    html += suggested.map(renderRow).join('');
+    if (others.length) {
+      html += `<div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);padding:6px 8px 2px;margin-top:4px;border-top:1px solid var(--border)">Other contacts</div>`;
+    }
+  }
+  html += others.map(renderRow).join('');
+
+  if (!all.length) {
+    html += '<div style="font-size:11px;color:var(--text-light);padding:6px 8px;font-style:italic">No contacts at this vendor yet.</div>';
+  }
+
+  html += `<div onclick="__icpNew('${hostId}')" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Add new contact</div>`;
+
+  pop.innerHTML = html;
+  pop.style.display = 'block';
+
+  if (!host._icpCloser) {
+    const closer = (e) => {
+      if (!pop.contains(e.target) && e.target.id !== hostId + '-input') {
+        __icpClose(hostId);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closer), 0);
+    host._icpCloser = closer;
+  }
+}
+
+function __icpClose(hostId) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (pop) pop.style.display = 'none';
+  if (host && host._icpCloser) {
+    document.removeEventListener('click', host._icpCloser);
+    host._icpCloser = null;
+  }
+}
+
+function __icpPick(hostId, contactId) {
+  const host = $c(hostId);
+  if (!host) return;
+  __icpClose(hostId);
+  host._selectedId = contactId;
+  const cb = host._onChange;
+  renderItemContactPicker(hostId, host._vendorId, contactId, host._brandId, cb);
+  cb?.(contactId);
+}
+
+function __icpNew(hostId) {
+  const host = $c(hostId);
+  if (!host || !host._vendorId) return;
+  __icpClose(hostId);
+  openVendorContactEditor(host._vendorId, null, (newContactId) => {
+    if (newContactId) __icpPick(hostId, newContactId);
+  });
+}
+
+// Re-evaluate the contact picker's Suggested list when the brand changes,
+// without disturbing the current selection if it's still valid.
+function __icpRefreshBrand(hostId, brandId) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._brandId = brandId || null;
+  // The pill view doesn't depend on brand — only the popover. If the picker
+  // is showing the pill, no re-render needed. If it's showing the input,
+  // a re-render also doesn't matter until the user opens the popover, but
+  // re-rendering keeps state coherent.
+  renderItemContactPicker(hostId, host._vendorId, host._selectedId, host._brandId, host._onChange);
+}
+
+// ── Brand (single-select on items) ──────────────────────────
+function renderItemBrandPicker(hostId, brandId, onChange) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selectedId = brandId || null;
+  host._onChange = onChange;
+  const b = brandId ? (S.brands || []).find(x => x.id === brandId) : null;
+  if (b) {
+    const catTag = b.categories && b.categories.length
+      ? ` <span style="font-size:9px;color:var(--text-light);font-weight:400">· ${b.categories.slice(0,2).map(escH).join(', ')}</span>`
+      : '';
+    host.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;background:rgba(122,74,16,0.08);border:1px solid rgba(122,74,16,0.2);border-radius:var(--r);padding:6px 10px">
+        <span style="font-family:var(--font-b);font-size:12px;font-weight:700;color:var(--russet)">${escH(b.name)}${catTag}</span>
+        <div style="flex:1"></div>
+        <button onclick="event.stopPropagation(); __ibpClear('${hostId}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:14px;line-height:1;padding:0 2px" title="Clear">✕</button>
+      </div>
+      <div id="${hostId}-popover" style="display:none"></div>`;
+    return;
+  }
+  host.innerHTML = `
+    <input type="text" class="fi" id="${hostId}-input" placeholder="Search brands…"
+      autocomplete="off"
+      oninput="__ibpFilter('${hostId}', this.value)"
+      onfocus="__ibpFilter('${hostId}', this.value)"
+      onkeydown="if(event.key==='Escape'){__ibpClose('${hostId}')}">
+    <div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:6px;min-width:280px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:2px;max-height:260px;overflow-y:auto"></div>`;
+}
+
+function __ibpClear(hostId) {
+  const host = $c(hostId);
+  if (!host) return;
+  host._selectedId = null;
+  const cb = host._onChange;
+  renderItemBrandPicker(hostId, null, cb);
+  cb?.(null);
+}
+
+function __ibpFilter(hostId, query) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (!host || !pop) return;
+  const q = (query || '').toLowerCase().trim();
+  const brands = (S.brands || []).slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const matches = brands.filter(b => !q
+    || (b.name || '').toLowerCase().includes(q)
+    || (b.categories || []).some(c => c.toLowerCase().includes(q)));
+  const exactMatch = brands.some(b => (b.name || '').toLowerCase() === q);
+
+  const rows = matches.slice(0, 12).map(b => {
+    const catTag = b.categories && b.categories.length
+      ? `<span style="font-size:9px;color:var(--text-light);font-weight:400;margin-left:4px">${b.categories.slice(0,2).map(escH).join(', ')}</span>` : '';
+    return `<div onclick="__ibpPick('${hostId}','${b.id}')" style="padding:6px 8px;cursor:pointer;border-radius:4px;font-size:12px;font-family:var(--font-b);color:var(--text-dark);font-weight:600" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">${escH(b.name)}${catTag}</div>`;
+  }).join('');
+
+  const noMatch = matches.length === 0
+    ? '<div style="font-size:11px;color:var(--text-light);padding:6px 8px;font-style:italic">No brands match.</div>'
+    : '';
+
+  const addNew = (q && !exactMatch)
+    ? `<div onclick="__ibpNew('${hostId}', ${JSON.stringify(query).replace(/"/g, '&quot;')})" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Create new brand "${escH(query)}"</div>`
+    : `<div onclick="__ibpNew('${hostId}', '')" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Create new brand</div>`;
+
+  pop.innerHTML = rows + noMatch + addNew;
+  pop.style.display = 'block';
+
+  if (!host._ibpCloser) {
+    const closer = (e) => {
+      if (!pop.contains(e.target) && e.target.id !== hostId + '-input') {
+        __ibpClose(hostId);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closer), 0);
+    host._ibpCloser = closer;
+  }
+}
+
+function __ibpClose(hostId) {
+  const host = $c(hostId);
+  const pop = $c(hostId + '-popover');
+  if (pop) pop.style.display = 'none';
+  if (host && host._ibpCloser) {
+    document.removeEventListener('click', host._ibpCloser);
+    host._ibpCloser = null;
+  }
+}
+
+function __ibpPick(hostId, brandId) {
+  const host = $c(hostId);
+  if (!host) return;
+  __ibpClose(hostId);
+  host._selectedId = brandId;
+  const cb = host._onChange;
+  renderItemBrandPicker(hostId, brandId, cb);
+  cb?.(brandId);
+}
+
+function __ibpNew(hostId, prefill) {
+  const host = $c(hostId);
+  if (!host) return;
+  __ibpClose(hostId);
+  // Brand editor doesn't currently accept a prefill name, but we can stuff it
+  // in after open. Cleaner: pass via a one-shot global.
+  _brandPrefillName = prefill || '';
+  openBrandEditor(null, (newBrandId) => {
+    if (newBrandId) __ibpPick(hostId, newBrandId);
+  });
+}
+
+// One-shot prefill for the brand editor when invoked from a typeahead.
+// openBrandEditor reads + clears it on next call.
+let _brandPrefillName = '';
+
+// Read helpers used by saveItem to grab the current item-modal selections.
+function getItemPickerVendorId()  { return $c('ai-vendor-picker')?._selectedId || null; }
+function getItemPickerContactId() { return $c('ai-contact-picker')?._selectedId || null; }
+function getItemPickerBrandId()   { return $c('ai-brand-picker')?._selectedId || null; }
+
+// Display helper: vendor name (+ contact name) when set, else legacy text.
+// Used by item cards / proposal rows / detail panel so the existing
+// "contact" line keeps showing something meaningful after migration.
+function itemContactDisplay(item) {
+  if (item.vendorId) {
+    const v = (S.vendors || []).find(x => x.id === item.vendorId);
+    if (!v) return '';
+    const c = item.vendorContactId ? (S.vendorContacts || []).find(x => x.id === item.vendorContactId) : null;
+    return c ? `${v.name} · ${c.name}` : v.name;
+  }
+  return item.contact || '';
+}
+
 // ─── BRAND CRUD ─────────────────────────────────────────────
 
 let _brandSaveCallback = null;
@@ -11979,7 +12471,10 @@ function openBrandEditor(id, callback) {
   const b = id ? (S.brands || []).find(x => x.id === id) : null;
   $c('br-modal-title').textContent = b ? 'Edit Brand' : 'New Brand';
   $c('br-id').value = b?.id || '';
-  $c('br-name').value = b?.name || '';
+  // Honor a one-shot prefill stashed by __ibpNew when typeahead-creating.
+  const prefill = !b && _brandPrefillName ? _brandPrefillName : '';
+  _brandPrefillName = '';
+  $c('br-name').value = b?.name || prefill;
   $c('br-notes').value = b?.notes || '';
   $c('br-delete-btn').style.display = b ? '' : 'none';
   renderBrandCategoriesEditor(b?.categories || []);
@@ -12229,11 +12724,19 @@ function populateVendorTypeDatalist() {
   dl.innerHTML = types.map(t => `<option value="${escH(t)}">`).join('');
 }
 
-function openVendorEditor(id) {
+let _vendorSaveCallback = null;
+// Draft list of contacts being added inline while creating a NEW vendor.
+// Flushed into S.vendorContacts (with the new vendor's id) on Save Vendor.
+// Reset on every openVendorEditor call so a previous Cancel doesn't leak.
+let _pendingVendorContacts = [];
+
+function openVendorEditor(id, callback, prefillName) {
+  _vendorSaveCallback = callback || null;
+  _pendingVendorContacts = [];
   const v = id ? (S.vendors || []).find(x => x.id === id) : null;
   $c('vn-modal-title').textContent = v ? 'Edit Vendor' : 'New Vendor';
   $c('vn-id').value = v?.id || '';
-  $c('vn-name').value    = v?.name || '';
+  $c('vn-name').value    = v?.name || (prefillName || '');
   $c('vn-type').value    = v?.vendorType || '';
   $c('vn-email').value   = v?.email || '';
   $c('vn-phone').value   = v?.phone || '';
@@ -12249,10 +12752,12 @@ function openVendorEditor(id) {
     if (v) v.brandIds = newIds.slice();
     else $c('vn-brands-picker')._pendingBrandIds = newIds.slice();
   });
-  // Contacts + referenced-items sections only when editing an existing vendor
+  // Contacts section is always visible. For new vendors, the list reads
+  // from _pendingVendorContacts (drafts that get flushed on Save Vendor).
+  // Referenced-items section only makes sense for existing vendors.
+  $c('vn-contacts-section').style.display = '';
+  renderVendorContactsInModal(v ? v.id : null);
   if (v) {
-    $c('vn-contacts-section').style.display = '';
-    renderVendorContactsInModal(v.id);
     const items = [];
     Object.values(S.proposals || {}).forEach(prop => {
       (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
@@ -12268,7 +12773,6 @@ function openVendorEditor(id) {
       $c('vn-items-section').style.display = 'none';
     }
   } else {
-    $c('vn-contacts-section').style.display = 'none';
     $c('vn-items-section').style.display = 'none';
   }
   $c('modal-vendor').classList.add('open');
@@ -12292,17 +12796,34 @@ function saveVendor() {
     notes:      $c('vn-notes').value.trim(),
   };
   const pendingBrands = $c('vn-brands-picker')?._pendingBrandIds || null;
+  let savedId = id;
   if (id) {
     const v = (S.vendors || []).find(x => x.id === id);
     if (v) Object.assign(v, fields);
   } else {
+    savedId = uid();
     S.vendors = S.vendors || [];
-    S.vendors.push({ id: uid(), ...fields, brandIds: pendingBrands || [], created: new Date().toISOString() });
+    S.vendors.push({ id: savedId, ...fields, brandIds: pendingBrands || [], created: new Date().toISOString() });
+
+    // Flush any inline-drafted contacts onto the new vendor
+    if (_pendingVendorContacts.length) {
+      S.vendorContacts = S.vendorContacts || [];
+      // Keep at most one primary
+      let primarySeen = false;
+      _pendingVendorContacts.forEach(pc => {
+        const isPrim = !!pc.primary && !primarySeen;
+        if (isPrim) primarySeen = true;
+        S.vendorContacts.push({ ...pc, vendorId: savedId, primary: isPrim });
+      });
+      _pendingVendorContacts = [];
+    }
   }
   save();
   closeModal('modal-vendor');
   renderContacts();
   toast(id ? 'Vendor updated.' : 'Vendor created.');
+  const cb = _vendorSaveCallback; _vendorSaveCallback = null;
+  cb?.(savedId);
 }
 
 function deleteVendor(id) {
@@ -12345,15 +12866,20 @@ function deleteVendor(id) {
 function renderVendorContactsInModal(vendorId) {
   const list = $c('vn-contacts-list');
   if (!list) return;
-  const contacts = (S.vendorContacts || [])
-    .filter(c => c.vendorId === vendorId)
-    .sort((a,b) => (b.primary - a.primary) || (a.sortOrder - b.sortOrder) || (a.name||'').localeCompare(b.name||''));
+  // null vendorId → new-vendor flow, list reflects the pending drafts
+  const contacts = vendorId
+    ? (S.vendorContacts || [])
+        .filter(c => c.vendorId === vendorId)
+        .sort((a,b) => (b.primary - a.primary) || (a.sortOrder - b.sortOrder) || (a.name||'').localeCompare(b.name||''))
+    : _pendingVendorContacts.slice()
+        .sort((a,b) => (b.primary - a.primary) || (a.name||'').localeCompare(b.name||''));
   if (!contacts.length) {
     list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No contacts yet. Add a rep if you want to track who handles this vendor.</div>';
     return;
   }
+  const safeVid = vendorId || '';
   list.innerHTML = contacts.map(c => `
-    <div onclick="openVendorContactEditor('${vendorId}','${c.id}')" style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--russet)'" onmouseout="this.style.borderColor='var(--border)'">
+    <div onclick="openVendorContactEditor('${safeVid}','${c.id}')" style="background:white;border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='var(--russet)'" onmouseout="this.style.borderColor='var(--border)'">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark)">${escH(c.name)}${c.title ? ' <span style="font-weight:400;color:var(--text-mid);font-size:11px">· ' + escH(c.title) + '</span>' : ''}</div>
         ${c.primary ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Primary</span>' : ''}
@@ -12364,8 +12890,18 @@ function renderVendorContactsInModal(vendorId) {
   `).join('');
 }
 
-function openVendorContactEditor(vendorId, contactId) {
-  const c = contactId ? (S.vendorContacts || []).find(x => x.id === contactId) : null;
+let _vendorContactSaveCallback = null;
+
+function openVendorContactEditor(vendorId, contactId, callback) {
+  _vendorContactSaveCallback = callback || null;
+  // Empty/null vendorId → new-vendor flow; the contact lives in
+  // _pendingVendorContacts until Save Vendor flushes it.
+  const isPending = !vendorId;
+  const c = contactId
+    ? (isPending
+        ? _pendingVendorContacts.find(x => x.id === contactId)
+        : (S.vendorContacts || []).find(x => x.id === contactId))
+    : null;
   $c('vnc-modal-title').textContent = c ? 'Edit Contact' : 'New Contact';
   $c('vnc-id').value = c?.id || '';
   $c('vnc-vendor-id').value = vendorId;
@@ -12388,10 +12924,12 @@ function saveVendorContact() {
   const id = $c('vnc-id').value;
   const vendorId = $c('vnc-vendor-id').value;
   const name = $c('vnc-name').value.trim();
-  if (!name)     { toast('Contact name is required.'); return; }
-  if (!vendorId) { toast('Vendor missing.'); return; }
+  if (!name) { toast('Contact name is required.'); return; }
+  // Empty vendorId means we're inside the new-vendor flow — the contact
+  // gets staged in _pendingVendorContacts and flushed on Save Vendor.
+  const isPending = !vendorId;
   const fields = {
-    vendorId,
+    vendorId: vendorId || null,
     name,
     title: $c('vnc-title').value.trim(),
     email: $c('vnc-email').value.trim(),
@@ -12399,48 +12937,86 @@ function saveVendorContact() {
     notes: $c('vnc-notes').value.trim(),
     primary: $c('vnc-primary').checked,
   };
-  // Only one primary per vendor — clear others before saving this one
-  if (fields.primary) {
-    (S.vendorContacts || []).forEach(c => {
-      if (c.vendorId === vendorId && c.id !== id && c.primary) c.primary = false;
-    });
-  }
   const pendingBrands = $c('vnc-brands-picker')?._pendingBrandIds || null;
-  if (id) {
-    const c = (S.vendorContacts || []).find(x => x.id === id);
-    if (c) Object.assign(c, fields);
+  let savedId = id;
+
+  if (isPending) {
+    // ── New-vendor draft path ──
+    if (fields.primary) {
+      _pendingVendorContacts.forEach(c => { if (c.id !== id) c.primary = false; });
+    }
+    if (id) {
+      const c = _pendingVendorContacts.find(x => x.id === id);
+      if (c) Object.assign(c, fields, pendingBrands ? { brandIds: pendingBrands } : {});
+    } else {
+      savedId = uid();
+      _pendingVendorContacts.push({
+        id: savedId,
+        brandIds: pendingBrands || [],
+        sortOrder: 0,
+        ...fields,
+        created: new Date().toISOString(),
+      });
+    }
+    closeModal('modal-vendor-contact');
+    renderVendorContactsInModal(null);
   } else {
-    S.vendorContacts = S.vendorContacts || [];
-    S.vendorContacts.push({
-      id: uid(),
-      brandIds: pendingBrands || [],
-      sortOrder: 0,
-      ...fields,
-      created: new Date().toISOString(),
-    });
+    // ── Existing-vendor path (writes through to S.vendorContacts) ──
+    if (fields.primary) {
+      (S.vendorContacts || []).forEach(c => {
+        if (c.vendorId === vendorId && c.id !== id && c.primary) c.primary = false;
+      });
+    }
+    if (id) {
+      const c = (S.vendorContacts || []).find(x => x.id === id);
+      if (c) Object.assign(c, fields, pendingBrands ? { brandIds: pendingBrands } : {});
+    } else {
+      savedId = uid();
+      S.vendorContacts = S.vendorContacts || [];
+      S.vendorContacts.push({
+        id: savedId,
+        brandIds: pendingBrands || [],
+        sortOrder: 0,
+        ...fields,
+        created: new Date().toISOString(),
+      });
+    }
+    save();
+    closeModal('modal-vendor-contact');
+    renderVendorContactsInModal(vendorId);
   }
-  save();
-  closeModal('modal-vendor-contact');
-  renderVendorContactsInModal(vendorId);
+
   toast(id ? 'Contact updated.' : 'Contact added.');
+  const cb = _vendorContactSaveCallback; _vendorContactSaveCallback = null;
+  cb?.(savedId);
 }
 
 function deleteVendorContact(id) {
   if (!id) return;
-  const c = (S.vendorContacts || []).find(x => x.id === id);
+  const vendorId = $c('vnc-vendor-id').value;
+  const isPending = !vendorId;
+  const c = isPending
+    ? _pendingVendorContacts.find(x => x.id === id)
+    : (S.vendorContacts || []).find(x => x.id === id);
   if (!c) return;
   if (!confirm('Delete contact "' + c.name + '"?')) return;
-  const vendorId = c.vendorId;
-  S.vendorContacts = (S.vendorContacts || []).filter(x => x.id !== id);
-  // Clear any item references that pointed at this contact
-  Object.values(S.proposals || {}).forEach(prop => {
-    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
-      if (it.vendorContactId === id) it.vendorContactId = null;
-    }));
-  });
-  save();
-  closeModal('modal-vendor-contact');
-  renderVendorContactsInModal(vendorId);
+
+  if (isPending) {
+    _pendingVendorContacts = _pendingVendorContacts.filter(x => x.id !== id);
+    closeModal('modal-vendor-contact');
+    renderVendorContactsInModal(null);
+  } else {
+    S.vendorContacts = (S.vendorContacts || []).filter(x => x.id !== id);
+    // Clear any item references that pointed at this contact
+    Object.values(S.proposals || {}).forEach(prop => {
+      (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+        if (it.vendorContactId === id) it.vendorContactId = null;
+      }));
+    });
+    save();
+    closeModal('modal-vendor-contact');
+    renderVendorContactsInModal(vendorId);
+  }
   toast('Contact deleted.');
 }
 
@@ -15607,7 +16183,7 @@ function addProposalItemToDoc(itemId, spId) {
   const img = (item.files||[]).find(f => /\.(png|jpg|jpeg|gif|webp)$/i.test(f.name));
   doc.items.push({
     id: uid(), name: item.name || '', itemCode: item.itemCode || '',
-    description: item.contact || '', room: sp.name || 'Unassigned',
+    description: itemContactDisplay(item) || '', room: sp.name || 'Unassigned',
     imageData: img?.data || null, imageType: 'material', caption: '',
     proposalItemId: item.id, proposalCompId: null,
   });
