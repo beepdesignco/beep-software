@@ -1413,8 +1413,8 @@ tr:hover .row-btns { opacity:1; }
           <div class="page-title">Time Tracker</div>
           <div class="page-sub">Log billable hours · Baylor $195/hr · Support $105/hr</div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <select class="fi" id="tt-filter-proj" onchange="renderTime()" style="font-size:12px;padding:6px 10px;width:200px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+          <select class="fi" id="tt-filter-proj" onchange="renderTime()" style="font-size:12px;padding:6px 10px;width:180px">
             <option value="">All Projects</option>
           </select>
           <select class="fi" id="tt-filter-person" onchange="renderTime()" style="font-size:12px;padding:6px 10px">
@@ -1427,6 +1427,13 @@ tr:hover .row-btns { opacity:1; }
             <option value="unbilled">Unbilled Only</option>
             <option value="billed">Billed Only</option>
           </select>
+          <select class="fi" id="tt-filter-invoice" onchange="renderTime()" style="font-size:12px;padding:6px 10px;max-width:180px">
+            <option value="">All Invoices</option>
+          </select>
+          <input type="date" class="fi" id="tt-filter-from" onchange="renderTime()" title="From date" style="font-size:12px;padding:6px 10px;width:140px">
+          <input type="date" class="fi" id="tt-filter-to" onchange="renderTime()" title="To date" style="font-size:12px;padding:6px 10px;width:140px">
+          <button class="btn btn-ghost btn-sm" onclick="clearTimeFilters()" style="font-size:11px" title="Reset all filters">Clear</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportTimeCsv()" style="font-size:11px" title="Download the filtered entries as CSV">Export CSV</button>
           <button class="btn btn-primary" onclick="openNewTimeModal()">+ Log Time</button>
         </div>
       </div>
@@ -19717,10 +19724,106 @@ function setTimeTab(tab) {
   renderTime();
 }
  
+// Set of invoice ids that have at least one time entry billed against any of
+// their line items. Used to populate the invoice filter dropdown so users only
+// see invoices that actually carry time work.
+function invoicesWithTime() {
+  const lineToInv = new Map();
+  (S.invoices || []).forEach(inv => (inv.lineItems || []).forEach(l => lineToInv.set(l.id, inv.id)));
+  const out = new Set();
+  (S.timeEntries || []).forEach(e => {
+    if (e.invoiceLineItemId && lineToInv.has(e.invoiceLineItemId)) out.add(lineToInv.get(e.invoiceLineItemId));
+  });
+  return out;
+}
+
+// Resolve which invoice (if any) a time entry was billed against, by walking
+// the entry's invoice_line_item_id back to its parent invoice.
+function invoiceForTimeEntry(e) {
+  if (!e?.invoiceLineItemId) return null;
+  return (S.invoices || []).find(inv => (inv.lineItems || []).some(l => l.id === e.invoiceLineItemId)) || null;
+}
+
+function clearTimeFilters() {
+  ['tt-filter-proj','tt-filter-person','tt-filter-billed','tt-filter-invoice','tt-filter-from','tt-filter-to'].forEach(id => {
+    const el = $c(id); if (el) el.value = '';
+  });
+  renderTime();
+}
+
+// CSV export of the currently-filtered tracker entries. Matches the visible
+// filter set so what you download is what you see. Quotes any field that
+// contains a comma, newline, or quote per RFC 4180.
+function exportTimeCsv() {
+  const entries = collectFilteredTimeEntries();
+  if (!entries.length) { toast('Nothing to export — adjust filters.'); return; }
+  const escapeCsv = (v) => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const rows = [
+    ['Date','Project','Client','Person','Hours','Rate','Fee','Status','Invoice','Notes'],
+  ];
+  entries.forEach(e => {
+    const proj = (S.projects || []).find(p => p.id === e.projectId);
+    const client = proj ? getClientName(proj.clientId) : '';
+    const inv = invoiceForTimeEntry(e);
+    const personLabel = (typeof TEAM !== 'undefined') ? (TEAM.find(t => t.id === e.person)?.label || e.person || '') : (e.person || '');
+    const hours = parseFloat(e.hours) || 0;
+    const rate = parseFloat(e.rate) || 0;
+    rows.push([
+      entryDateLabel(e),
+      proj?.name || '',
+      client || '',
+      personLabel,
+      hours.toFixed(4),
+      rate.toFixed(2),
+      (hours * rate).toFixed(2),
+      e.billed ? 'Billed' : 'Unbilled',
+      inv?.number || '',
+      e.notes || e.description || '',
+    ]);
+  });
+  const csv = rows.map(r => r.map(escapeCsv).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = 'beep-time-' + stamp + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+  toast('Exported ' + entries.length + ' entr' + (entries.length!==1?'ies':'y') + '.');
+}
+
+// Returns the same filtered list `renderTime` builds, without rendering.
+function collectFilteredTimeEntries() {
+  let entries = [...(S.timeEntries || [])];
+  const fProj    = $c('tt-filter-proj')?.value    || '';
+  const fPerson  = $c('tt-filter-person')?.value  || '';
+  const fBilled  = $c('tt-filter-billed')?.value  || '';
+  const fInvoice = $c('tt-filter-invoice')?.value || '';
+  const fFrom    = $c('tt-filter-from')?.value    || '';
+  const fTo      = $c('tt-filter-to')?.value      || '';
+  if (fProj)   entries = entries.filter(e => e.projectId === fProj);
+  if (fPerson) entries = entries.filter(e => e.person === fPerson);
+  if (fBilled === 'billed')   entries = entries.filter(e => e.billed);
+  if (fBilled === 'unbilled') entries = entries.filter(e => !e.billed);
+  if (fInvoice) {
+    const inv = (S.invoices || []).find(i => i.id === fInvoice);
+    const lineIds = new Set((inv?.lineItems || []).map(l => l.id));
+    entries = entries.filter(e => e.invoiceLineItemId && lineIds.has(e.invoiceLineItemId));
+  }
+  if (fFrom) entries = entries.filter(e => entryDateLabel(e) >= fFrom);
+  if (fTo)   entries = entries.filter(e => entryDateLabel(e) <= fTo);
+  return entries.sort((a,b) => (entryDateLabel(b) || '').localeCompare(entryDateLabel(a) || ''));
+}
+
 function renderTime() {
   const body = $c('tt-body');
   if (!body) return;
- 
+
   // Populate project filter + timer project dropdowns
   const projSel = $c('tt-filter-proj');
   if (projSel) {
@@ -19728,25 +19831,49 @@ function renderTime() {
     projSel.innerHTML = '<option value="">All Projects</option>' +
       (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
   }
+  // Populate invoice filter — only invoices that actually carry time entries
+  const invSel = $c('tt-filter-invoice');
+  if (invSel) {
+    const cur = invSel.value;
+    const linkedInvIds = invoicesWithTime();
+    const opts = (S.invoices || []).filter(i => linkedInvIds.has(i.id))
+      .sort((a, b) => String(b.sentDate || b.created || '').localeCompare(String(a.sentDate || a.created || '')));
+    invSel.innerHTML = '<option value="">All Invoices</option>'
+      + opts.map(i => {
+          const proj = (S.projects || []).find(p => p.id === i.projectId);
+          return `<option value="${i.id}" ${i.id===cur?'selected':''}>${escH(i.number || '')}${proj ? ' · ' + escH(proj.name) : ''}</option>`;
+        }).join('');
+  }
   const timerProjSel = $c('tt-timer-proj');
   if (timerProjSel) {
     const curT = S.activeTimer?.projectId || timerProjSel.value;
     timerProjSel.innerHTML = '<option value="">— Pick a project —</option>' +
       (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===curT?'selected':''}>${escH(p.name)}</option>`).join('');
   }
- 
+
   let entries = [...(S.timeEntries||[])];
-  const fProj   = $c('tt-filter-proj')?.value || '';
-  const fPerson = $c('tt-filter-person')?.value || '';
-  const fBilled = $c('tt-filter-billed')?.value || '';
- 
+  const fProj    = $c('tt-filter-proj')?.value    || '';
+  const fPerson  = $c('tt-filter-person')?.value  || '';
+  const fBilled  = $c('tt-filter-billed')?.value  || '';
+  const fInvoice = $c('tt-filter-invoice')?.value || '';
+  const fFrom    = $c('tt-filter-from')?.value    || '';
+  const fTo      = $c('tt-filter-to')?.value      || '';
+
   if (fProj)   entries = entries.filter(e => e.projectId === fProj);
   if (fPerson) entries = entries.filter(e => e.person === fPerson);
   if (fBilled === 'billed')   entries = entries.filter(e => e.billed);
   if (fBilled === 'unbilled') entries = entries.filter(e => !e.billed);
- 
+  if (fInvoice) {
+    const inv = (S.invoices || []).find(i => i.id === fInvoice);
+    const lineIds = new Set((inv?.lineItems || []).map(l => l.id));
+    entries = entries.filter(e => e.invoiceLineItemId && lineIds.has(e.invoiceLineItemId));
+  }
+  if (fFrom) entries = entries.filter(e => entryDateLabel(e) >= fFrom);
+  if (fTo)   entries = entries.filter(e => entryDateLabel(e) <= fTo);
+
+  const filtered = !!(fProj || fPerson || fBilled || fInvoice || fFrom || fTo);
   if (!entries.length) {
-    body.innerHTML = `<div class="no-results">${fProj||fPerson||fBilled ? 'No entries match those filters.' : 'No time entries yet. Hit + Log Time to start the clock.'}</div>`;
+    body.innerHTML = `<div class="no-results">${filtered ? 'No entries match those filters.' : 'No time entries yet. Hit + Log Time to start the clock.'}</div>`;
     return;
   }
  
@@ -19803,6 +19930,10 @@ function renderTimeLog(entries) {
     const proj = (S.projects||[]).find(p => p.id === e.projectId);
     const personLabel = TEAM.find(t=>t.id===e.person)?.label || e.person || '—';
     const fee = (parseFloat(e.hours)||0) * (parseFloat(e.rate)||0);
+    const inv = invoiceForTimeEntry(e);
+    const invCell = inv
+      ? `<a href="#" onclick="event.preventDefault(); event.stopPropagation(); openInvoiceBuilder('${inv.id}')" style="color:var(--russet);text-decoration:none;font-family:var(--font-b);font-weight:700">${escH(inv.number || '')}</a>`
+      : '<span style="color:var(--text-light)">—</span>';
     return `
       <tr class="${e.billed?'is-billed':''}">
         <td>${escH(fmtEntryWhen(e))}</td>
@@ -19812,6 +19943,7 @@ function renderTimeLog(entries) {
         <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
         <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
         <td>${e.billed ? '<span class="tt-billed-pill">Billed</span>' : '<span class="tt-unbilled-pill">Unbilled</span>'}</td>
+        <td style="font-size:11px">${invCell}</td>
         <td style="color:var(--text-mid);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
         <td><button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button></td>
       </tr>`;
@@ -19821,7 +19953,7 @@ function renderTimeLog(entries) {
       <thead><tr>
         <th>Date</th><th>Project</th><th>Person</th>
         <th style="text-align:right">Hrs</th><th style="text-align:right">Rate</th>
-        <th style="text-align:right">Fee</th><th>Status</th><th>Notes</th><th></th>
+        <th style="text-align:right">Fee</th><th>Status</th><th>Invoice</th><th>Notes</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr class="tt-total-row">
@@ -19829,7 +19961,7 @@ function renderTimeLog(entries) {
         <td style="text-align:right">${totalHrs % 1 === 0 ? totalHrs : totalHrs.toFixed(2)}</td>
         <td></td>
         <td style="text-align:right">${fmt(totalFee)}</td>
-        <td colspan="3"></td>
+        <td colspan="4"></td>
       </tr></tfoot>
     </table>`;
 }
