@@ -1238,10 +1238,6 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◎</span>
         <span class="nav-label">Invoices</span>
       </div>
-      <div class="nav-item" onclick="showView('purchase-orders')" data-view="purchase-orders">
-        <span class="nav-icon">⊠</span>
-        <span class="nav-label">Purchase Orders</span>
-      </div>
       <div class="nav-item" onclick="showView('expenses')" data-view="expenses">
         <span class="nav-icon">◆</span>
         <span class="nav-label">Expenses</span>
@@ -1504,24 +1500,6 @@ tr:hover .row-btns { opacity:1; }
       <div class="contacts-body" id="invoices-body"></div>
     </div>
 
-    <!-- ─────────── PURCHASE ORDERS VIEW ─────────── -->
-    <div class="view" id="view-purchase-orders">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Purchase Orders</div>
-          <div class="page-sub">Track every order out the door — from draft to received.</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-primary" onclick="openPOEditor(null)">+ New PO</button>
-        </div>
-      </div>
-      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <input type="text" class="search-in" id="po-search" placeholder="Search by number, vendor, project, sidemark…" oninput="renderPurchaseOrders()" style="flex:1;min-width:240px">
-      </div>
-      <div id="po-status-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
-      <div class="contacts-body" id="purchase-orders-body"></div>
-    </div>
-
     <!-- ─────────── EXPENSES VIEW ─────────── -->
     <div class="view" id="view-expenses">
       <div class="page-header">
@@ -1628,20 +1606,30 @@ tr:hover .row-btns { opacity:1; }
       <div class="page-header">
         <div>
           <div class="page-title">Documents</div>
-          <div class="page-sub">Create schedules, worksheets, and project documents</div>
+          <div class="page-sub">Schedules, purchase orders, and project documents — one place.</div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <select class="fi" id="doc-filter-project" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px;width:200px">
-            <option value="">All Projects</option>
-          </select>
-          <select class="fi" id="doc-filter-template" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px">
-            <option value="">All Types</option>
-          </select>
-          <button class="btn btn-primary" onclick="openNewDocModal()">+ New Document</button>
-        </div>
+        <div id="docs-header-actions" style="display:flex;gap:8px;align-items:center"></div>
       </div>
-      <div class="contacts-body" id="documents-list-body"></div>
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
+        <button class="view-tab active" data-doctab="schedules" onclick="setDocsTab('schedules')" style="margin-bottom:-1px">Generated Documents</button>
+        <button class="view-tab"        data-doctab="pos"       onclick="setDocsTab('pos')"       style="margin-bottom:-1px">Purchase Orders</button>
+      </div>
+      <div id="docs-tab-body"></div>
     </div>
+
+    <!-- Generated Documents tab body — pre-existing markup, lives inside docs-tab-body -->
+    <template id="tpl-doctab-schedules">
+      <div class="contacts-body" id="documents-list-body"></div>
+    </template>
+
+    <!-- Purchase Orders tab body — list view markup folded in from the old standalone view -->
+    <template id="tpl-doctab-pos">
+      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <input type="text" class="search-in" id="po-search" placeholder="Search by number, vendor, project, sidemark…" oninput="renderPurchaseOrders()" style="flex:1;min-width:240px">
+      </div>
+      <div id="po-status-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
+      <div class="contacts-body" id="purchase-orders-body"></div>
+    </template>
 
     <!-- ─────────── DOCUMENT EDITOR VIEW ─────────── -->
     <div class="view" id="view-doc-editor">
@@ -6157,14 +6145,17 @@ function showView(v) {
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'work')    renderWork();
-  if (v === 'purchase-orders') renderPurchaseOrders();
+  if (v === 'documents') renderDocsTab();
+  // Legacy redirects — old top-level "purchase-orders" nav now lives in Documents
+  if (v === 'purchase-orders') { _docsTab = 'pos'; showView('documents'); return; }
   // Legacy redirect — old "vendors" nav was folded into contacts
   if (v === 'vendors') { showView('contacts'); return; }
   if (v === 'time') renderTime();
   if (v === 'expenses') renderExpenses();
   if (v === 'dashboard') renderDashboard();
   if (v === 'settings') setSettingsTab(_settingsTab || 'studio');
-  if (v === 'documents') renderDocuments();
+  // (documents handled above via renderDocsTab — old direct call kept as fallback for safety)
+  if (v === 'documents' && typeof renderDocsTab !== 'function') renderDocuments();
   if (v === 'doc-editor') { /* rendered by openDocEditor */ }
   if (v === 'invoices') { if (_invTab === 'reports') renderInvReports(); else renderInvoices(); }
   if (v === 'invoice-builder') { /* rendered by openInvoiceBuilder */ }
@@ -14749,6 +14740,46 @@ function printCurrentDoc() {
     imgs.forEach(img => { if (img.complete) tryPrint(); else { img.onload = tryPrint; img.onerror = tryPrint; } });
   } else {
     setTimeout(() => w.print(), 300);
+  }
+}
+
+// Documents view tab router. The view exposes two tabs — "Generated Documents"
+// (the existing schedule-document workspace) and "Purchase Orders" (the cross-
+// project PO list, formerly its own top-level nav). Each tab renders its own
+// body markup from a <template> in the view container, and supplies its own
+// header action buttons via #docs-header-actions so they look native to the tab.
+let _docsTab = 'schedules';
+
+function setDocsTab(tab) {
+  _docsTab = tab;
+  $a('[data-doctab]').forEach(b => b.classList.toggle('active', b.dataset.doctab === tab));
+  renderDocsTab();
+}
+
+function renderDocsTab() {
+  // Sync the active-tab class on tab buttons (defensive — initial markup only
+  // marks Generated Documents active and might drift after legacy redirects).
+  $a('[data-doctab]').forEach(b => b.classList.toggle('active', b.dataset.doctab === _docsTab));
+  const host = $c('docs-tab-body');
+  const actions = $c('docs-header-actions');
+  if (!host) return;
+  if (_docsTab === 'pos') {
+    host.innerHTML = $c('tpl-doctab-pos').innerHTML;
+    if (actions) actions.innerHTML = '<button class="btn btn-primary" onclick="openPOEditor(null)">+ New PO</button>';
+    renderPurchaseOrders();
+  } else {
+    host.innerHTML = $c('tpl-doctab-schedules').innerHTML;
+    if (actions) {
+      actions.innerHTML = `
+        <select class="fi" id="doc-filter-project" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px;width:200px">
+          <option value="">All Projects</option>
+        </select>
+        <select class="fi" id="doc-filter-template" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px">
+          <option value="">All Types</option>
+        </select>
+        <button class="btn btn-primary" onclick="openNewDocModal()">+ New Document</button>`;
+    }
+    renderDocuments();
   }
 }
 
