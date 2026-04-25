@@ -2139,7 +2139,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
     <div class="frow">
-      <div class="fg">
+      <div class="fg" id="ai-vendor-fg">
         <label class="fl">Vendor</label>
         <div id="ai-vendor-picker" style="position:relative"></div>
       </div>
@@ -2148,7 +2148,7 @@ tr:hover .row-btns { opacity:1; }
         <select class="fi fsel" id="ai-room"><!-- populated by JS --></select>
       </div>
     </div>
-    <div class="frow">
+    <div class="frow" id="ai-contact-brand-row">
       <div class="fg">
         <label class="fl">Vendor Contact</label>
         <div id="ai-contact-picker" style="position:relative"></div>
@@ -2159,6 +2159,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
     <div id="ai-legacy-contact" style="display:none;font-size:11px;color:var(--text-light);font-style:italic;margin:-6px 0 10px 0"></div>
+    <div id="ai-constructed-vendor-note" style="display:none;font-size:11px;color:var(--text-light);font-style:italic;margin:-4px 0 10px 0">Vendor / contact / brand are tracked per component below.</div>
     <div class="frow">
       <div class="fg">
         <label class="fl">Item Type <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — manage list in App Settings → Categories)</span></label>
@@ -5949,6 +5950,7 @@ function dbCompToS(c) {
     contact: c.contact || '',
     vendorId: c.vendor_id || null,
     vendorContactId: c.vendor_contact_id || null,
+    brandId: c.brand_id || null,
     netCost: c.net_cost != null ? String(c.net_cost) : '',
     qty: c.qty != null ? Number(c.qty) : 1,
     qtyUnit: c.qty_unit || '',
@@ -6332,6 +6334,7 @@ function componentToDB(c) {
     component_type: c.componentType || null, contact: c.contact || null,
     vendor_id:         c.vendorId        || null,
     vendor_contact_id: c.vendorContactId || null,
+    brand_id:          c.brandId         || null,
     net_cost: _parseMoney(c.netCost), qty: Number(c.qty || 1), qty_unit: c.qtyUnit || null,
     status: c.status || 'proposed', due_date: c.dueDate || null, invoice_phase: c.invoicePhase || null,
     description: c.description || null, note: c.note || null,
@@ -8177,7 +8180,7 @@ function renderPMItemCard(item, sp, pid) {
           <span class="status-dot" style="background:${cGrouped ? statusColor : cStatusColor};width:6px;height:6px"></span>
           <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}${(parseFloat(c.qty)||1)>1||c.qtyUnit?` <span style="color:var(--text-light);font-size:9px">×${parseFloat(c.qty)||1}${c.qtyUnit?' '+escH(c.qtyUnit):''}</span>`:''}</span>
           ${cTypeLabel ? `<span class="comp-type-label" style="font-size:8px">${cTypeLabel}</span>` : ''}
-          ${c.contact ? `<span style="color:var(--text-light);font-size:10px">${escH(c.contact)}</span>` : ''}
+          ${(() => { const d = itemContactDisplay(c); return d ? `<span style="color:var(--text-light);font-size:10px">${escH(d)}</span>` : ''; })()}
           ${!cGrouped ? `<span style="font-size:10px;font-family:var(--font-b);color:${cStatusColor};white-space:nowrap">${cStatusLabel}</span>` : ''}
           <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):''}</span>
         </div>`;
@@ -8198,7 +8201,7 @@ function renderPMItemCard(item, sp, pid) {
             return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px;${dimStyle}transition:opacity 0.2s">
               <span class="status-dot" style="background:${sColor};width:6px;height:6px"></span>
               <span style="font-family:var(--font-b);color:var(--text-dark);flex:1">${escH(c.name||'—')}</span>
-              ${c.contact ? `<span style="color:var(--text-light);font-size:10px">${escH(c.contact)}</span>` : ''}
+              ${(() => { const d = itemContactDisplay(c); return d ? `<span style="color:var(--text-light);font-size:10px">${escH(d)}</span>` : ''; })()}
               <span style="font-size:10px;font-family:var(--font-b);color:${sColor};white-space:nowrap">${sLabel}</span>
               <span style="font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${cNet>0?fmt(cNet):''}</span>
             </div>`;
@@ -8641,7 +8644,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
             <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.03em">${escH(c.name||'—')}</span>
             ${(parseFloat(c.qty)||1)>1||c.qtyUnit?`<span style="font-size:10px;color:var(--text-mid);font-family:var(--font-b);margin-left:4px">×${parseFloat(c.qty)||1}${c.qtyUnit?' '+escH(c.qtyUnit):''}</span>`:''}
             ${cTypeLabel ? `<span class="comp-type-label" style="margin-left:4px">${cTypeLabel}</span>` : ''}
-            ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
+            ${(() => { const d = itemContactDisplay(c); return d ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(d)}</span>` : ''; })()}
           </div>
           <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${cNet>0?fmt(cNet):'—'}</span>
         </div>
@@ -10164,7 +10167,7 @@ function renderItemRow(item, spId, pid) {
             ${c.allowance ? '<span class="allowance-badge">A</span>' : ''}
             ${cTypeLabel ? `<span class="comp-type-label">${cTypeLabel}</span>` : ''}
             ${qtyNote}
-            ${c.contact ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(c.contact)}</span>` : ''}
+            ${(() => { const d = itemContactDisplay(c); return d ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(d)}</span>` : ''; })()}
             ${cMarkupNote}
           </td>
           <td class="hide-client" style="text-align:right;font-size:12px;color:var(--text-mid);padding:6px 10px">${cNetTotal>0?fmt(cNetTotal):'—'}${cQty>1&&cNetEach>0?`<div style="font-size:9px;color:var(--text-light)">${fmt(cNetEach)} ea.</div>`:''}</td>
@@ -11292,6 +11295,13 @@ function setItemType(type) {
   $c('ai-charges-section').style.display = type === 'readymade' ? '' : 'none';
   $c('ai-price-row').style.display = type === 'constructed' ? 'none' : '';
   $c('ai-category-wrap').style.display = type === 'openline' ? '' : 'none';
+  // Constructed items don't have item-level vendor/contact/brand — each
+  // component carries its own. Hide the item-level pickers and show a
+  // small note explaining where to set them.
+  const constructed = type === 'constructed';
+  if ($c('ai-vendor-fg'))         $c('ai-vendor-fg').style.display         = constructed ? 'none' : '';
+  if ($c('ai-contact-brand-row')) $c('ai-contact-brand-row').style.display = constructed ? 'none' : '';
+  if ($c('ai-constructed-vendor-note')) $c('ai-constructed-vendor-note').style.display = constructed ? '' : 'none';
 }
 
 function populateRoomSelect(pid) {
@@ -11314,7 +11324,8 @@ function addModalComponent(comp) {
   readModalComponentsFromDOM();
   _modalComponents.push(comp || {
     id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1, qtyUnit: '',
-    allowance: false, billCostOnly: false, adjustMarkup: null, note: ''
+    allowance: false, billCostOnly: false, adjustMarkup: null, note: '',
+    vendorId: null, vendorContactId: null, brandId: null
   });
 
   renderModalComponents();
@@ -11327,7 +11338,7 @@ function renderModalComponents() {
       `<option value="${t.id}" ${c.componentType === t.id ? 'selected' : ''}>${t.label}</option>`
     ).join('');
     return `
-    <div class="person-entry" style="margin-bottom:6px" data-cidx="${i}">
+    <div class="person-entry" style="margin-bottom:6px" data-cidx="${i}" data-cid="${c.id}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <span class="person-entry-lbl">Component ${i + 1}</span>
         <button type="button" class="remove-poc-btn" onclick="removeModalComponent(${i})">Remove</button>
@@ -11343,9 +11354,19 @@ function renderModalComponents() {
         </div>
       </div>
       <div class="frow">
-        <div class="fg"><label class="fl">Contact</label>
-          <input type="text" class="fi comp-contact" value="${escH(c.contact)}" placeholder="Vendor / workroom">
+        <div class="fg"><label class="fl">Vendor</label>
+          <div id="cmp-vendor-${c.id}" style="position:relative"></div>
         </div>
+      </div>
+      <div class="frow">
+        <div class="fg"><label class="fl">Vendor Contact</label>
+          <div id="cmp-contact-${c.id}" style="position:relative"></div>
+        </div>
+        <div class="fg"><label class="fl">Brand <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+          <div id="cmp-brand-${c.id}" style="position:relative"></div>
+        </div>
+      </div>
+      <div class="frow">
         <div class="fg"><label class="fl">Net Cost (each)</label>
           <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00">
         </div>
@@ -11380,6 +11401,58 @@ function renderModalComponents() {
       </div>` : ''}
     </div>`;
   }).join('');
+
+  // After innerHTML rebuilds the rows, mount the per-component pickers.
+  _modalComponents.forEach(initComponentPickers);
+}
+
+// Mount vendor / vendor-contact / brand pickers on a single component row.
+// Sub-contacts and available brands are scoped to the component's chosen
+// vendor — when vendor changes, both downstream pickers re-render and any
+// no-longer-valid selection is cleared.
+function initComponentPickers(c) {
+  const vHost = `cmp-vendor-${c.id}`;
+  const ctHost = `cmp-contact-${c.id}`;
+  const brHost = `cmp-brand-${c.id}`;
+
+  const allowedBrandIdsFor = (vendorId) => {
+    if (!vendorId) return [];
+    const v = (S.vendors || []).find(x => x.id === vendorId);
+    return v?.brandIds || [];
+  };
+
+  const mountBrand = () => {
+    renderItemBrandPicker(brHost, c.brandId || null, (newBrandId) => {
+      c.brandId = newBrandId || null;
+      __icpRefreshBrand(ctHost, c.brandId);
+    }, { restrictTo: allowedBrandIdsFor(c.vendorId), allowCreate: false });
+  };
+
+  const mountContact = () => {
+    renderItemContactPicker(ctHost, c.vendorId || null, c.vendorContactId || null, c.brandId || null, (newContactId) => {
+      c.vendorContactId = newContactId || null;
+    });
+  };
+
+  const mountVendor = () => {
+    renderItemVendorPicker(vHost, c.vendorId || null, (newVendorId) => {
+      c.vendorId = newVendorId || null;
+      // Drop now-invalid downstream selections
+      const allowed = allowedBrandIdsFor(c.vendorId);
+      if (c.brandId && !allowed.includes(c.brandId)) c.brandId = null;
+      if (c.vendorContactId) {
+        const stillValid = (S.vendorContacts || [])
+          .some(x => x.id === c.vendorContactId && x.vendorId === c.vendorId);
+        if (!stillValid) c.vendorContactId = null;
+      }
+      mountContact();
+      mountBrand();
+    });
+  };
+
+  mountVendor();
+  mountContact();
+  mountBrand();
 }
 
 function onCompTypeChange(idx, val) {
@@ -11400,7 +11473,9 @@ function readModalComponentsFromDOM() {
     if (_modalComponents[i]) {
       _modalComponents[i].name = el.querySelector('.comp-name')?.value.trim() || '';
       _modalComponents[i].componentType = el.querySelector('.comp-type')?.value || '';
-      _modalComponents[i].contact = el.querySelector('.comp-contact')?.value.trim() || '';
+      // .comp-contact text input replaced by vendor/contact/brand pickers;
+      // those mutate _modalComponents[i] directly via onChange callbacks,
+      // so legacy `c.contact` is preserved in place — never read from DOM.
       _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
       _modalComponents[i].qty = parseFloat(el.querySelector('.comp-qty')?.value) || 1;
       _modalComponents[i].qtyUnit = el.querySelector('.comp-unit')?.value || '';
@@ -12368,11 +12443,19 @@ function __icpRefreshBrand(hostId, brandId) {
 }
 
 // ── Brand (single-select on items) ──────────────────────────
-function renderItemBrandPicker(hostId, brandId, onChange) {
+// opts.restrictTo  — array of brand ids; only these are pickable. Used by
+//                    components: scope to the component's vendor's brand list.
+// opts.allowCreate — bool (default true). Component pickers pass false; the
+//                    only place you can mint a new brand is at the vendor
+//                    level (so component reps don't accidentally fork brands).
+function renderItemBrandPicker(hostId, brandId, onChange, opts) {
   const host = $c(hostId);
   if (!host) return;
   host._selectedId = brandId || null;
   host._onChange = onChange;
+  opts = opts || {};
+  host._restrictTo  = Array.isArray(opts.restrictTo) ? opts.restrictTo : null;
+  host._allowCreate = opts.allowCreate !== false;
   const b = brandId ? (S.brands || []).find(x => x.id === brandId) : null;
   if (b) {
     const catTag = b.categories && b.categories.length
@@ -12396,12 +12479,16 @@ function renderItemBrandPicker(hostId, brandId, onChange) {
     <div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:6px;min-width:280px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:2px;max-height:260px;overflow-y:auto"></div>`;
 }
 
+function __ibpCurrentOpts(host) {
+  return { restrictTo: host._restrictTo || null, allowCreate: host._allowCreate !== false };
+}
+
 function __ibpClear(hostId) {
   const host = $c(hostId);
   if (!host) return;
   host._selectedId = null;
   const cb = host._onChange;
-  renderItemBrandPicker(hostId, null, cb);
+  renderItemBrandPicker(hostId, null, cb, __ibpCurrentOpts(host));
   cb?.(null);
 }
 
@@ -12410,8 +12497,15 @@ function __ibpFilter(hostId, query) {
   const pop = $c(hostId + '-popover');
   if (!host || !pop) return;
   const q = (query || '').toLowerCase().trim();
-  const brands = (S.brands || []).slice()
+  const restricted = Array.isArray(host._restrictTo);
+  const allowCreate = host._allowCreate !== false;
+
+  let brands = (S.brands || []).slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (restricted) {
+    const allowed = new Set(host._restrictTo);
+    brands = brands.filter(b => allowed.has(b.id));
+  }
   const matches = brands.filter(b => !q
     || (b.name || '').toLowerCase().includes(q)
     || (b.categories || []).some(c => c.toLowerCase().includes(q)));
@@ -12424,12 +12518,16 @@ function __ibpFilter(hostId, query) {
   }).join('');
 
   const noMatch = matches.length === 0
-    ? '<div style="font-size:11px;color:var(--text-light);padding:6px 8px;font-style:italic">No brands match.</div>'
+    ? (restricted
+        ? '<div style="font-size:11px;color:var(--text-light);padding:6px 8px;font-style:italic">No brands available. Add brands to the component\'s vendor first.</div>'
+        : '<div style="font-size:11px;color:var(--text-light);padding:6px 8px;font-style:italic">No brands match.</div>')
     : '';
 
-  const addNew = (q && !exactMatch)
-    ? `<div onclick="__ibpNew('${hostId}', ${JSON.stringify(query).replace(/"/g, '&quot;')})" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Create new brand "${escH(query)}"</div>`
-    : `<div onclick="__ibpNew('${hostId}', '')" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Create new brand</div>`;
+  const addNew = !allowCreate
+    ? ''
+    : (q && !exactMatch)
+      ? `<div onclick="__ibpNew('${hostId}', ${JSON.stringify(query).replace(/"/g, '&quot;')})" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Create new brand "${escH(query)}"</div>`
+      : `<div onclick="__ibpNew('${hostId}', '')" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Create new brand</div>`;
 
   pop.innerHTML = rows + noMatch + addNew;
   pop.style.display = 'block';
@@ -12461,7 +12559,7 @@ function __ibpPick(hostId, brandId) {
   __ibpClose(hostId);
   host._selectedId = brandId;
   const cb = host._onChange;
-  renderItemBrandPicker(hostId, brandId, cb);
+  renderItemBrandPicker(hostId, brandId, cb, __ibpCurrentOpts(host));
   cb?.(brandId);
 }
 
@@ -17219,7 +17317,7 @@ function renderInvoiceBuilder() {
           const cLabel = (c.name || c.componentType || 'Component');
           html += `<label style="display:flex;align-items:center;gap:8px;padding:3px 4px;cursor:pointer;border-radius:var(--rs);opacity:${checked?'0.4':'1'}" onmouseenter="this.style.background='rgba(91,45,34,0.02)'" onmouseleave="this.style.background='transparent'">
             <input type="checkbox" ${cChecked?'checked':''} ${checked?'disabled':''} onchange="toggleInvProposalComponent('${inv.projectId}','${sp.id}','${item.id}','${c.id}',this.checked)" style="accent-color:var(--russet);width:12px;height:12px;flex-shrink:0">
-            <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);flex:1">${escH(cLabel)}${c.contact?` · <span style="color:var(--text-light)">${escH(c.contact)}</span>`:''}</span>
+            <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);flex:1">${escH(cLabel)}${(() => { const d = itemContactDisplay(c); return d ? ` · <span style="color:var(--text-light)">${escH(d)}</span>` : ''; })()}</span>
             <span style="font-size:10px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(cClient)}</span>
           </label>`;
         });
