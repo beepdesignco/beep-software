@@ -1806,9 +1806,18 @@ tr:hover .row-btns { opacity:1; }
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Brand Offering Categories</div>
           <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">The product categories a brand sells — picked on the Brand editor (e.g. Textile, Lighting, Furniture, Tile, Wallcovering).</div>
           <div id="as-brand-categories-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <div style="display:flex;gap:6px;max-width:420px">
+          <div style="display:flex;gap:6px;max-width:420px;margin-bottom:28px">
             <input type="text" class="fi" id="as-brand-category-input" placeholder="New brand category…" style="flex:1" onkeydown="if(event.key==='Enter'){addBrandCategory();event.preventDefault()}">
             <button class="btn btn-primary btn-sm" onclick="addBrandCategory()">Add</button>
+          </div>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:4px 0 10px;border-top:1px solid var(--border);padding-top:20px">Item Types</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">Optional taxonomy for proposal items — picked when creating or editing an item (e.g. Furniture, Lighting, Plumbing, Hardware, Window Treatment). Pick a color so type pills are easy to scan.</div>
+          <div id="as-item-types-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:6px;max-width:420px;align-items:center">
+            <input type="text" class="fi" id="as-item-type-input" placeholder="New item type…" style="flex:1" onkeydown="if(event.key==='Enter'){addItemType();event.preventDefault()}">
+            <input type="color" id="as-item-type-color" value="#9F6640" style="width:36px;height:36px;padding:2px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer">
+            <button class="btn btn-primary btn-sm" onclick="addItemType()">Add</button>
           </div>
         </div>
 
@@ -2098,6 +2107,12 @@ tr:hover .row-btns { opacity:1; }
       <div class="fg">
         <label class="fl">Room / Location</label>
         <select class="fi fsel" id="ai-room"><!-- populated by JS --></select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Item Type <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — manage list in App Settings → Categories)</span></label>
+        <select class="fi fsel" id="ai-item-type"><!-- populated by JS --></select>
       </div>
     </div>
 
@@ -4095,6 +4110,7 @@ async function loadFromSupabase() {
     clientsRes, contactsRes, projectsRes,
     invoicesRes, expensesRes, documentsRes, timeRes,
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
+    itemTypesRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -4107,9 +4123,10 @@ async function loadFromSupabase() {
     sb.from('vendor_contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('brands').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('vendor_brands').select('*'),
+    sb.from('item_types').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -4138,6 +4155,8 @@ async function loadFromSupabase() {
   S.vendors        = (vendorsRes.data        || []).map(dbVendorToS);
   S.vendorContacts = (vendorContactsRes.data || []).map(dbVendorContactToS);
   S.brands         = (brandsRes.data         || []).map(dbBrandToS);
+  S.itemTypes      = ((itemTypesRes.data     || []).map(dbItemTypeToS))
+                     .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -4307,6 +4326,21 @@ function dbBrandToS(b) {
     notes: b.notes || '',
     categories: Array.isArray(b.categories) ? b.categories : [],
     created: b.created_at,
+  };
+}
+
+// Item Types — studio-defined taxonomy attached to proposal_items via item_type_id.
+// NOT the same as proposal_items.type (the legacy 'readymade'/'openline'/'constructed'
+// kind which controls pricing logic). This is a free-form tag like Furniture,
+// Lighting, Textile, etc.
+function dbItemTypeToS(t) {
+  return {
+    id: t.id,
+    name: t.name || '',
+    description: t.description || '',
+    color: t.color || '',
+    sortOrder: t.sort_order || 0,
+    created: t.created_at,
   };
 }
 
@@ -4591,6 +4625,7 @@ const _sbShadow = {
   vendorContacts: new Map(),
   brands: new Map(),
   vendorBrands: new Set(),       // "vendorId:brandId" strings
+  itemTypes: new Map(),
   studioSettings: {},
   studioInfo: {},
 };
@@ -4607,6 +4642,7 @@ function captureSbShadow() {
   _sbShadow.vendors        = new Map((S.vendors        || []).map(v => [v.id, snap(v)]));
   _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
   _sbShadow.brands         = new Map((S.brands         || []).map(b => [b.id, snap(b)]));
+  _sbShadow.itemTypes      = new Map((S.itemTypes      || []).map(t => [t.id, snap(t)]));
   // vendor_brands: track which (vendor,brand) pairs were last synced so we can
   // diff the M2M at save time and issue targeted inserts/deletes.
   _sbShadow.vendorBrands = new Set();
@@ -4683,6 +4719,16 @@ function brandToDB(b, studioId) {
     name: b.name || '',
     notes: b.notes || null,
     categories: Array.isArray(b.categories) ? b.categories : [],
+    deleted_at: null,
+  };
+}
+function itemTypeToDB(t, studioId) {
+  return {
+    id: t.id, studio_id: studioId,
+    name: t.name || '',
+    description: t.description || null,
+    color: t.color || null,
+    sort_order: t.sortOrder || 0,
     deleted_at: null,
   };
 }
@@ -4971,6 +5017,7 @@ async function syncToSupabase() {
     await syncSafe('vendor_contacts', current.vendorContacts, _sbShadow.vendorContacts, c => vendorContactToDB(c));
     // Brands before vendor_brands so FK targets exist before links
     await syncSafe('brands', new Map((S.brands||[]).map(b => [b.id, b])), _sbShadow.brands, b => brandToDB(b, studioId));
+    await syncSafe('item_types', new Map((S.itemTypes||[]).map(t => [t.id, t])), _sbShadow.itemTypes, t => itemTypeToDB(t, studioId));
     // vendor_brands is a composite-PK M2M — custom diff instead of syncSafe
     try {
       const currentVBs = new Set();
@@ -5178,6 +5225,7 @@ let S = {
   vendorContacts: [],
   brands: [],
   vendorTypes: [],
+  itemTypes: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -6615,6 +6663,7 @@ function renderPMItemCard(item, sp, pid) {
         <div style="display:flex;align-items:center;gap:8px">
           ${isAllowance ? '<span class="allowance-a">A</span>' : `<span class="status-dot" style="background:${statusColor}"></span>`}
           ${itemTypeBadge(item.type)}
+          ${userItemTypePill(item.itemTypeId)}
           <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'—')}</span>
           ${isAllowance ? '<span class="allowance-badge">Allowance</span>' : ''}
           ${flags}
@@ -9944,6 +9993,7 @@ function openAddItemModal(pid, spId) {
   $c('ai-qty').value = '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
+  populateItemTypeSelect('');
   $c('ai-allowance').checked = false;
   $c('ai-taxexempt').checked = false;
   $c('ai-billcost').checked = false;
@@ -9979,6 +10029,7 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-qty').value = item.qty || '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions(item.qtyUnit || '');
   $c('ai-category').value = item.category || '';
+  populateItemTypeSelect(item.itemTypeId || '');
   $c('ai-notes').value = item.notes || '';
   $c('ai-allowance').checked = !!item.allowance;
   $c('ai-taxexempt').checked = !!item.taxExempt;
@@ -10004,6 +10055,7 @@ function saveItem() {
   readModalChargesFromDOM();
 
   const adjVal = $c('ai-adj-markup').value;
+  const itemTypeId = $c('ai-item-type')?.value || null;
   const base = {
     type,
     name,
@@ -10017,6 +10069,7 @@ function saveItem() {
     billCostOnly: $c('ai-billcost').checked,
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
     costActual: $c('ai-cost-actual').value.trim(),
+    itemTypeId: itemTypeId || null,
   };
 
   const qtyUnit = $c('ai-qty-unit')?.value || '';
@@ -11051,7 +11104,7 @@ function setSettingsTab(tab) {
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'notes')  renderInvoiceNotesList();
-  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); }
+  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); }
   if (tab === 'reminders') renderRemindersPanel();
 }
 
@@ -11372,6 +11425,132 @@ function removeBrandCategory(c) {
   });
   save();
   renderBrandCategoriesList();
+}
+
+// ── Item Types ──────────────────────────────────────────────
+// Each row in S.itemTypes is { id, name, color, sortOrder, ... } and persists
+// to the item_types table. Item-side reference is proposal_items.item_type_id.
+
+function getItemType(id) {
+  if (!id) return null;
+  return (S.itemTypes || []).find(t => t.id === id) || null;
+}
+
+function populateItemTypeSelect(selectedId) {
+  const sel = $c('ai-item-type');
+  if (!sel) return;
+  const types = (S.itemTypes || []).slice().sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  const opts = ['<option value="">— None —</option>']
+    .concat(types.map(t => `<option value="${t.id}" ${t.id === selectedId ? 'selected' : ''}>${escH(t.name)}</option>`))
+    .join('');
+  sel.innerHTML = opts;
+}
+
+// Small colored pill for the item-type taxonomy. Distinct visual treatment from
+// the legacy itemTypeBadge (RM/CO/OL kind). Returns empty string when no type set.
+function userItemTypePill(itemTypeId) {
+  const t = getItemType(itemTypeId);
+  if (!t) return '';
+  const color = t.color || '#9F6640';
+  return `<span style="display:inline-block;font-size:9px;font-family:var(--font-h);font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:${color}18;color:${color};border:1px solid ${color}30;white-space:nowrap;line-height:1.3">${escH(t.name)}</span>`;
+}
+
+function countItemsOfType(typeId) {
+  let n = 0;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.itemTypeId === typeId) n++;
+    }));
+  });
+  return n;
+}
+
+function renderItemTypesList() {
+  const el = $c('as-item-types-list');
+  if (!el) return;
+  const types = (S.itemTypes || []).slice().sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  if (!types.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:8px 0">No item types yet. Add one below.</div>';
+    return;
+  }
+  el.innerHTML = types.map(t => {
+    const count = countItemsOfType(t.id);
+    const color = t.color || '#9F6640';
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
+        onchange="updateItemTypeField('${t.id}','color',this.value)">
+      <input type="text" class="fi" value="${escH(t.name)}" data-old="${escH(t.name)}" style="flex:1;font-size:12px;color:${color};font-weight:700" onchange="renameItemType('${t.id}', this.value.trim())">
+      <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${count} in use</span>
+      <button onclick="removeItemType('${t.id}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function addItemType() {
+  const input = $c('as-item-type-input');
+  const colorInput = $c('as-item-type-color');
+  const name = (input?.value || '').trim();
+  if (!name) return;
+  if ((S.itemTypes || []).some(t => t.name.toLowerCase() === name.toLowerCase())) {
+    toast('That item type already exists.');
+    return;
+  }
+  if (!S.itemTypes) S.itemTypes = [];
+  const maxOrder = S.itemTypes.reduce((m,t) => Math.max(m, t.sortOrder || 0), 0);
+  S.itemTypes.push({
+    id: uid(),
+    name,
+    color: colorInput?.value || '#9F6640',
+    description: '',
+    sortOrder: maxOrder + 1,
+    created: new Date().toISOString(),
+  });
+  input.value = '';
+  save();
+  renderItemTypesList();
+}
+
+function updateItemTypeField(id, field, value) {
+  const t = (S.itemTypes || []).find(x => x.id === id);
+  if (!t) return;
+  t[field] = value;
+  save();
+  renderItemTypesList();
+}
+
+function renameItemType(id, newName) {
+  const t = (S.itemTypes || []).find(x => x.id === id);
+  if (!t) return;
+  newName = String(newName || '').trim();
+  if (!newName || newName === t.name) return;
+  if ((S.itemTypes || []).some(x => x.id !== id && x.name.toLowerCase() === newName.toLowerCase())) {
+    toast('"' + newName + '" already exists.');
+    renderItemTypesList();
+    return;
+  }
+  t.name = newName;
+  save();
+  renderItemTypesList();
+}
+
+function removeItemType(id) {
+  const t = (S.itemTypes || []).find(x => x.id === id);
+  if (!t) return;
+  const inUse = countItemsOfType(id);
+  const msg = inUse
+    ? 'Delete type "' + t.name + '"? ' + inUse + ' item' + (inUse!==1?'s':'') + ' currently use this type — their type field will be cleared.'
+    : 'Delete type "' + t.name + '"?';
+  if (!confirm(msg)) return;
+  S.itemTypes = (S.itemTypes || []).filter(x => x.id !== id);
+  // Clear references on items so the soft-deleted FK doesn't dangle
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
+      if (it.itemTypeId === id) it.itemTypeId = null;
+    }));
+  });
+  save();
+  renderItemTypesList();
 }
 
 // Combine selected preset bodies + the invoice's free-form notes into a single
