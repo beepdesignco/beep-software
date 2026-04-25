@@ -1238,6 +1238,10 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◎</span>
         <span class="nav-label">Invoices</span>
       </div>
+      <div class="nav-item" onclick="showView('purchase-orders')" data-view="purchase-orders">
+        <span class="nav-icon">⊠</span>
+        <span class="nav-label">Purchase Orders</span>
+      </div>
       <div class="nav-item" onclick="showView('expenses')" data-view="expenses">
         <span class="nav-icon">◆</span>
         <span class="nav-label">Expenses</span>
@@ -1498,6 +1502,24 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-invtab="reports" onclick="setInvTab('reports')" style="margin-bottom:-1px">Reports</button>
       </div>
       <div class="contacts-body" id="invoices-body"></div>
+    </div>
+
+    <!-- ─────────── PURCHASE ORDERS VIEW ─────────── -->
+    <div class="view" id="view-purchase-orders">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Purchase Orders</div>
+          <div class="page-sub">Track every order out the door — from draft to received.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary" onclick="openPOEditor(null)">+ New PO</button>
+        </div>
+      </div>
+      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <input type="text" class="search-in" id="po-search" placeholder="Search by number, vendor, project, sidemark…" oninput="renderPurchaseOrders()" style="flex:1;min-width:240px">
+      </div>
+      <div id="po-status-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
+      <div class="contacts-body" id="purchase-orders-body"></div>
     </div>
 
     <!-- ─────────── EXPENSES VIEW ─────────── -->
@@ -2249,6 +2271,69 @@ tr:hover .row-btns { opacity:1; }
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-client')">Cancel</button>
       <button class="btn btn-primary" onclick="saveClient()">Save Client</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ PURCHASE ORDER MODAL ═════════════════ -->
+<div class="overlay" id="modal-po">
+  <div class="modal" style="width:680px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-po')">✕</button>
+    <div class="modal-title" id="po-modal-title">New Purchase Order</div>
+    <input type="hidden" id="po-id">
+    <div class="frow">
+      <div class="fg" style="max-width:140px">
+        <label class="fl">PO Number</label>
+        <input type="text" class="fi" id="po-number" readonly style="background:rgba(91,45,34,0.04);font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-align:center">
+      </div>
+      <div class="fg">
+        <label class="fl">Status</label>
+        <input type="text" class="fi" id="po-status-display" readonly style="background:rgba(91,45,34,0.04);font-family:var(--font-h);font-weight:700;font-size:13px">
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Project</label>
+        <select class="fi fsel" id="po-project"></select>
+      </div>
+      <div class="fg">
+        <label class="fl">Vendor</label>
+        <select class="fi fsel" id="po-vendor" onchange="poVendorChanged()"></select>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Vendor Contact</label>
+      <select class="fi fsel" id="po-vendor-contact"></select>
+    </div>
+    <div class="fg">
+      <label class="fl">Sidemark <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(printed on labels + packing slips — manual override always wins)</span></label>
+      <input type="text" class="fi" id="po-sidemark" placeholder="e.g. Smith / Master Bedroom">
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Ship Window — From</label>
+        <input type="date" class="fi" id="po-ship-start">
+      </div>
+      <div class="fg">
+        <label class="fl">Ship Window — To</label>
+        <input type="date" class="fi" id="po-ship-end">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Ship Notes</label>
+      <input type="text" class="fi" id="po-ship-notes" placeholder="Carrier preferences, special handling…">
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="po-notes" style="resize:vertical;min-height:60px" placeholder="Internal notes about this PO"></textarea>
+    </div>
+    <div id="po-action-bar" style="display:flex;flex-wrap:wrap;gap:6px;padding-top:14px;border-top:1px solid var(--border);margin-top:4px"></div>
+    <div id="po-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-top:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="po-delete-btn" style="display:none" onclick="deletePO($c('po-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-po')">Cancel</button>
+      <button class="btn btn-primary" onclick="savePO()">Save</button>
     </div>
   </div>
 </div>
@@ -3819,6 +3904,331 @@ function _workSubscribeRealtime() {
   }
 }
 
+// ═════════════════════════════════════════════════════════════
+// PURCHASE ORDERS UI
+// ═════════════════════════════════════════════════════════════
+
+const PO_STATUSES = [
+  { v: 'v_draft',        l: 'Draft',         color: '#8a8a8a' },
+  { v: 'v_sent',         l: 'Sent',          color: '#2d5a8a' },
+  { v: 'v_acknowledged', l: 'Acknowledged',  color: '#7A4A10' },
+  { v: 'v_shipped',      l: 'Shipped',       color: '#c47a20' },
+  { v: 'v_received',     l: 'Received',      color: '#1a6e3a' },
+  { v: 'v_closed',       l: 'Closed',        color: '#4a4a4a' },
+  { v: 'v_cancelled',    l: 'Cancelled',     color: '#b33333' },
+];
+function getPOStatus(v) { return PO_STATUSES.find(s => s.v === v) || PO_STATUSES[0]; }
+
+let _poStatusFilter = null;  // null = all, else v-code
+
+function setPOStatusFilter(v) {
+  _poStatusFilter = (_poStatusFilter === v) ? null : v;
+  renderPurchaseOrders();
+}
+
+// Generates the next per-studio PO number. Starts at 101.
+function nextPONumber() {
+  const max = (S.purchaseOrders || []).reduce((m, p) => Math.max(m, Number(p.poNumber) || 0), 100);
+  return max + 1;
+}
+
+// Resolve sidemark template tokens. Default template if none configured:
+//   {client.lastName}-{space.name}
+// Template lives at S.studio.sidemarkTemplate when the user customizes it
+// (Studio Settings UI for that comes in a later checkpoint).
+function resolveSidemark(po) {
+  const tpl = (S.studio?.sidemarkTemplate || '{client.lastName}-{space.name}').trim();
+  const project = (S.projects || []).find(p => p.id === po.projectId);
+  const client  = project ? (S.clients || []).find(c => c.id === project.clientId) : null;
+  const vendor  = (S.vendors || []).find(v => v.id === po.vendorId);
+  const ctx = {
+    'client.lastName':  (client?.name || '').split(' ').slice(-1)[0] || '',
+    'client.firstName': (client?.name || '').split(' ')[0] || '',
+    'project.code': project?.id ? project.id.slice(0, 6).toUpperCase() : '',
+    'project.name': project?.name || '',
+    'vendor.name':  vendor?.name || '',
+    'space.name':   '',                  // first space on the project as a fallback
+    'po.number':    po.poNumber != null ? String(po.poNumber) : '',
+  };
+  // Try to fill {space.name} from the project's first space
+  if (project) {
+    const prop = S.proposals?.[project.id];
+    const firstSpace = prop?.spaces?.[0]?.name;
+    if (firstSpace) ctx['space.name'] = firstSpace;
+  }
+  return tpl.replace(/\{([^}]+)\}/g, (m, key) => ctx[key.trim()] ?? m).replace(/\s+/g, ' ').trim();
+}
+
+// ── List view ──
+
+function renderPurchaseOrders() {
+  const body = $c('purchase-orders-body');
+  if (!body) return;
+  const query = ($c('po-search')?.value || '').toLowerCase().trim();
+  let pos = (S.purchaseOrders || []).slice();
+  if (_poStatusFilter) pos = pos.filter(p => p.status === _poStatusFilter);
+  if (query) {
+    pos = pos.filter(po => {
+      const project = (S.projects || []).find(p => p.id === po.projectId);
+      const vendor  = (S.vendors  || []).find(v => v.id === po.vendorId);
+      return [String(po.poNumber || ''), po.sidemark, project?.name, vendor?.name, po.notes]
+        .filter(Boolean).join(' ').toLowerCase().includes(query);
+    });
+  }
+  // Render filter chips
+  renderPOStatusFilters();
+  if (!pos.length) {
+    body.innerHTML = `<div class="no-results">${query || _poStatusFilter ? 'No purchase orders match those filters.' : 'No purchase orders yet. Click + New PO to start one.'}</div>`;
+    return;
+  }
+  // Most recently updated first
+  pos.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+  body.innerHTML = `
+    <div style="padding:0 30px">
+      <table class="tt-log-table" style="width:100%;border-collapse:collapse;background:white;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden">
+        <thead><tr style="background:rgba(91,45,34,0.04)">
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">PO #</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Status</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Project</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Vendor</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Sidemark</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Ship Window</th>
+          <th style="text-align:right;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Items</th>
+        </tr></thead>
+        <tbody>
+          ${pos.map(po => {
+            const status = getPOStatus(po.status);
+            const project = (S.projects || []).find(p => p.id === po.projectId);
+            const vendor  = (S.vendors  || []).find(v => v.id === po.vendorId);
+            const itemCount = countItemsOnPO(po.id);
+            const window = (po.shipWindowStart || po.shipWindowEnd)
+              ? `${po.shipWindowStart || '—'} → ${po.shipWindowEnd || '—'}`
+              : '—';
+            return `
+              <tr style="cursor:pointer;border-bottom:1px solid var(--border)" onclick="openPOEditor('${po.id}')" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
+                <td style="padding:10px 12px;font-family:var(--font-h);font-weight:700;color:var(--mahogany)">#${po.poNumber}</td>
+                <td style="padding:10px 12px"><span style="display:inline-block;font-size:10px;font-family:var(--font-b);font-weight:700;padding:3px 9px;border-radius:10px;background:${status.color}18;color:${status.color};border:1px solid ${status.color}30">${status.l}</span></td>
+                <td style="padding:10px 12px;font-size:12px">${escH(project?.name || '—')}</td>
+                <td style="padding:10px 12px;font-size:12px">${escH(vendor?.name || '—')}</td>
+                <td style="padding:10px 12px;font-size:11px;color:var(--text-mid)">${escH(po.sidemark || '—')}</td>
+                <td style="padding:10px 12px;font-size:11px;color:var(--text-mid)">${escH(window)}</td>
+                <td style="padding:10px 12px;text-align:right;font-family:var(--font-b);font-weight:700;color:var(--text-mid)">${itemCount}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderPOStatusFilters() {
+  const host = $c('po-status-filters');
+  if (!host) return;
+  const counts = {};
+  (S.purchaseOrders || []).forEach(p => { counts[p.status] = (counts[p.status] || 0) + 1; });
+  const chip = (label, val, active, color) => `
+    <button onclick="setPOStatusFilter(${val === null ? 'null' : `'${val}'`})"
+      style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? color : 'var(--border)'};background:${active ? color + '18' : 'white'};color:${active ? color : 'var(--text-mid)'};font-weight:700">${escH(label)}${counts[val] ? ' · ' + counts[val] : ''}</button>`;
+  const labelHtml = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">Filter:</span>`;
+  host.innerHTML = labelHtml
+    + chip('All', null, _poStatusFilter === null, 'var(--russet)')
+    + PO_STATUSES.map(s => chip(s.l, s.v, _poStatusFilter === s.v, s.color)).join('');
+}
+
+function countItemsOnPO(poId) {
+  let n = 0;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+      if (it.poId === poId) n++;
+    }));
+  });
+  return n;
+}
+
+// ── Editor ──
+
+function openPOEditor(id) {
+  const po = id ? (S.purchaseOrders || []).find(p => p.id === id) : null;
+  $c('po-modal-title').textContent = po ? `Purchase Order #${po.poNumber}` : 'New Purchase Order';
+  $c('po-id').value = po?.id || '';
+  $c('po-number').value = po ? po.poNumber : nextPONumber();
+  $c('po-status-display').value = po ? getPOStatus(po.status).l : 'Draft';
+  // Project + vendor selects
+  const projOpts = '<option value="">— Select project —</option>'
+    + (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||''))
+        .map(p => `<option value="${p.id}" ${po?.projectId === p.id ? 'selected' : ''}>${escH(p.name)}</option>`).join('');
+  $c('po-project').innerHTML = projOpts;
+  const vendorOpts = '<option value="">— Select vendor —</option>'
+    + (S.vendors || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||''))
+        .map(v => `<option value="${v.id}" ${po?.vendorId === v.id ? 'selected' : ''}>${escH(v.name)}</option>`).join('');
+  $c('po-vendor').innerHTML = vendorOpts;
+  // Vendor contact (filtered by selected vendor)
+  poVendorChanged(po?.vendorContactId || '');
+  $c('po-sidemark').value = po?.sidemark || '';
+  $c('po-ship-start').value = po?.shipWindowStart || '';
+  $c('po-ship-end').value = po?.shipWindowEnd || '';
+  $c('po-ship-notes').value = po?.shipNotes || '';
+  $c('po-notes').value = po?.notes || '';
+  $c('po-delete-btn').style.display = po ? '' : 'none';
+  $c('po-error').style.display = 'none';
+  renderPOActionBar(po);
+  // For a new PO, propose a sidemark from the template once the user picks
+  // a project (resolveSidemark needs project + client + first space).
+  if (!po) {
+    setTimeout(() => {
+      const projEl = $c('po-project');
+      projEl.onchange = () => {
+        if (!$c('po-sidemark').value) {
+          const draft = { projectId: projEl.value, vendorId: $c('po-vendor').value, poNumber: $c('po-number').value };
+          $c('po-sidemark').value = resolveSidemark(draft);
+        }
+      };
+    }, 50);
+  }
+  $c('modal-po').classList.add('open');
+  setTimeout(() => $c('po-project').focus(), 80);
+}
+
+function poVendorChanged(preselectId) {
+  const sel = $c('po-vendor-contact');
+  if (!sel) return;
+  const vendorId = $c('po-vendor').value;
+  const contacts = (S.vendorContacts || []).filter(c => c.vendorId === vendorId)
+    .sort((a, b) => (b.primary - a.primary) || (a.name || '').localeCompare(b.name || ''));
+  sel.innerHTML = '<option value="">— No specific contact —</option>'
+    + contacts.map(c => `<option value="${c.id}" ${c.id === preselectId ? 'selected' : ''}>${escH(c.name)}${c.title ? ' · ' + escH(c.title) : ''}${c.primary ? ' (primary)' : ''}</option>`).join('');
+}
+
+function renderPOActionBar(po) {
+  const bar = $c('po-action-bar');
+  if (!bar) return;
+  if (!po) {
+    bar.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic">Save first to use the status workflow.</div>';
+    return;
+  }
+  const transitions = poTransitionsFor(po.status);
+  bar.innerHTML = `
+    <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-mid);margin-right:8px;align-self:center">Move to:</div>
+    ${transitions.map(t => `<button class="btn btn-secondary btn-sm" style="font-size:11px;background:${t.color}18;border-color:${t.color}40;color:${t.color}" onclick="advancePOStatus('${po.id}','${t.v}')">${escH(t.l)}</button>`).join('')}
+    ${transitions.length === 0 ? '<div style="font-size:11px;color:var(--text-light);font-style:italic">No further transitions from this state.</div>' : ''}`;
+}
+
+// Allowed forward transitions from each status. Cancelled is terminal.
+function poTransitionsFor(currentV) {
+  const next = {
+    v_draft:        ['v_sent', 'v_cancelled'],
+    v_sent:         ['v_acknowledged', 'v_shipped', 'v_received', 'v_cancelled'],
+    v_acknowledged: ['v_shipped', 'v_received', 'v_cancelled'],
+    v_shipped:      ['v_received', 'v_cancelled'],
+    v_received:     ['v_closed', 'v_cancelled'],
+    v_closed:       [],
+    v_cancelled:    [],
+  }[currentV] || [];
+  return next.map(v => getPOStatus(v));
+}
+
+async function advancePOStatus(poId, newStatus) {
+  const po = (S.purchaseOrders || []).find(p => p.id === poId);
+  if (!po) return;
+  const old = po.status;
+  po.status = newStatus;
+  // Stamp the per-state timestamp the first time we hit it
+  const stampField = {
+    v_sent: 'sentAt', v_acknowledged: 'acknowledgedAt', v_shipped: 'shippedAt',
+    v_received: 'receivedAt', v_closed: 'closedAt', v_cancelled: 'cancelledAt',
+  }[newStatus];
+  if (stampField && !po[stampField]) po[stampField] = new Date().toISOString();
+  save();
+  // Emit a system event for the chronological chart (non-blocking)
+  try {
+    if (typeof emitSystemEvent === 'function') {
+      emitSystemEvent({
+        projectId: po.projectId || null,
+        entityType: 'purchase_order',
+        entityId: po.id,
+        eventType: 'po.status_changed',
+        body: `PO #${po.poNumber}: ${getPOStatus(old).l} → ${getPOStatus(newStatus).l}`,
+        payload: { po_id: po.id, po_number: po.poNumber, from: old, to: newStatus, project_id: po.projectId || null },
+      });
+    }
+  } catch (_e) { /* non-fatal */ }
+  // Refresh the editor + list
+  $c('po-status-display').value = getPOStatus(newStatus).l;
+  renderPOActionBar(po);
+  renderPurchaseOrders();
+  toast('PO #' + po.poNumber + ' → ' + getPOStatus(newStatus).l);
+}
+
+function savePO() {
+  const id = $c('po-id').value;
+  const projectId = $c('po-project').value;
+  const vendorId  = $c('po-vendor').value;
+  if (!projectId) { showPOErr('Pick a project.'); return; }
+  if (!vendorId)  { showPOErr('Pick a vendor.');  return; }
+  const fields = {
+    projectId,
+    vendorId,
+    vendorContactId: $c('po-vendor-contact').value || null,
+    sidemark:        $c('po-sidemark').value.trim(),
+    shipWindowStart: $c('po-ship-start').value || null,
+    shipWindowEnd:   $c('po-ship-end').value   || null,
+    shipNotes:       $c('po-ship-notes').value.trim(),
+    notes:           $c('po-notes').value.trim(),
+  };
+  if (fields.shipWindowStart && fields.shipWindowEnd && fields.shipWindowEnd < fields.shipWindowStart) {
+    showPOErr('Ship window end must be on or after the start date.');
+    return;
+  }
+  if (id) {
+    const po = (S.purchaseOrders || []).find(p => p.id === id);
+    if (po) Object.assign(po, fields, { updatedAt: new Date().toISOString() });
+  } else {
+    if (!S.purchaseOrders) S.purchaseOrders = [];
+    const newPO = {
+      id: uid(),
+      studioId: AUTH.studio?.id,
+      poNumber: nextPONumber(),
+      status: 'v_draft',
+      files: [],
+      ...fields,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    S.purchaseOrders.push(newPO);
+  }
+  save();
+  closeModal('modal-po');
+  renderPurchaseOrders();
+  toast(id ? 'PO updated.' : 'PO created.');
+}
+
+function deletePO(id) {
+  if (!id) return;
+  const po = (S.purchaseOrders || []).find(p => p.id === id);
+  if (!po) return;
+  const itemCount = countItemsOnPO(id);
+  let msg = 'Delete PO #' + po.poNumber + '?';
+  if (itemCount) msg += '\n\n' + itemCount + ' item' + (itemCount !== 1 ? 's' : '') + ' will be unlinked from this PO.';
+  if (!confirm(msg)) return;
+  S.purchaseOrders = (S.purchaseOrders || []).filter(p => p.id !== id);
+  // Clear references on items
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+      if (it.poId === id) it.poId = null;
+    }));
+  });
+  save();
+  closeModal('modal-po');
+  renderPurchaseOrders();
+  toast('PO deleted.');
+}
+
+function showPOErr(msg) {
+  const el = $c('po-error');
+  if (!el) return;
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else     { el.style.display = 'none'; }
+}
+
 function renderNotificationBell() {
   const bell = document.getElementById('notif-bell');
   const badge = document.getElementById('notif-badge');
@@ -4110,7 +4520,7 @@ async function loadFromSupabase() {
     clientsRes, contactsRes, projectsRes,
     invoicesRes, expensesRes, documentsRes, timeRes,
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
-    itemTypesRes,
+    itemTypesRes, posRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -4124,9 +4534,10 @@ async function loadFromSupabase() {
     sb.from('brands').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('vendor_brands').select('*'),
     sb.from('item_types').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('purchase_orders').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -4157,6 +4568,7 @@ async function loadFromSupabase() {
   S.brands         = (brandsRes.data         || []).map(dbBrandToS);
   S.itemTypes      = ((itemTypesRes.data     || []).map(dbItemTypeToS))
                      .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  S.purchaseOrders = (posRes.data            || []).map(dbPOToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -4326,6 +4738,33 @@ function dbBrandToS(b) {
     notes: b.notes || '',
     categories: Array.isArray(b.categories) ? b.categories : [],
     created: b.created_at,
+  };
+}
+
+// Purchase Orders — Phase 0 step 5 schema.
+function dbPOToS(po) {
+  return {
+    id: po.id,
+    studioId: po.studio_id,
+    projectId: po.project_id || null,
+    vendorId: po.vendor_id || null,
+    vendorContactId: po.vendor_contact_id || null,
+    poNumber: po.po_number,
+    status: po.status || 'v_draft',
+    sidemark: po.sidemark || '',
+    shipWindowStart: po.ship_window_start || '',
+    shipWindowEnd: po.ship_window_end || '',
+    shipNotes: po.ship_notes || '',
+    notes: po.notes || '',
+    files: Array.isArray(po.files) ? po.files : [],
+    sentAt: po.sent_at || null,
+    acknowledgedAt: po.acknowledged_at || null,
+    shippedAt: po.shipped_at || null,
+    receivedAt: po.received_at || null,
+    closedAt: po.closed_at || null,
+    cancelledAt: po.cancelled_at || null,
+    createdAt: po.created_at,
+    updatedAt: po.updated_at,
   };
 }
 
@@ -4626,6 +5065,7 @@ const _sbShadow = {
   brands: new Map(),
   vendorBrands: new Set(),       // "vendorId:brandId" strings
   itemTypes: new Map(),
+  purchaseOrders: new Map(),
   studioSettings: {},
   studioInfo: {},
 };
@@ -4643,6 +5083,7 @@ function captureSbShadow() {
   _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
   _sbShadow.brands         = new Map((S.brands         || []).map(b => [b.id, snap(b)]));
   _sbShadow.itemTypes      = new Map((S.itemTypes      || []).map(t => [t.id, snap(t)]));
+  _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   // vendor_brands: track which (vendor,brand) pairs were last synced so we can
   // diff the M2M at save time and issue targeted inserts/deletes.
   _sbShadow.vendorBrands = new Set();
@@ -4729,6 +5170,29 @@ function itemTypeToDB(t, studioId) {
     description: t.description || null,
     color: t.color || null,
     sort_order: t.sortOrder || 0,
+    deleted_at: null,
+  };
+}
+function poToDB(po, studioId) {
+  return {
+    id: po.id, studio_id: studioId,
+    project_id: po.projectId || null,
+    vendor_id: po.vendorId || null,
+    vendor_contact_id: po.vendorContactId || null,
+    po_number: po.poNumber,
+    status: po.status || 'v_draft',
+    sidemark: po.sidemark || null,
+    ship_window_start: po.shipWindowStart || null,
+    ship_window_end: po.shipWindowEnd || null,
+    ship_notes: po.shipNotes || null,
+    notes: po.notes || null,
+    files: po.files || [],
+    sent_at: po.sentAt || null,
+    acknowledged_at: po.acknowledgedAt || null,
+    shipped_at: po.shippedAt || null,
+    received_at: po.receivedAt || null,
+    closed_at: po.closedAt || null,
+    cancelled_at: po.cancelledAt || null,
     deleted_at: null,
   };
 }
@@ -5018,6 +5482,7 @@ async function syncToSupabase() {
     // Brands before vendor_brands so FK targets exist before links
     await syncSafe('brands', new Map((S.brands||[]).map(b => [b.id, b])), _sbShadow.brands, b => brandToDB(b, studioId));
     await syncSafe('item_types', new Map((S.itemTypes||[]).map(t => [t.id, t])), _sbShadow.itemTypes, t => itemTypeToDB(t, studioId));
+    await syncSafe('purchase_orders', new Map((S.purchaseOrders||[]).map(p => [p.id, p])), _sbShadow.purchaseOrders, p => poToDB(p, studioId));
     // vendor_brands is a composite-PK M2M — custom diff instead of syncSafe
     try {
       const currentVBs = new Set();
@@ -5226,6 +5691,7 @@ let S = {
   brands: [],
   vendorTypes: [],
   itemTypes: [],
+  purchaseOrders: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -5691,6 +6157,7 @@ function showView(v) {
   if (v === 'clients') renderClients();
   if (v === 'contacts') renderContacts();
   if (v === 'work')    renderWork();
+  if (v === 'purchase-orders') renderPurchaseOrders();
   // Legacy redirect — old "vendors" nav was folded into contacts
   if (v === 'vendors') { showView('contacts'); return; }
   if (v === 'time') renderTime();
