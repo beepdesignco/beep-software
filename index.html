@@ -6661,6 +6661,16 @@ async function load() {
   if (USE_SUPABASE_READS && AUTH.ready) {
     try { await loadFromSupabase(); }
     catch (e) { console.error('[BEEP] Supabase load failed:', e); alert('Failed to load your studio data: ' + (e?.message || e) + '\n\nCheck browser console for details.'); throw e; }
+    // Restore session-only state from localStorage that doesn't live in Supabase.
+    // activeTimer is the running stopwatch — its startMs must survive a refresh
+    // so the timer doesn't reset to zero. It only stops when the user clicks Stop.
+    try {
+      const d = localStorage.getItem('beep_hq_v1');
+      if (d) {
+        const p = JSON.parse(d);
+        if (p && p.activeTimer) S.activeTimer = p.activeTimer;
+      }
+    } catch (_e) {}
   } else {
     try {
       const d = localStorage.getItem('beep_hq_v1');
