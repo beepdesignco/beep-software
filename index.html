@@ -5558,7 +5558,6 @@ function migrateContactsToVendors() {
     const newContact = {
       id: uid(),
       vendorId: vendor.id,
-      clientId: contact.clientId || null,
       name,
       // When company was present, `role` belongs to the person (their title at that company).
       // When no company, we used role as the vendor_type instead, so don't duplicate it on the title.
@@ -5717,7 +5716,6 @@ function dbVendorContactToS(c) {
   return {
     id: c.id,
     vendorId: c.vendor_id,
-    clientId: c.client_id || null,
     name: c.name || '',
     title: c.title || '',
     email: c.email || '',
@@ -6168,7 +6166,6 @@ function vendorContactToDB(c) {
     id: c.id,
     studio_id: c._studioId,           // set by sync loop
     vendor_id: c.vendorId,
-    client_id: c.clientId || null,
     name: c.name || '',
     title: c.title || null,
     email: c.email || null,
@@ -11950,11 +11947,22 @@ function openNewVendorFromContacts() { openVendorEditor(null); }
 // carried") and vendor_contact editor ("brands this person reps"). Selections
 // live in a host-provided string array that the caller passes in + gets back.
 
-function renderBrandPicker(hostId, selectedIds, onChange) {
+// Options:
+//   restrictTo  — array of brand ids; only these are pickable. Empty array
+//                 means no brands available. null/undefined → all S.brands.
+//   allowCreate — boolean (default true). When false, the "+ Add brand"
+//                 button opens the typeahead popover (no create-new option)
+//                 instead of jumping straight to the brand editor. Used on
+//                 the vendor-contact / sub-contact picker so reps can only
+//                 pick from the parent vendor's brand list.
+function renderBrandPicker(hostId, selectedIds, onChange, opts) {
   const host = $c(hostId);
   if (!host) return;
   const brands = S.brands || [];
   const selected = Array.isArray(selectedIds) ? selectedIds : [];
+  opts = opts || {};
+  const restrictTo  = Array.isArray(opts.restrictTo) ? opts.restrictTo : null;
+  const allowCreate = opts.allowCreate !== false;
 
   const pillHtml = selected.map(bid => {
     const b = brands.find(x => x.id === bid);
@@ -11969,13 +11977,21 @@ function renderBrandPicker(hostId, selectedIds, onChange) {
       </span>`;
   }).join('');
 
+  // Two button modes: jump-to-create (vendor-level) vs typeahead-pick (sub-contact).
+  const btnHandler = allowCreate ? `__bpNew('${hostId}')` : `__bpOpen('${hostId}')`;
   host.innerHTML = pillHtml +
-    `<button onclick="event.stopPropagation(); __bpNew('${hostId}')" style="background:none;border:1px dashed var(--border);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);cursor:pointer">+ Add brand</button>`
+    `<button onclick="event.stopPropagation(); ${btnHandler}" style="background:none;border:1px dashed var(--border);border-radius:12px;padding:3px 10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);cursor:pointer">+ Add brand</button>`
     + `<div id="${hostId}-popover" style="display:none;position:absolute;z-index:1000;background:white;border:1px solid var(--border);border-radius:var(--r);padding:8px;min-width:260px;box-shadow:0 4px 16px rgba(0,0,0,0.12);margin-top:4px"></div>`;
 
-  // Stash the change callback + selection list on the host so __bpRemove / __bpPick can access it.
+  // Stash state for the helpers
   host._selected = selected;
   host._onChange = onChange;
+  host._restrictTo  = restrictTo;
+  host._allowCreate = allowCreate;
+}
+
+function __bpCurrentOpts(host) {
+  return { restrictTo: host._restrictTo || null, allowCreate: host._allowCreate !== false };
 }
 
 function __bpRemove(hostId, brandId) {
@@ -11983,7 +11999,7 @@ function __bpRemove(hostId, brandId) {
   if (!host) return;
   host._selected = (host._selected || []).filter(id => id !== brandId);
   host._onChange?.(host._selected);
-  renderBrandPicker(hostId, host._selected, host._onChange);
+  renderBrandPicker(hostId, host._selected, host._onChange, __bpCurrentOpts(host));
 }
 
 function __bpPick(hostId, brandId) {
@@ -11993,27 +12009,47 @@ function __bpPick(hostId, brandId) {
     host._selected = [...host._selected, brandId];
     host._onChange?.(host._selected);
   }
-  renderBrandPicker(hostId, host._selected, host._onChange);
+  renderBrandPicker(hostId, host._selected, host._onChange, __bpCurrentOpts(host));
+}
+
+function __bpAvailableBrands(host) {
+  const restrict = host._restrictTo;
+  let brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (Array.isArray(restrict)) {
+    const allowed = new Set(restrict);
+    brands = brands.filter(b => allowed.has(b.id));
+  }
+  const selected = new Set(host._selected || []);
+  return brands.filter(b => !selected.has(b.id));
 }
 
 function __bpOpen(hostId) {
   const host = $c(hostId);
   const pop = $c(hostId + '-popover');
   if (!host || !pop) return;
-  const selected = new Set(host._selected || []);
-  const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const available = brands.filter(b => !selected.has(b.id));
+  const allowCreate = host._allowCreate !== false;
+  const restricted = Array.isArray(host._restrictTo);
+  const available = __bpAvailableBrands(host);
   const rows = available.map(b => {
     const catTag = b.categories && b.categories.length
       ? `<span style="font-size:9px;color:var(--text-light);font-weight:400;margin-left:4px">${b.categories.slice(0,2).map(escH).join(', ')}</span>` : '';
     return `<div onclick="__bpPick('${hostId}','${b.id}'); $c('${hostId}-popover').style.display='none'" style="padding:5px 8px;cursor:pointer;font-size:12px;font-family:var(--font-b);color:var(--text-dark);border-radius:4px" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">${escH(b.name)}${catTag}</div>`;
   }).join('');
+
+  const emptyMsg = restricted
+    ? '<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">No brands available. Add brands to the parent vendor first.</div>'
+    : '<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">No more brands to add.</div>';
+
+  const createFooter = allowCreate
+    ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+        <button onclick="__bpNew('${hostId}')" class="btn btn-ghost btn-sm" style="width:100%;font-size:11px;justify-content:flex-start">+ Create a new brand</button>
+      </div>`
+    : '';
+
   pop.innerHTML = `
     <input type="text" class="fi" placeholder="Search brands…" oninput="__bpFilter('${hostId}', this.value)" style="font-size:12px;margin-bottom:6px">
-    <div id="${hostId}-rows" style="max-height:220px;overflow-y:auto">${rows || '<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">No more brands to add.</div>'}</div>
-    <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
-      <button onclick="__bpNew('${hostId}')" class="btn btn-ghost btn-sm" style="width:100%;font-size:11px;justify-content:flex-start">+ Create a new brand</button>
-    </div>`;
+    <div id="${hostId}-rows" style="max-height:220px;overflow-y:auto">${rows || emptyMsg}</div>
+    ${createFooter}`;
   pop.style.display = 'block';
   // Close on outside click
   setTimeout(() => {
@@ -12030,19 +12066,20 @@ function __bpOpen(hostId) {
 function __bpFilter(hostId, query) {
   const host = $c(hostId);
   const rowsEl = $c(hostId + '-rows');
-  if (!rowsEl) return;
+  if (!host || !rowsEl) return;
   const q = (query || '').toLowerCase().trim();
-  const selected = new Set(host._selected || []);
-  const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const rows = brands
-    .filter(b => !selected.has(b.id))
+  const restricted = Array.isArray(host._restrictTo);
+  const rows = __bpAvailableBrands(host)
     .filter(b => !q || (b.name || '').toLowerCase().includes(q) || (b.categories || []).some(c => c.toLowerCase().includes(q)))
     .map(b => {
       const catTag = b.categories && b.categories.length
         ? `<span style="font-size:9px;color:var(--text-light);font-weight:400;margin-left:4px">${b.categories.slice(0,2).map(escH).join(', ')}</span>` : '';
       return `<div onclick="__bpPick('${hostId}','${b.id}'); $c('${hostId}-popover').style.display='none'" style="padding:5px 8px;cursor:pointer;font-size:12px;font-family:var(--font-b);color:var(--text-dark);border-radius:4px" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">${escH(b.name)}${catTag}</div>`;
     }).join('');
-  rowsEl.innerHTML = rows || '<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">No matches.</div>';
+  const emptyMsg = restricted
+    ? 'No brands available. Add brands to the parent vendor first.'
+    : 'No matches.';
+  rowsEl.innerHTML = rows || `<div style="font-size:11px;color:var(--text-light);padding:8px 4px;font-style:italic">${emptyMsg}</div>`;
 }
 
 function __bpNew(hostId) {
@@ -12565,8 +12602,8 @@ function saveBrand() {
   cb?.(newId);
   toast(id ? 'Brand updated.' : 'Brand created.');
   // Re-render any visible brand pickers so the new/updated brand shows
-  if ($c('vn-brands-picker')) renderBrandPicker('vn-brands-picker', $c('vn-brands-picker')._selected || [], $c('vn-brands-picker')._onChange);
-  if ($c('vnc-brands-picker')) renderBrandPicker('vnc-brands-picker', $c('vnc-brands-picker')._selected || [], $c('vnc-brands-picker')._onChange);
+  if ($c('vn-brands-picker')) renderBrandPicker('vn-brands-picker', $c('vn-brands-picker')._selected || [], $c('vn-brands-picker')._onChange, __bpCurrentOpts($c('vn-brands-picker')));
+  if ($c('vnc-brands-picker')) renderBrandPicker('vnc-brands-picker', $c('vnc-brands-picker')._selected || [], $c('vnc-brands-picker')._onChange, __bpCurrentOpts($c('vnc-brands-picker')));
   renderContacts();
 }
 
@@ -12936,10 +12973,18 @@ function openVendorContactEditor(vendorId, contactId, callback) {
   $c('vnc-notes').value = c?.notes || '';
   $c('vnc-primary').checked = !!c?.primary;
   $c('vnc-delete-btn').style.display = c ? '' : 'none';
+
+  // Sub-contact reps a SUBSET of the parent vendor's brands. New brands
+  // are added at the vendor level only — the picker here is pick-from-list
+  // with no create-new option. The parent's brand list lives on the live
+  // vn-brands-picker host (covers both saved-vendor and new-vendor draft
+  // flows uniformly).
+  const parentBrandIds = $c('vn-brands-picker')?._selected || [];
   renderBrandPicker('vnc-brands-picker', c?.brandIds || [], (newIds) => {
     if (c) c.brandIds = newIds.slice();
     else $c('vnc-brands-picker')._pendingBrandIds = newIds.slice();
-  });
+  }, { restrictTo: parentBrandIds, allowCreate: false });
+
   $c('modal-vendor-contact').classList.add('open');
   setTimeout(() => $c('vnc-name').focus(), 80);
 }
