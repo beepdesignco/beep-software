@@ -1611,8 +1611,9 @@ tr:hover .row-btns { opacity:1; }
         <div id="docs-header-actions" style="display:flex;gap:8px;align-items:center"></div>
       </div>
       <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
-        <button class="view-tab active" data-doctab="schedules" onclick="setDocsTab('schedules')" style="margin-bottom:-1px">Generated Documents</button>
-        <button class="view-tab"        data-doctab="pos"       onclick="setDocsTab('pos')"       style="margin-bottom:-1px">Purchase Orders</button>
+        <button class="view-tab active" data-doctab="schedules"  onclick="setDocsTab('schedules')"  style="margin-bottom:-1px">Generated Documents</button>
+        <button class="view-tab"        data-doctab="pos"        onclick="setDocsTab('pos')"        style="margin-bottom:-1px">Purchase Orders</button>
+        <button class="view-tab"        data-doctab="submittals" onclick="setDocsTab('submittals')" style="margin-bottom:-1px">Submittals</button>
       </div>
       <div id="docs-tab-body"></div>
     </div>
@@ -1629,6 +1630,15 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div id="po-status-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
       <div class="contacts-body" id="purchase-orders-body"></div>
+    </template>
+
+    <!-- Submittals tab body -->
+    <template id="tpl-doctab-submittals">
+      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <input type="text" class="search-in" id="sub-search" placeholder="Search by title, project, signer…" oninput="renderSubmittals()" style="flex:1;min-width:240px">
+      </div>
+      <div id="sub-status-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 8px"></div>
+      <div class="contacts-body" id="submittals-body"></div>
     </template>
 
     <!-- ─────────── DOCUMENT EDITOR VIEW ─────────── -->
@@ -2266,6 +2276,56 @@ tr:hover .row-btns { opacity:1; }
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-client')">Cancel</button>
       <button class="btn btn-primary" onclick="saveClient()">Save Client</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ SUBMITTAL MODAL ═════════════════ -->
+<div class="overlay" id="modal-submittal">
+  <div class="modal" style="width:680px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-submittal')">✕</button>
+    <div class="modal-title" id="sub-modal-title">New Submittal</div>
+    <input type="hidden" id="sub-id">
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Title</label>
+        <input type="text" class="fi" id="sub-title" placeholder="e.g. Master Bedroom Drapery Shop Drawing">
+      </div>
+      <div class="fg" style="max-width:180px">
+        <label class="fl">Status</label>
+        <input type="text" class="fi" id="sub-status-display" readonly style="background:rgba(91,45,34,0.04);font-family:var(--font-h);font-weight:700;font-size:13px;text-align:center">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Project</label>
+      <select class="fi fsel" id="sub-project"></select>
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="sub-notes" style="resize:vertical;min-height:60px" placeholder="Internal notes about this submittal"></textarea>
+    </div>
+    <div style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <label class="fl">Required Signers</label>
+      <div id="sub-signers-list" style="margin-top:6px"></div>
+      <div id="sub-add-signer-row" style="margin-top:8px;display:flex;gap:6px">
+        <select class="fi fsel" id="sub-add-signer-select" style="flex:1;font-size:12px"></select>
+        <button class="btn btn-secondary btn-sm" onclick="addSubmittalSigner()">Add</button>
+      </div>
+    </div>
+    <div id="sub-files-section" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <label class="fl">Attachments <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(the document(s) being approved)</span></label>
+      <div id="sub-files-list" style="margin-top:6px"></div>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0;margin-top:4px">
+        <span>+ Upload File</span>
+        <input type="file" multiple style="display:none" onchange="handleSubmittalFileUpload(this)">
+      </label>
+    </div>
+    <div id="sub-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-top:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="sub-delete-btn" style="display:none" onclick="deleteSubmittal($c('sub-id').value)">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-submittal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSubmittal()">Save</button>
     </div>
   </div>
 </div>
@@ -4430,6 +4490,415 @@ function showPOErr(msg) {
   else     { el.style.display = 'none'; }
 }
 
+// ═════════════════════════════════════════════════════════════
+// SUBMITTALS UI
+// Document + signers + per-signer signed_off timestamps. No state machine —
+// derived status: 'pending' (any signer outstanding) or 'complete' (all signed).
+// ═════════════════════════════════════════════════════════════
+
+let _subStatusFilter = null; // null | 'pending' | 'complete'
+
+function setSubStatusFilter(v) {
+  _subStatusFilter = (_subStatusFilter === v) ? null : v;
+  renderSubmittals();
+}
+
+function isSubmittalComplete(s) {
+  const signers = s.signers || [];
+  return signers.length > 0 && signers.every(r => r.signedOff);
+}
+function submittalDerivedStatus(s) {
+  return isSubmittalComplete(s) ? 'complete' : 'pending';
+}
+
+function renderSubmittals() {
+  const body = $c('submittals-body');
+  if (!body) return;
+  const query = ($c('sub-search')?.value || '').toLowerCase().trim();
+  let subs = (S.submittals || []).slice();
+  if (_subStatusFilter) subs = subs.filter(s => submittalDerivedStatus(s) === _subStatusFilter);
+  if (query) {
+    subs = subs.filter(s => {
+      const project = (S.projects || []).find(p => p.id === s.projectId);
+      const signerNames = (s.signers || []).map(r => signerDisplayName(r)).join(' ');
+      return [s.title, project?.name, s.notes, signerNames].filter(Boolean).join(' ').toLowerCase().includes(query);
+    });
+  }
+  renderSubStatusFilters();
+  if (!subs.length) {
+    body.innerHTML = `<div class="no-results">${query || _subStatusFilter ? 'No submittals match those filters.' : 'No submittals yet. Click + New Submittal to start one.'}</div>`;
+    return;
+  }
+  subs.sort((a,b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+  body.innerHTML = `
+    <div style="padding:0 30px">
+      <table class="tt-log-table" style="width:100%;border-collapse:collapse;background:white;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden">
+        <thead><tr style="background:rgba(91,45,34,0.04)">
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Title</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Status</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Project</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Signers</th>
+          <th style="text-align:left;padding:10px 12px;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);border-bottom:1px solid var(--border)">Created</th>
+        </tr></thead>
+        <tbody>
+          ${subs.map(s => {
+            const status = submittalDerivedStatus(s);
+            const color = status === 'complete' ? '#1a6e3a' : '#c47a20';
+            const project = (S.projects || []).find(p => p.id === s.projectId);
+            const signers = s.signers || [];
+            const signedCount = signers.filter(r => r.signedOff).length;
+            return `
+              <tr style="cursor:pointer;border-bottom:1px solid var(--border)" onclick="openSubmittalEditor('${s.id}')" onmouseover="this.style.background='rgba(91,45,34,0.02)'" onmouseout="this.style.background='transparent'">
+                <td style="padding:10px 12px;font-family:var(--font-b);font-weight:700;color:var(--text-dark)">${escH(s.title || '(untitled)')}</td>
+                <td style="padding:10px 12px"><span style="display:inline-block;font-size:10px;font-family:var(--font-b);font-weight:700;padding:3px 9px;border-radius:10px;background:${color}18;color:${color};border:1px solid ${color}30">${status === 'complete' ? 'Complete' : 'Pending'}</span></td>
+                <td style="padding:10px 12px;font-size:12px">${escH(project?.name || '—')}</td>
+                <td style="padding:10px 12px;font-size:12px;color:var(--text-mid)">${signers.length === 0 ? 'No signers' : signedCount + ' / ' + signers.length + ' signed'}</td>
+                <td style="padding:10px 12px;font-size:11px;color:var(--text-mid)">${s.createdAt ? new Date(s.createdAt).toLocaleDateString() : '—'}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderSubStatusFilters() {
+  const host = $c('sub-status-filters');
+  if (!host) return;
+  const all = (S.submittals || []);
+  const pending = all.filter(s => submittalDerivedStatus(s) === 'pending').length;
+  const complete = all.filter(s => submittalDerivedStatus(s) === 'complete').length;
+  const chip = (label, val, active, color, n) => `
+    <button onclick="setSubStatusFilter(${val === null ? 'null' : `'${val}'`})"
+      style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? color : 'var(--border)'};background:${active ? color + '18' : 'white'};color:${active ? color : 'var(--text-mid)'};font-weight:700">${escH(label)}${n ? ' · ' + n : ''}</button>`;
+  const labelHtml = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">Filter:</span>`;
+  host.innerHTML = labelHtml
+    + chip('All', null, _subStatusFilter === null, 'var(--russet)', all.length)
+    + chip('Pending', 'pending', _subStatusFilter === 'pending', '#c47a20', pending)
+    + chip('Complete', 'complete', _subStatusFilter === 'complete', '#1a6e3a', complete);
+}
+
+// Resolve a signer to a display name. Prefer vendor_contact lookup; fall back
+// to legacy contact lookup; final fallback is the stored snapshot.
+function signerDisplayName(r) {
+  if (r.vendorContactId) {
+    const vc = (S.vendorContacts || []).find(c => c.id === r.vendorContactId);
+    if (vc) {
+      const v = (S.vendors || []).find(x => x.id === vc.vendorId);
+      return vc.name + (v?.name ? ' · ' + v.name : '');
+    }
+  }
+  if (r.contactId) {
+    const c = (S.contacts || []).find(x => x.id === r.contactId);
+    if (c) return c.name + (c.company ? ' · ' + c.company : '');
+  }
+  return '(unknown signer)';
+}
+
+// ── Editor ──
+
+function openSubmittalEditor(id) {
+  const sub = id ? (S.submittals || []).find(s => s.id === id) : null;
+  $c('sub-modal-title').textContent = sub ? 'Submittal' : 'New Submittal';
+  $c('sub-id').value = sub?.id || '';
+  $c('sub-title').value = sub?.title || '';
+  $c('sub-status-display').value = sub ? (submittalDerivedStatus(sub) === 'complete' ? 'Complete' : 'Pending') : 'Pending';
+  // Project select
+  const projOpts = '<option value="">— Select project —</option>'
+    + (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||''))
+        .map(p => `<option value="${p.id}" ${sub?.projectId === p.id ? 'selected' : ''}>${escH(p.name)}</option>`).join('');
+  $c('sub-project').innerHTML = projOpts;
+  $c('sub-notes').value = sub?.notes || '';
+  $c('sub-delete-btn').style.display = sub ? '' : 'none';
+  $c('sub-error').style.display = 'none';
+  renderSubSignersList(sub);
+  renderSubFilesList(sub);
+  $c('modal-submittal').classList.add('open');
+  setTimeout(() => $c('sub-title').focus(), 80);
+}
+
+function renderSubSignersList(sub) {
+  const list = $c('sub-signers-list');
+  const addRow = $c('sub-add-signer-row');
+  if (!list) return;
+  if (!sub) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">Save first, then add signers.</div>';
+    if (addRow) addRow.style.display = 'none';
+    return;
+  }
+  const signers = sub.signers || [];
+  if (signers.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No signers yet.</div>';
+  } else {
+    list.innerHTML = signers.map(r => {
+      const name = signerDisplayName(r);
+      const stamp = r.signedOffAt ? new Date(r.signedOffAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
+      return `
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:4px">
+          <input type="checkbox" ${r.signedOff ? 'checked' : ''} onchange="toggleSignerSignedOff('${sub.id}','${r.id}',this.checked)" style="margin-top:2px;accent-color:var(--russet);width:16px;height:16px;cursor:pointer">
+          <div style="flex:1;min-width:0">
+            <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark)">${escH(name)}</div>
+            ${r.signedOff ? `<div style="font-size:10px;color:#1a6e3a;font-family:var(--font-b);margin-top:2px">✓ Signed off${stamp ? ' · ' + stamp : ''}</div>` : ''}
+            <input type="text" class="fi" placeholder="Notes from this signer (optional)" value="${escH(r.signerNotes || '')}" oninput="updateSignerNotes('${sub.id}','${r.id}',this.value)" style="margin-top:6px;font-size:11px">
+          </div>
+          <button class="btn btn-danger btn-sm" onclick="removeSubmittalSigner('${sub.id}','${r.id}')" style="font-size:10px;padding:3px 8px">✕</button>
+        </div>`;
+    }).join('');
+  }
+  // Picker for available vendor_contacts not already added as signers
+  const sel = $c('sub-add-signer-select');
+  if (sel) {
+    const taken = new Set((sub.signers || []).map(r => r.vendorContactId).filter(Boolean));
+    const avail = (S.vendorContacts || []).filter(vc => !taken.has(vc.id))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    sel.innerHTML = avail.length
+      ? '<option value="">— Add a signer —</option>'
+        + avail.map(vc => {
+            const v = (S.vendors || []).find(x => x.id === vc.vendorId);
+            return `<option value="${vc.id}">${escH(vc.name)}${v?.name ? ' · ' + escH(v.name) : ''}</option>`;
+          }).join('')
+      : '<option value="">No more contacts to add. Create one in Contacts first.</option>';
+  }
+  if (addRow) addRow.style.display = '';
+}
+
+function addSubmittalSigner() {
+  const subId = $c('sub-id').value;
+  if (!subId) { toast('Save first.'); return; }
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  if (!sub) return;
+  const sel = $c('sub-add-signer-select');
+  const vendorContactId = sel?.value;
+  if (!vendorContactId) return;
+  if (!sub.signers) sub.signers = [];
+  sub.signers.push({
+    id: uid(),
+    vendorContactId,
+    contactId: null,
+    signedOff: false,
+    signedOffAt: null,
+    signedOffByUserId: null,
+    signerNotes: '',
+    sortOrder: sub.signers.length,
+  });
+  save();
+  renderSubSignersList(sub);
+}
+
+function removeSubmittalSigner(subId, signerId) {
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  if (!sub) return;
+  sub.signers = (sub.signers || []).filter(r => r.id !== signerId);
+  save();
+  renderSubSignersList(sub);
+  $c('sub-status-display').value = submittalDerivedStatus(sub) === 'complete' ? 'Complete' : 'Pending';
+}
+
+function updateSignerNotes(subId, signerId, value) {
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  const r   = sub?.signers?.find(x => x.id === signerId);
+  if (!r) return;
+  r.signerNotes = value;
+  save();
+}
+
+function toggleSignerSignedOff(subId, signerId, checked) {
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  const r   = sub?.signers?.find(x => x.id === signerId);
+  if (!sub || !r) return;
+  const wasComplete = isSubmittalComplete(sub);
+  if (checked) {
+    r.signedOff = true;
+    if (!r.signedOffAt) r.signedOffAt = new Date().toISOString();
+    r.signedOffByUserId = AUTH.user?.id || null;
+  } else {
+    r.signedOff = false;
+    r.signedOffAt = null;
+    r.signedOffByUserId = null;
+  }
+  // Maintain submittal.completedAt
+  const nowComplete = isSubmittalComplete(sub);
+  if (nowComplete && !wasComplete) {
+    sub.completedAt = new Date().toISOString();
+    try {
+      if (typeof emitSystemEvent === 'function') {
+        emitSystemEvent({
+          projectId: sub.projectId || null,
+          entityType: 'submittal',
+          entityId: sub.id,
+          eventType: 'submittal.completed',
+          body: `Submittal "${sub.title || ''}" complete — all signers signed off`,
+          payload: { submittal_id: sub.id, project_id: sub.projectId || null },
+        });
+      }
+    } catch (_e) {}
+  } else if (!nowComplete && wasComplete) {
+    sub.completedAt = null;
+  }
+  // Per-sign event (only when checking the box)
+  if (checked) {
+    try {
+      if (typeof emitSystemEvent === 'function') {
+        emitSystemEvent({
+          projectId: sub.projectId || null,
+          entityType: 'submittal',
+          entityId: sub.id,
+          eventType: 'submittal.signed',
+          body: `${signerDisplayName(r)} signed off on "${sub.title || ''}"`,
+          payload: { submittal_id: sub.id, signer_id: r.id, project_id: sub.projectId || null },
+        });
+      }
+    } catch (_e) {}
+  }
+  save();
+  renderSubSignersList(sub);
+  $c('sub-status-display').value = nowComplete ? 'Complete' : 'Pending';
+}
+
+function saveSubmittal() {
+  const id = $c('sub-id').value;
+  const title = $c('sub-title').value.trim();
+  const projectId = $c('sub-project').value;
+  if (!title)     { showSubErr('Enter a title.'); return; }
+  if (!projectId) { showSubErr('Pick a project.'); return; }
+  const fields = {
+    title,
+    projectId,
+    notes: $c('sub-notes').value.trim(),
+  };
+  let sub;
+  let isNew = false;
+  if (id) {
+    sub = (S.submittals || []).find(s => s.id === id);
+    if (sub) Object.assign(sub, fields, { updatedAt: new Date().toISOString() });
+  } else {
+    isNew = true;
+    if (!S.submittals) S.submittals = [];
+    sub = {
+      id: uid(),
+      studioId: AUTH.studio?.id,
+      ...fields,
+      documentId: null,
+      files: [],
+      sentAt: null,
+      completedAt: null,
+      signers: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    S.submittals.push(sub);
+    // Stash the new id back into the modal so signer/file additions land on the right row
+    $c('sub-id').value = sub.id;
+    $c('sub-delete-btn').style.display = '';
+  }
+  save();
+  if (isNew) {
+    try {
+      if (typeof emitSystemEvent === 'function') {
+        emitSystemEvent({
+          projectId: sub.projectId || null,
+          entityType: 'submittal',
+          entityId: sub.id,
+          eventType: 'submittal.created',
+          body: `New submittal: ${sub.title || ''}`,
+          payload: { submittal_id: sub.id, project_id: sub.projectId || null },
+        });
+      }
+    } catch (_e) {}
+  }
+  renderSubmittals();
+  renderSubSignersList(sub);
+  renderSubFilesList(sub);
+  toast(isNew ? 'Submittal created.' : 'Submittal updated.');
+}
+
+function deleteSubmittal(id) {
+  if (!id) return;
+  const sub = (S.submittals || []).find(s => s.id === id);
+  if (!sub) return;
+  if (!confirm('Delete submittal "' + (sub.title || '') + '"? Signers and attachments will be removed.')) return;
+  S.submittals = (S.submittals || []).filter(s => s.id !== id);
+  save();
+  closeModal('modal-submittal');
+  renderSubmittals();
+  toast('Submittal deleted.');
+}
+
+function showSubErr(msg) {
+  const el = $c('sub-error');
+  if (!el) return;
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else     { el.style.display = 'none'; }
+}
+
+// ── Files on a submittal ──
+
+function renderSubFilesList(sub) {
+  const list = $c('sub-files-list');
+  if (!list) return;
+  if (!sub) { list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">Save first, then attach files.</div>'; return; }
+  const files = sub.files || [];
+  if (files.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No attachments yet.</div>';
+    return;
+  }
+  list.innerHTML = files.map(f => `
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:4px">
+      <span style="color:var(--text-light)">📎</span>
+      <a href="#" onclick="event.preventDefault(); viewSubFile('${f.id}')" style="flex:1;font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--russet);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(f.name || 'file')}</a>
+      <span style="font-size:10px;color:var(--text-light)">${f.size ? Math.round(f.size / 1024) + ' KB' : ''}</span>
+      <button class="btn btn-danger btn-sm" onclick="removeSubFile('${f.id}')" style="font-size:10px;padding:3px 8px">✕</button>
+    </div>`).join('');
+}
+
+async function handleSubmittalFileUpload(input) {
+  const subId = $c('sub-id').value;
+  if (!subId) { toast('Save the submittal first.'); input.value = ''; return; }
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  if (!sub) return;
+  const files = Array.from(input.files || []);
+  for (const f of files) {
+    try {
+      const record = await uploadFile(f, 'submittals', sub.id);
+      if (!Array.isArray(sub.files)) sub.files = [];
+      sub.files.push(record);
+    } catch (e) {
+      console.error('[submittal file upload]', e);
+      toast('Upload failed: ' + (e?.message || e));
+    }
+  }
+  input.value = '';
+  save();
+  renderSubFilesList(sub);
+}
+
+async function viewSubFile(fileId) {
+  const subId = $c('sub-id').value;
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  const rec = sub?.files?.find(f => f.id === fileId);
+  if (!rec) return;
+  try {
+    const url = await getFileSignedUrl(rec.storagePath);
+    window.open(url, '_blank', 'noopener');
+  } catch (e) {
+    toast('Could not open file: ' + (e?.message || e));
+  }
+}
+
+async function removeSubFile(fileId) {
+  const subId = $c('sub-id').value;
+  const sub = (S.submittals || []).find(s => s.id === subId);
+  if (!sub) return;
+  const rec = sub.files?.find(f => f.id === fileId);
+  if (!rec) return;
+  if (!confirm('Remove "' + (rec.name || 'this file') + '"?')) return;
+  if (rec.storagePath && typeof sb !== 'undefined' && sb) {
+    try { await sb.storage.from('files').remove([rec.storagePath]); } catch (_e) {}
+  }
+  sub.files = (sub.files || []).filter(f => f.id !== fileId);
+  save();
+  renderSubFilesList(sub);
+}
+
 function renderNotificationBell() {
   const bell = document.getElementById('notif-bell');
   const badge = document.getElementById('notif-badge');
@@ -4721,7 +5190,7 @@ async function loadFromSupabase() {
     clientsRes, contactsRes, projectsRes,
     invoicesRes, expensesRes, documentsRes, timeRes,
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
-    itemTypesRes, posRes,
+    itemTypesRes, posRes, submittalsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -4736,9 +5205,10 @@ async function loadFromSupabase() {
     sb.from('vendor_brands').select('*'),
     sb.from('item_types').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('purchase_orders').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('submittals').select('*, submittal_signers(*)').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -4770,6 +5240,11 @@ async function loadFromSupabase() {
   S.itemTypes      = ((itemTypesRes.data     || []).map(dbItemTypeToS))
                      .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
   S.purchaseOrders = (posRes.data            || []).map(dbPOToS);
+  S.submittals     = (submittalsRes.data     || []).map(row => {
+    const s = dbSubmittalToS(row);
+    s.signers = (row.submittal_signers || []).map(dbSubmittalSignerToS).sort((a,b) => a.sortOrder - b.sortOrder);
+    return s;
+  });
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -4939,6 +5414,40 @@ function dbBrandToS(b) {
     notes: b.notes || '',
     categories: Array.isArray(b.categories) ? b.categories : [],
     created: b.created_at,
+  };
+}
+
+// Submittals + signers — Phase 0 step 6 schema.
+// In-memory shape nests signers inside the submittal row (as submittal.signers
+// array) so the UI can render in one pass; the sync engine flattens them out
+// into the submittal_signers table at write time.
+function dbSubmittalToS(s) {
+  return {
+    id: s.id,
+    studioId: s.studio_id,
+    projectId: s.project_id || null,
+    documentId: s.document_id || null,
+    title: s.title || '',
+    notes: s.notes || '',
+    files: Array.isArray(s.files) ? s.files : [],
+    sentAt: s.sent_at || null,
+    completedAt: s.completed_at || null,
+    createdAt: s.created_at,
+    updatedAt: s.updated_at,
+    signers: [],   // hydrated below from submittal_signers rows
+  };
+}
+function dbSubmittalSignerToS(r) {
+  return {
+    id: r.id,
+    submittalId: r.submittal_id,
+    vendorContactId: r.vendor_contact_id || null,
+    contactId: r.contact_id || null,         // legacy fallback only
+    signedOff: !!r.signed_off,
+    signedOffAt: r.signed_off_at || null,
+    signedOffByUserId: r.signed_off_by_user_id || null,
+    signerNotes: r.signer_notes || '',
+    sortOrder: r.sort_order || 0,
   };
 }
 
@@ -5267,6 +5776,8 @@ const _sbShadow = {
   vendorBrands: new Set(),       // "vendorId:brandId" strings
   itemTypes: new Map(),
   purchaseOrders: new Map(),
+  submittals: new Map(),
+  submittalSigners: new Map(),
   studioSettings: {},
   studioInfo: {},
 };
@@ -5285,6 +5796,10 @@ function captureSbShadow() {
   _sbShadow.brands         = new Map((S.brands         || []).map(b => [b.id, snap(b)]));
   _sbShadow.itemTypes      = new Map((S.itemTypes      || []).map(t => [t.id, snap(t)]));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
+  _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
+  _sbShadow.submittalSigners = new Map();
+  (S.submittals || []).forEach(s => (s.signers || []).forEach((r, i) =>
+    _sbShadow.submittalSigners.set(r.id, { ...snap(r), _submittalId: s.id, sortOrder: i })));
   // vendor_brands: track which (vendor,brand) pairs were last synced so we can
   // diff the M2M at save time and issue targeted inserts/deletes.
   _sbShadow.vendorBrands = new Set();
@@ -5374,6 +5889,34 @@ function itemTypeToDB(t, studioId) {
     deleted_at: null,
   };
 }
+function submittalToDB(s, studioId) {
+  return {
+    id: s.id,
+    studio_id: studioId,
+    project_id: s.projectId || null,
+    document_id: s.documentId || null,
+    title: s.title || '',
+    notes: s.notes || null,
+    files: s.files || [],
+    sent_at: s.sentAt || null,
+    completed_at: s.completedAt || null,
+    deleted_at: null,
+  };
+}
+function submittalSignerToDB(r) {
+  return {
+    id: r.id,
+    submittal_id: r._submittalId,
+    vendor_contact_id: r.vendorContactId || null,
+    contact_id: r.contactId || null,
+    signed_off: !!r.signedOff,
+    signed_off_at: r.signedOffAt || null,
+    signed_off_by_user_id: r.signedOffByUserId || null,
+    signer_notes: r.signerNotes || null,
+    sort_order: r.sortOrder || 0,
+  };
+}
+
 function poToDB(po, studioId) {
   return {
     id: po.id, studio_id: studioId,
@@ -5684,6 +6227,15 @@ async function syncToSupabase() {
     await syncSafe('brands', new Map((S.brands||[]).map(b => [b.id, b])), _sbShadow.brands, b => brandToDB(b, studioId));
     await syncSafe('item_types', new Map((S.itemTypes||[]).map(t => [t.id, t])), _sbShadow.itemTypes, t => itemTypeToDB(t, studioId));
     await syncSafe('purchase_orders', new Map((S.purchaseOrders||[]).map(p => [p.id, p])), _sbShadow.purchaseOrders, p => poToDB(p, studioId));
+    // Submittals + signers — flatten signers out of the parent for the child sync
+    const currentSubs = new Map();
+    const currentSigners = new Map();
+    (S.submittals || []).forEach(s => {
+      currentSubs.set(s.id, { ...s, signers: undefined });
+      (s.signers || []).forEach((r, i) => currentSigners.set(r.id, { ...r, _submittalId: s.id, sortOrder: i }));
+    });
+    await syncSafe('submittals', currentSubs, _sbShadow.submittals, s => submittalToDB(s, studioId));
+    await syncSafe('submittal_signers', currentSigners, _sbShadow.submittalSigners, r => submittalSignerToDB(r), { softDelete: false });
     // vendor_brands is a composite-PK M2M — custom diff instead of syncSafe
     try {
       const currentVBs = new Set();
@@ -5893,6 +6445,7 @@ let S = {
   vendorTypes: [],
   itemTypes: [],
   purchaseOrders: [],
+  submittals: [],
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -14990,6 +15543,10 @@ function renderDocsTab() {
     host.innerHTML = $c('tpl-doctab-pos').innerHTML;
     if (actions) actions.innerHTML = '<button class="btn btn-primary" onclick="openPOEditor(null)">+ New PO</button>';
     renderPurchaseOrders();
+  } else if (_docsTab === 'submittals') {
+    host.innerHTML = $c('tpl-doctab-submittals').innerHTML;
+    if (actions) actions.innerHTML = '<button class="btn btn-primary" onclick="openSubmittalEditor(null)">+ New Submittal</button>';
+    renderSubmittals();
   } else {
     host.innerHTML = $c('tpl-doctab-schedules').innerHTML;
     if (actions) {
