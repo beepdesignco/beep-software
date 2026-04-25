@@ -17756,6 +17756,7 @@ function deleteCurrentInvoice() {
     });
   }
 
+  revertTimeEntriesForInvoice(inv);
   S.invoices = S.invoices.filter(i => i.id !== inv.id);
   save();
   showView('invoices');
@@ -17767,6 +17768,7 @@ function deleteDraft() {
   if (!inv) return;
   if (!confirm('Delete this draft? Any tracked open line items that have not been saved will also be deleted.')) return;
 
+  revertTimeEntriesForInvoice(inv);
   S.invoices = S.invoices.filter(i => i.id !== inv.id);
   save();
   showView('invoices');
@@ -17808,9 +17810,50 @@ function saveInvoiceFromBuilder(status, opts = {}) {
   const newExpIds = new Set(_invLineItems.filter(l => l._expenseId).map(l => l._expenseId));
   const removedExpLines = prevExpLines.filter(l => !newExpIds.has(l._expenseId));
 
+  // If the user removed a previously-saved line that had time entries billed
+  // against it, revert those entries so they show up in the unbilled banner again.
+  const newLineIds = new Set(_invLineItems.map(l => l.id));
+  const removedSavedLineIds = (inv.lineItems || []).filter(l => !newLineIds.has(l.id)).map(l => l.id);
+  if (removedSavedLineIds.length) {
+    (S.timeEntries || []).forEach(e => {
+      if (e.invoiceLineItemId && removedSavedLineIds.includes(e.invoiceLineItemId)) {
+        e.status = 'unbilled';
+        e.billed = false;
+        e.invoiceLineItemId = null;
+        e.billedAt = null;
+      }
+    });
+  }
+
+  // Flip queued time entries to billed now that the invoice is being persisted.
+  // _timeEntryIds is local-only metadata on each line; we consume it here to
+  // update time_entries (status / invoice_line_item_id / billed_at) and then
+  // strip it before the line items are written to S/Supabase. The schema's
+  // billed-state CHECK requires invoice_line_item_id to be a valid id at write
+  // time — by the point sync runs, both the invoice_line_item and the time_entry
+  // update will be in S, and the sync engine writes invoice_line_items before
+  // time_entries so the FK target exists when the time row arrives.
+  const nowIso = new Date().toISOString();
+  const linesForSave = _invLineItems.map(l => {
+    const copy = { ...l };
+    if (Array.isArray(copy._timeEntryIds) && copy._timeEntryIds.length) {
+      copy._timeEntryIds.forEach(eid => {
+        const e = (S.timeEntries || []).find(x => x.id === eid);
+        if (e && e.status !== 'billed') {
+          e.status = 'billed';
+          e.billed = true;
+          e.invoiceLineItemId = copy.id;
+          e.billedAt = nowIso;
+        }
+      });
+      delete copy._timeEntryIds;
+    }
+    return copy;
+  });
+
   Object.assign(inv, {
     status,
-    lineItems: JSON.parse(JSON.stringify(_invLineItems)),
+    lineItems: JSON.parse(JSON.stringify(linesForSave)),
     freight, freightTaxable: $c('inv-freight-taxable')?.checked || false,
     discountType: discType, discountValue: discVal, discount,
     ccFeePct: ccPct, ccFee,
@@ -17998,6 +18041,25 @@ function revertToSent() {
   toast('Invoice ' + inv.number + ' reverted to Sent status.');
 }
 
+// Revert time entries that were billed against this invoice's line items back
+// to unbilled status. Used by cancel + delete flows so the unbilled-time
+// banner re-suggests them.
+function revertTimeEntriesForInvoice(inv) {
+  if (!inv || !Array.isArray(inv.lineItems)) return 0;
+  const lineIds = new Set(inv.lineItems.map(l => l.id));
+  let count = 0;
+  (S.timeEntries || []).forEach(e => {
+    if (e.invoiceLineItemId && lineIds.has(e.invoiceLineItemId)) {
+      e.status = 'unbilled';
+      e.billed = false;
+      e.invoiceLineItemId = null;
+      e.billedAt = null;
+      count++;
+    }
+  });
+  return count;
+}
+
 function cancelInvoice() {
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
@@ -18072,12 +18134,17 @@ function cancelInvoice() {
     }
   }
 
+  // Revert any time entries that were billed against this invoice
+  const timeRevertCount = revertTimeEntriesForInvoice(inv);
+
   inv.status = 'cancelled';
   save();
   // Force localStorage update
   try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch(e){}
   showView('invoices');
-  toast('Invoice ' + inv.number + ' cancelled.' + (revertCount ? ' ' + revertCount + ' item(s) set to Pending Status.' : ''));
+  toast('Invoice ' + inv.number + ' cancelled.'
+    + (revertCount ? ' ' + revertCount + ' item(s) set to Pending Status.' : '')
+    + (timeRevertCount ? ' ' + timeRevertCount + ' time entr' + (timeRevertCount!==1?'ies':'y') + ' returned to unbilled.' : ''));
 }
 
 // ─── PAYMENTS ─────────────────────────────────────────
@@ -20086,13 +20153,25 @@ function deleteTimeEntry(id) {
 
 // Returns the unbilled time entries for a project. Sorted oldest-first so the
 // auto-generated date range reads naturally ("Apr 1–Apr 25").
+//
+// Filters out:
+//   • Entries already on a saved invoice (status === 'billed')
+//   • Entries already queued on the in-flight invoice builder (lines in
+//     _invLineItems carrying _timeEntryIds metadata) — prevents the user
+//     from double-adding the same entry before they save the draft.
 function unbilledTimeForProject(projectId) {
   if (!projectId) return [];
-  return (S.timeEntries || [])
+  let entries = (S.timeEntries || [])
     .filter(e => e.projectId === projectId)
     .filter(e => e.status !== 'billed')
-    .filter(e => (Number(e.durationSeconds) || 0) > 0)
-    .sort((a, b) => String(a.startedAt || a.date || '').localeCompare(String(b.startedAt || b.date || '')));
+    .filter(e => (Number(e.durationSeconds) || 0) > 0);
+  // In invoice builder context, also exclude entries queued on local lines
+  if (typeof _invLineItems !== 'undefined' && Array.isArray(_invLineItems)) {
+    const queued = new Set();
+    _invLineItems.forEach(l => (l._timeEntryIds || []).forEach(id => queued.add(id)));
+    if (queued.size) entries = entries.filter(e => !queued.has(e.id));
+  }
+  return entries.sort((a, b) => String(a.startedAt || a.date || '').localeCompare(String(b.startedAt || b.date || '')));
 }
 
 // Round a duration in seconds up to the nearest `minutes` boundary. 0 = no rounding.
@@ -20318,15 +20397,9 @@ function commitUnbilledTime() {
       taxable,
       trackInPM: false,
       manual: false,
-    });
-    // Mark the contributing entries as billed and link them to this line
-    line.entryIds.forEach(eid => {
-      const e = (S.timeEntries || []).find(x => x.id === eid);
-      if (!e) return;
-      e.status = 'billed';
-      e.billed = true;
-      e.invoiceLineItemId = lineId;
-      e.billedAt = nowIso;
+      // Local-only metadata: which time entries this line covers. Stripped
+      // before sync. Status flip on those entries happens at saveInvoiceFromBuilder.
+      _timeEntryIds: line.entryIds.slice(),
     });
   });
   save();
