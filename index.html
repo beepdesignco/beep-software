@@ -11910,6 +11910,13 @@ function onFreightStateChange(newState) {
   if (newState === 'deferred' || newState === 'none' || !newState) {
     _modalFreight.value = '';
   }
+  // Allowance defaults to "Override markup = 0%" (bill at cost). Idea is the
+  // allowance is a placeholder; actual freight + markup get reconciled later
+  // when the real bill comes in. Only auto-toggle if the user hasn't already
+  // set an override — preserves an explicitly chosen value when toggling back.
+  if (newState === 'allowance' && _modalFreight.markupOverride == null) {
+    _modalFreight.markupOverride = 0;
+  }
   renderModalFreight();
 }
 
@@ -12017,6 +12024,10 @@ function onAdjacentStateChange(i, newState) {
   _modalAdjacent[i].state = newState || '';
   if (newState === 'deferred' || newState === 'none' || !newState) {
     _modalAdjacent[i].value = '';
+  }
+  // Allowance: same auto-toggle as primary — bill at cost until reconciled.
+  if (newState === 'allowance' && _modalAdjacent[i].markupOverride == null) {
+    _modalAdjacent[i].markupOverride = 0;
   }
   renderModalAdjacent();
 }
