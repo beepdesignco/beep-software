@@ -7383,7 +7383,7 @@ function initQRDragDrop(pid) {
 function renderPDOverview(proj, pid) {
   const client = (S.clients||[]).find(c => c.id === proj.clientId);
   const prop = S.proposals[pid];
-  const totals = prop ? calcProposalTotals(prop, pid) : {subtotal:0,freight:0,tax:0,total:0};
+  const totals = prop ? calcProposalTotals(prop, pid) : {subtotal:0,freight:0,adjacentCharges:0,tax:0,total:0};
 
   // Count items needing attention
   let needsAttention = 0;
@@ -10561,83 +10561,164 @@ function getItemTaxableAdjacentClient(item, pid) {
 // fully in a later cleanup pass.
 function getFreightFromCharges(item, pid) { return 0; }
 
-function getFreightFromComponents(item, pid) {
-  // Sum components tagged as shipping on constructed orders
-  if (item.type !== 'constructed' || !item.components) return 0;
-  return item.components
-    .filter(c => c.componentType === 'shipping')
-    .reduce((s, c) => {
-      const net = parse$(c.netCost) * (parseFloat(c.qty) || 1);
-      const markup = componentEffectiveMarkup(c, item, pid) / 100;
-      return s + net * (1 + markup);
+// ── Component-level freight (U-Freight Phase 2 Part 2) ──
+// Replaces the legacy componentType='shipping' carve-out. Components now
+// declare freight via freight_charges rows with parent_type='component'.
+// componentType='shipping' remains a valid label but carries no calc meaning.
+
+function _calcComponentFreightChargeMarkedUp(charge, comp, item, pid, proj) {
+  if (!charge) return 0;
+  if (charge.state !== 'known' && charge.state !== 'allowance') return 0;
+  if (charge.value == null || charge.value === '') return 0;
+  const num = parseFloat(charge.value);
+  if (isNaN(num) || num <= 0) return 0;
+  let base;
+  if (charge.valueType === 'percent') {
+    // Percent of the component's marked-up line value (one item-unit's worth).
+    const cNet = parse$(comp.netCost) * (parseFloat(comp.qty) || 1);
+    const cMarkup = componentEffectiveMarkup(comp, item, pid) / 100;
+    const cClient = cNet * (1 + cMarkup);
+    base = cClient * (num / 100);
+  } else {
+    base = num;
+  }
+  const markupPct = _resolveFreightChargeMarkupPct(charge, proj);
+  return base * (1 + markupPct / 100);
+}
+
+function _sumComponentFreightCharges(item, pid, predicate) {
+  if (!item.components) return 0;
+  const compById = new Map(item.components.map(c => [c.id, c]));
+  const proj = getProject(pid);
+  return (S.freightCharges || [])
+    .filter(c => c.parentType === 'component' && compById.has(c.parentId) && predicate(c))
+    .reduce((sum, c) => {
+      const comp = compById.get(c.parentId);
+      return sum + _calcComponentFreightChargeMarkedUp(c, comp, item, pid, proj);
     }, 0);
+}
+
+function getFreightFromComponents(item, pid) {
+  if (item.type !== 'constructed' || !item.components) return 0;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  return _sumComponentFreightCharges(item, pid, c => c.categoryId === primaryId);
+}
+
+function getItemAdjacentChargesFromComponents(item, pid) {
+  if (item.type !== 'constructed' || !item.components) return 0;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  return _sumComponentFreightCharges(item, pid, c => c.categoryId !== primaryId);
+}
+
+// Component-level taxable splits — gated by project.tax_freight AND
+// per-row category.is_taxable AND the component's own taxExempt flag.
+function getItemTaxableFreightFromComponents(item, pid) {
+  const proj = getProject(pid);
+  if (!proj?.taxFreight) return 0;
+  if (item.taxExempt) return 0;
+  if (!item.components) return 0;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  const compById = new Map(item.components.map(c => [c.id, c]));
+  return _sumComponentFreightCharges(item, pid, c => {
+    if (c.categoryId !== primaryId) return false;
+    const comp = compById.get(c.parentId);
+    return comp && !comp.taxExempt;
+  });
+}
+
+function getItemTaxableAdjacentFromComponents(item, pid) {
+  const proj = getProject(pid);
+  if (!proj?.taxFreight) return 0;
+  if (item.taxExempt) return 0;
+  if (!item.components) return 0;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  const compById = new Map(item.components.map(c => [c.id, c]));
+  return _sumComponentFreightCharges(item, pid, c => {
+    if (c.categoryId === primaryId) return false;
+    const cat = (S.freightCategories || []).find(x => x.id === c.categoryId);
+    if (!cat || !cat.isTaxable) return false;
+    const comp = compById.get(c.parentId);
+    return comp && !comp.taxExempt;
+  });
 }
 
 function calcProposalTotals(prop, pid) {
   const proj = getProject(pid);
   const taxRate = (proj?.taxRate || 0) / 100;
   let subtotal = 0;
-  let freight = 0;
-  let taxableAmount = 0;
+  let freight = 0;            // primary Freight (item-level + component-level)
+  let adjacentCharges = 0;    // every non-Freight category, item + component
+  let taxableBase = 0;        // subtotal portion subject to tax
+  let taxableFreight = 0;     // freight portion subject to tax (gated by proj.taxFreight)
+  let taxableAdjacent = 0;    // adjacent portion subject to tax (per-category gate)
 
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
       const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
 
       if (item.type === 'constructed') {
-        // For constructed orders, calculate per-component taxability
-        let itemFreight = 0;
+        // All components contribute to subtotal at their client price.
+        // componentType='shipping' is now a label only — no freight carve-out.
         let itemNonFreight = 0;
-        let itemTaxable = 0;
+        let itemCompTaxable = 0;
         (item.components||[]).forEach(c => {
           const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
           const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
           const cClient = cNet * (1 + cMarkup);
-          if (c.componentType === 'shipping') {
-            itemFreight += cClient;
-          } else {
-            itemNonFreight += cClient;
-          }
-          if (!item.taxExempt && !c.taxExempt) {
-            if (c.componentType === 'shipping') {
-              if (proj?.taxFreight) itemTaxable += cClient;
-            } else {
-              itemTaxable += cClient;
-            }
-          }
+          itemNonFreight += cClient;
+          if (!item.taxExempt && !c.taxExempt) itemCompTaxable += cClient;
         });
-        freight += itemFreight;
-        subtotal += itemNonFreight;
-        taxableAmount += itemTaxable;
+
+        // Freight + adjacent come from freight_charges, both item- and
+        // component-scoped. Per-row tax gating handled in the helpers.
+        const itemFr     = getItemFreightClient(item, pid);
+        const itemAdj    = getItemAdjacentChargesClient(item, pid);
+        const compFr     = getFreightFromComponents(item, pid);
+        const compAdj    = getItemAdjacentChargesFromComponents(item, pid);
+
+        subtotal        += itemNonFreight;
+        freight         += itemFr + compFr;
+        adjacentCharges += itemAdj + compAdj;
+        taxableBase     += itemCompTaxable;
+        if (!item.taxExempt) {
+          if (proj?.taxFreight) taxableFreight += itemFr;
+          taxableFreight += getItemTaxableFreightFromComponents(item, pid);
+          taxableAdjacent += getItemTaxableAdjacentClient(item, pid);
+          taxableAdjacent += getItemTaxableAdjacentFromComponents(item, pid);
+        }
       } else {
         const client = getItemClient(item, pid);
         const lineTotal = client * qty;
 
         if (isFreightItem(item)) {
           freight += lineTotal;
-          if (!item.taxExempt && proj?.taxFreight) taxableAmount += lineTotal;
+          if (!item.taxExempt && proj?.taxFreight) taxableFreight += lineTotal;
         } else {
-          // U-Freight Phase 2 Part 1: item-level freight + adjacent come from
-          // freight_charges (absolute totals — qty is already baked in for
-          // percent-based charges, and amount-based aren't multiplied again).
-          // Adjacent rolls into the freight bucket for now; Part 2 splits it
-          // into its own proposal-totals line.
-          const itemFreight   = getItemFreightClient(item, pid);
-          const itemAdjacent  = getItemAdjacentChargesClient(item, pid);
-          subtotal += lineTotal;
-          freight  += itemFreight + itemAdjacent;
+          const itemFr  = getItemFreightClient(item, pid);
+          const itemAdj = getItemAdjacentChargesClient(item, pid);
+          subtotal        += lineTotal;
+          freight         += itemFr;
+          adjacentCharges += itemAdj;
           if (!item.taxExempt) {
-            taxableAmount += lineTotal;
-            if (proj?.taxFreight) taxableAmount += itemFreight;
-            taxableAmount += getItemTaxableAdjacentClient(item, pid);
+            taxableBase += lineTotal;
+            if (proj?.taxFreight) taxableFreight += itemFr;
+            taxableAdjacent += getItemTaxableAdjacentClient(item, pid);
           }
         }
       }
     });
   });
 
-  const tax = taxableAmount * taxRate;
-  return { subtotal, freight, tax, total: subtotal + freight + tax };
+  const tax = (taxableBase + taxableFreight + taxableAdjacent) * taxRate;
+  return {
+    subtotal, freight, adjacentCharges,
+    taxableBase, taxableFreight, taxableAdjacent,
+    tax, total: subtotal + freight + adjacentCharges + tax,
+  };
 }
 
 function renderTotals(prop, pid) {
@@ -10650,7 +10731,8 @@ function renderTotals(prop, pid) {
       <table class="totals-tbl">
         <tr><td>Subtotal</td><td id="t-sub">${fmt(t.subtotal)}</td></tr>
         ${t.freight > 0 ? `<tr><td>Freight</td><td id="t-fr">${fmt(t.freight)}</td></tr>` : ''}
-        <tr><td>${taxLabel}</td><td id="t-tax">${fmt(t.tax)}</td></tr>
+        ${t.adjacentCharges > 0 ? `<tr><td>Other associated charges</td><td id="t-adj">${fmt(t.adjacentCharges)}</td></tr>` : ''}
+        ${t.tax > 0 ? `<tr><td>${taxLabel}</td><td id="t-tax">${fmt(t.tax)}</td></tr>` : ''}
         <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(t.total)}</td></tr>
       </table>
     </div>
@@ -11523,9 +11605,15 @@ function deleteItem(pid, spId, iid) {
   if (!confirm('Remove this item?')) return;
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (!sp) return;
+  // Capture component ids before removing so we can clean up their freight too.
+  const item = (sp.items || []).find(i => i.id === iid);
+  const compIds = new Set((item?.components || []).map(c => c.id));
   sp.items = (sp.items||[]).filter(i => i.id !== iid);
-  // Drop the item's freight_charges rows so the sync engine soft-deletes them.
-  S.freightCharges = (S.freightCharges || []).filter(c => !(c.parentType === 'item' && c.parentId === iid));
+  S.freightCharges = (S.freightCharges || []).filter(c => {
+    if (c.parentType === 'item' && c.parentId === iid) return false;
+    if (c.parentType === 'component' && compIds.has(c.parentId)) return false;
+    return true;
+  });
   save();
   if (S.currentView === 'project-detail') renderProjectDetail();
   else renderPropBody();
@@ -11625,12 +11713,13 @@ function populateRoomSelect(pid) {
 
 function addModalComponent(comp) {
   readModalComponentsFromDOM();
-  _modalComponents.push(comp || {
+  const c = comp || {
     id: uid(), name: '', componentType: '', contact: '', netCost: '', qty: 1, qtyUnit: '',
     allowance: false, billCostOnly: false, adjustMarkup: null, note: '',
     vendorId: null, vendorContactId: null, brandId: null
-  });
-
+  };
+  if (!c._freightDraft) loadComponentFreightDraft(c);
+  _modalComponents.push(c);
   renderModalComponents();
 }
 
@@ -11702,11 +11791,23 @@ function renderModalComponents() {
         <label class="fl">Note (can be hidden from proposal/print)</label>
         <input type="text" class="fi comp-note" value="${escH(c.note || '')}" placeholder="Internal note…">
       </div>` : ''}
+      <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);margin-bottom:6px">Freight</div>
+        <div id="cmp-freight-${c.id}"><!-- rendered by renderComponentFreight --></div>
+        <details style="margin-top:8px">
+          <summary style="font-family:var(--font-h);font-weight:700;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);cursor:pointer;padding:4px 0">Other associated charges <span id="cmp-adj-count-${c.id}" style="font-weight:400;color:var(--text-light);font-size:10px;text-transform:none;letter-spacing:0;margin-left:4px"></span></summary>
+          <div id="cmp-adj-${c.id}" style="margin-top:6px"></div>
+          <button class="btn btn-ghost btn-sm" onclick="addComponentAdjacentCharge('${c.id}')" style="font-size:10px;margin-top:4px">+ Add charge</button>
+        </details>
+      </div>
     </div>`;
   }).join('');
 
-  // After innerHTML rebuilds the rows, mount the per-component pickers.
-  _modalComponents.forEach(initComponentPickers);
+  // After innerHTML rebuilds the rows, mount the per-component pickers + freight UI.
+  _modalComponents.forEach(c => {
+    initComponentPickers(c);
+    initComponentFreightUI(c);
+  });
 }
 
 // Mount vendor / vendor-contact / brand pickers on a single component row.
@@ -11765,8 +11866,14 @@ function onCompTypeChange(idx, val) {
 }
 
 function removeModalComponent(idx) {
+  const c = _modalComponents[idx];
+  // Drop the component's freight_charges so the sync engine soft-deletes them.
+  if (c && c.id) {
+    S.freightCharges = (S.freightCharges || []).filter(
+      x => !(x.parentType === 'component' && x.parentId === c.id)
+    );
+  }
   _modalComponents.splice(idx, 1);
-
   renderModalComponents();
 }
 
@@ -12118,6 +12225,304 @@ function commitItemFreightCharges(itemId) {
 function readModalChargesFromDOM() { /* no-op (legacy additional_charges retired) */
 }
 
+// ─── Component-level freight charges (U-Freight Phase 2 Part 2) ───
+// Each component in _modalComponents carries _freightDraft + _adjacentDraft
+// transient modal state. Loaded from S.freightCharges on modal open, mutated
+// by event handlers as the user edits, committed back to S.freightCharges
+// on save (parent_type='component', parent_id=component.id).
+
+function _findComponentInModal(componentId) {
+  return _modalComponents.find(c => c.id === componentId);
+}
+
+function loadComponentFreightDraft(comp) {
+  comp._freightDraft = _emptyFreightDraft();
+  comp._adjacentDraft = [];
+  const primaryId = getPrimaryFreightCategoryId();
+  const rows = (S.freightCharges || []).filter(c => c.parentType === 'component' && c.parentId === comp.id);
+  rows.forEach(r => {
+    if (r.categoryId === primaryId) {
+      comp._freightDraft = {
+        id: r.id, state: r.state || '',
+        valueType: r.valueType || 'amount',
+        value: r.value != null ? String(r.value) : '',
+        markupOverride: r.markupPctOverride,
+        notes: r.notes || '',
+      };
+    } else {
+      comp._adjacentDraft.push({
+        id: r.id, categoryId: r.categoryId || '',
+        state: r.state || '',
+        valueType: r.valueType || 'amount',
+        value: r.value != null ? String(r.value) : '',
+        markupOverride: r.markupPctOverride,
+        notes: r.notes || '',
+      });
+    }
+  });
+}
+
+function initComponentFreightUI(c) {
+  if (!c._freightDraft) loadComponentFreightDraft(c);
+  renderComponentFreight(c);
+  renderComponentAdjacent(c);
+}
+
+function renderComponentFreight(c) {
+  const host = $c(`cmp-freight-${c.id}`);
+  if (!host) return;
+  const f = c._freightDraft;
+  const showValue = f.state === 'known' || f.state === 'allowance';
+  const valueLabel = f.valueType === 'percent' ? '% of component line' : 'Amount ($)';
+  const markupOn = f.markupOverride != null;
+  host.innerHTML = `
+    <div style="background:rgba(91,45,34,0.04);padding:10px 12px;border-radius:var(--r);border:1px solid var(--border)">
+      <div class="frow" style="margin-bottom:0">
+        <div class="fg" style="max-width:200px">
+          <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
+          <select class="fi fsel" onchange="onComponentFreightStateChange('${c.id}', this.value)">
+            <option value="" ${!f.state ? 'selected' : ''}>— Pick a status —</option>
+            <option value="known"     ${f.state === 'known' ? 'selected' : ''}>Known</option>
+            <option value="allowance" ${f.state === 'allowance' ? 'selected' : ''}>Allowance</option>
+            <option value="deferred"  ${f.state === 'deferred' ? 'selected' : ''}>Deferred</option>
+            <option value="none"      ${f.state === 'none' ? 'selected' : ''}>None</option>
+          </select>
+        </div>
+        ${showValue ? `
+        <div class="fg">
+          <label class="fl">${escH(valueLabel)} <span style="color:#b33">*</span></label>
+          <div style="display:flex;gap:4px">
+            <input type="number" class="fi" value="${escH(String(f.value || ''))}" step="0.01" min="0" placeholder="0"
+              oninput="onComponentFreightFieldChange('${c.id}','value', this.value)">
+            <select class="fi fsel" style="max-width:70px" onchange="onComponentFreightFieldChange('${c.id}','valueType', this.value); renderComponentFreight(_findComponentInModal('${c.id}'))">
+              <option value="amount"  ${f.valueType === 'amount' ? 'selected' : ''}>$</option>
+              <option value="percent" ${f.valueType === 'percent' ? 'selected' : ''}>%</option>
+            </select>
+          </div>
+        </div>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+          <input type="checkbox" ${markupOn ? 'checked' : ''} onchange="onComponentFreightMarkupToggle('${c.id}', this.checked)" style="accent-color:var(--russet);width:13px;height:13px">
+          Override markup
+        </label>
+        ${markupOn ? `
+        <input type="number" class="fi" value="${escH(String(f.markupOverride))}" min="0" step="0.5" placeholder="%"
+          oninput="onComponentFreightFieldChange('${c.id}','markupOverride', this.value)" style="width:80px;font-size:11px">
+        <span style="font-size:11px;color:var(--text-light)">%</span>` : ''}
+      </div>
+      <div class="fg" style="margin-top:8px;margin-bottom:0">
+        <input type="text" class="fi" value="${escH(f.notes || '')}" placeholder="Notes (optional)"
+          style="font-size:12px" oninput="onComponentFreightFieldChange('${c.id}','notes', this.value)">
+      </div>
+    </div>`;
+}
+
+function renderComponentAdjacent(c) {
+  const host = $c(`cmp-adj-${c.id}`);
+  if (!host) return;
+  const cats = getNonPrimaryFreightCategories();
+  const catOpts = cats.map(cat => `<option value="${cat.id}">${escH(cat.name)}</option>`).join('');
+  if (!c._adjacentDraft || !c._adjacentDraft.length) {
+    host.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No additional charges on this component.</div>';
+  } else {
+    host.innerHTML = c._adjacentDraft.map((row, i) => {
+      const showValue = row.state === 'known' || row.state === 'allowance';
+      const markupOn = row.markupOverride != null;
+      const valueLabel = row.valueType === 'percent' ? '% of component' : '$';
+      return `
+      <div style="background:rgba(91,45,34,0.025);padding:8px 10px;border-radius:var(--r);border:1px solid var(--border);margin-bottom:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span style="font-family:var(--font-b);font-size:10px;color:var(--text-mid)">Charge ${i + 1}</span>
+          <button type="button" onclick="removeComponentAdjacentCharge('${c.id}', ${i})" class="remove-poc-btn">✕</button>
+        </div>
+        <div class="frow" style="margin-bottom:0">
+          <div class="fg" style="max-width:160px">
+            <label class="fl">Category <span style="color:#b33">*</span></label>
+            <select class="fi fsel" onchange="onComponentAdjacentChange('${c.id}', ${i}, 'categoryId', this.value)">
+              <option value="" ${!row.categoryId ? 'selected' : ''}>— Pick category —</option>
+              ${catOpts.replace(`value="${row.categoryId}"`, `value="${row.categoryId}" selected`)}
+            </select>
+          </div>
+          <div class="fg" style="max-width:180px">
+            <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
+            <select class="fi fsel" onchange="onComponentAdjacentStateChange('${c.id}', ${i}, this.value)">
+              <option value="" ${!row.state ? 'selected' : ''}>— Pick a status —</option>
+              <option value="known"     ${row.state === 'known' ? 'selected' : ''}>Known</option>
+              <option value="allowance" ${row.state === 'allowance' ? 'selected' : ''}>Allowance</option>
+              <option value="deferred"  ${row.state === 'deferred' ? 'selected' : ''}>Deferred</option>
+              <option value="none"      ${row.state === 'none' ? 'selected' : ''}>None</option>
+            </select>
+          </div>
+          ${showValue ? `
+          <div class="fg">
+            <label class="fl">${escH(valueLabel)}</label>
+            <div style="display:flex;gap:4px">
+              <input type="number" class="fi" value="${escH(String(row.value || ''))}" step="0.01" min="0" placeholder="0"
+                oninput="onComponentAdjacentChange('${c.id}', ${i}, 'value', this.value)">
+              <select class="fi fsel" style="max-width:70px" onchange="onComponentAdjacentChange('${c.id}', ${i}, 'valueType', this.value); renderComponentAdjacent(_findComponentInModal('${c.id}'))">
+                <option value="amount"  ${row.valueType === 'amount' ? 'selected' : ''}>$</option>
+                <option value="percent" ${row.valueType === 'percent' ? 'selected' : ''}>%</option>
+              </select>
+            </div>
+          </div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+            <input type="checkbox" ${markupOn ? 'checked' : ''} onchange="onComponentAdjacentMarkupToggle('${c.id}', ${i}, this.checked)" style="accent-color:var(--russet);width:13px;height:13px">
+            Override markup
+          </label>
+          ${markupOn ? `
+          <input type="number" class="fi" value="${escH(String(row.markupOverride))}" min="0" step="0.5" placeholder="%"
+            oninput="onComponentAdjacentChange('${c.id}', ${i}, 'markupOverride', this.value)" style="width:80px;font-size:11px">
+          <span style="font-size:11px;color:var(--text-light)">%</span>` : ''}
+        </div>
+        <div class="fg" style="margin-top:6px;margin-bottom:0">
+          <input type="text" class="fi" value="${escH(row.notes || '')}" placeholder="Notes (optional)" style="font-size:12px"
+            oninput="onComponentAdjacentChange('${c.id}', ${i}, 'notes', this.value)">
+        </div>
+      </div>`;
+    }).join('');
+  }
+  const cnt = $c(`cmp-adj-count-${c.id}`);
+  if (cnt) cnt.textContent = (c._adjacentDraft && c._adjacentDraft.length) ? `(${c._adjacentDraft.length})` : '';
+}
+
+function onComponentFreightStateChange(componentId, newState) {
+  const c = _findComponentInModal(componentId);
+  if (!c) return;
+  if (!c._freightDraft) c._freightDraft = _emptyFreightDraft();
+  c._freightDraft.state = newState || '';
+  if (newState === 'deferred' || newState === 'none' || !newState) {
+    c._freightDraft.value = '';
+  }
+  if (newState === 'allowance' && c._freightDraft.markupOverride == null) {
+    c._freightDraft.markupOverride = 0;
+  }
+  renderComponentFreight(c);
+}
+
+function onComponentFreightFieldChange(componentId, field, value) {
+  const c = _findComponentInModal(componentId);
+  if (!c) return;
+  if (!c._freightDraft) c._freightDraft = _emptyFreightDraft();
+  c._freightDraft[field] = value;
+}
+
+function onComponentFreightMarkupToggle(componentId, on) {
+  const c = _findComponentInModal(componentId);
+  if (!c) return;
+  if (!c._freightDraft) c._freightDraft = _emptyFreightDraft();
+  c._freightDraft.markupOverride = on ? 0 : null;
+  renderComponentFreight(c);
+}
+
+function addComponentAdjacentCharge(componentId) {
+  const c = _findComponentInModal(componentId);
+  if (!c) return;
+  if (!c._adjacentDraft) c._adjacentDraft = [];
+  c._adjacentDraft.push({ id: null, categoryId: '', state: '', valueType: 'amount', value: '', markupOverride: null, notes: '' });
+  renderComponentAdjacent(c);
+}
+
+function removeComponentAdjacentCharge(componentId, i) {
+  const c = _findComponentInModal(componentId);
+  if (!c || !c._adjacentDraft) return;
+  c._adjacentDraft.splice(i, 1);
+  renderComponentAdjacent(c);
+}
+
+function onComponentAdjacentChange(componentId, i, field, value) {
+  const c = _findComponentInModal(componentId);
+  if (!c || !c._adjacentDraft || !c._adjacentDraft[i]) return;
+  c._adjacentDraft[i][field] = value;
+}
+
+function onComponentAdjacentStateChange(componentId, i, newState) {
+  const c = _findComponentInModal(componentId);
+  if (!c || !c._adjacentDraft || !c._adjacentDraft[i]) return;
+  c._adjacentDraft[i].state = newState || '';
+  if (newState === 'deferred' || newState === 'none' || !newState) {
+    c._adjacentDraft[i].value = '';
+  }
+  if (newState === 'allowance' && c._adjacentDraft[i].markupOverride == null) {
+    c._adjacentDraft[i].markupOverride = 0;
+  }
+  renderComponentAdjacent(c);
+}
+
+function onComponentAdjacentMarkupToggle(componentId, i, on) {
+  const c = _findComponentInModal(componentId);
+  if (!c || !c._adjacentDraft || !c._adjacentDraft[i]) return;
+  c._adjacentDraft[i].markupOverride = on ? 0 : null;
+  renderComponentAdjacent(c);
+}
+
+function validateModalComponentsFreight(comps) {
+  for (let i = 0; i < comps.length; i++) {
+    const c = comps[i];
+    const label = c.name ? `Component "${c.name}"` : `Component ${i + 1}`;
+    if (!c._freightDraft || !c._freightDraft.state) {
+      return `${label}: pick a Freight Cost Status.`;
+    }
+    if (c._freightDraft.state === 'known' || c._freightDraft.state === 'allowance') {
+      const v = parseFloat(c._freightDraft.value);
+      if (isNaN(v) || v <= 0) return `${label}: freight value must be greater than zero.`;
+    }
+    for (let j = 0; j < (c._adjacentDraft || []).length; j++) {
+      const r = c._adjacentDraft[j];
+      if (!r.categoryId) return `${label}, other charge #${j + 1}: pick a category.`;
+      if (!r.state)      return `${label}, other charge #${j + 1}: pick a Freight Cost Status.`;
+      if (r.state === 'known' || r.state === 'allowance') {
+        const v = parseFloat(r.value);
+        if (isNaN(v) || v <= 0) return `${label}, other charge #${j + 1}: value must be greater than zero.`;
+      }
+    }
+  }
+  return null;
+}
+
+function commitComponentFreightCharges(comp) {
+  if (!S.freightCharges) S.freightCharges = [];
+  const primaryId = getPrimaryFreightCategoryId();
+  const desired = [];
+
+  if (comp._freightDraft && comp._freightDraft.state) {
+    desired.push({
+      id: comp._freightDraft.id || uid(),
+      parentType: 'component',
+      parentId: comp.id,
+      categoryId: primaryId,
+      state: comp._freightDraft.state,
+      valueType: (comp._freightDraft.state === 'known' || comp._freightDraft.state === 'allowance')
+        ? (comp._freightDraft.valueType || 'amount') : null,
+      value: (comp._freightDraft.state === 'known' || comp._freightDraft.state === 'allowance')
+        ? (comp._freightDraft.value !== '' ? Number(comp._freightDraft.value) : null) : null,
+      markupPctOverride: comp._freightDraft.markupOverride == null || comp._freightDraft.markupOverride === ''
+        ? null : Number(comp._freightDraft.markupOverride),
+      notes: comp._freightDraft.notes || '',
+    });
+  }
+  (comp._adjacentDraft || []).forEach(r => {
+    desired.push({
+      id: r.id || uid(),
+      parentType: 'component',
+      parentId: comp.id,
+      categoryId: r.categoryId,
+      state: r.state,
+      valueType: (r.state === 'known' || r.state === 'allowance') ? (r.valueType || 'amount') : null,
+      value: (r.state === 'known' || r.state === 'allowance')
+        ? (r.value !== '' ? Number(r.value) : null) : null,
+      markupPctOverride: r.markupOverride == null || r.markupOverride === ''
+        ? null : Number(r.markupOverride),
+      notes: r.notes || '',
+    });
+  });
+
+  S.freightCharges = S.freightCharges.filter(c => !(c.parentType === 'component' && c.parentId === comp.id));
+  S.freightCharges.push(...desired);
+}
+
 function openAddItemModal(pid, spId) {
   $c('ai-title').textContent = 'Add Line Item';
   $c('ai-save-btn').textContent = 'Add Item';
@@ -12236,7 +12641,11 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-billcost').checked = !!item.billCostOnly;
   $c('ai-adj-markup').value = item.adjustMarkup != null ? item.adjustMarkup : '';
 
-  _modalComponents = (item.components || []).map(c => ({ ...c }));
+  _modalComponents = (item.components || []).map(c => {
+    const copy = { ...c };
+    loadComponentFreightDraft(copy);
+    return copy;
+  });
   renderModalComponents();
   loadItemFreightIntoModal(item.id);
   renderModalFreight();
@@ -12257,9 +12666,17 @@ function saveItem() {
   // Freight state is required on every item (U-Freight Phase 2).
   const freightErr = validateModalFreight();
   if (freightErr) { showItemModalError(freightErr); return; }
-  showItemModalError(null);
 
   readModalComponentsFromDOM();
+
+  // For constructed items, every non-empty component also needs its own
+  // Freight Cost Status before save (U-Freight Phase 2 Part 2).
+  if (type === 'constructed') {
+    const compsForValidation = _modalComponents.filter(c => c.name || c.netCost);
+    const compErr = validateModalComponentsFreight(compsForValidation);
+    if (compErr) { showItemModalError(compErr); return; }
+  }
+  showItemModalError(null);
 
   const adjVal = $c('ai-adj-markup').value;
   const itemTypeId = $c('ai-item-type')?.value || null;
@@ -12327,6 +12744,9 @@ function saveItem() {
   // Persist freight + adjacent charges into S.freightCharges. Done AFTER
   // the item is in S so a brand-new item.id is available as parent_id.
   commitItemFreightCharges(item.id);
+  if (type === 'constructed') {
+    (item.components || []).forEach(c => commitComponentFreightCharges(c));
+  }
 
   save();
 
@@ -12341,8 +12761,14 @@ function deleteItemFromModal() {
   const itemId = $c('ai-id').value;
   if (!itemId || !confirm('Remove this item?')) return;
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  const item = sp?.items.find(i => i.id === itemId);
+  const compIds = new Set((item?.components || []).map(c => c.id));
   if (sp) sp.items = (sp.items || []).filter(i => i.id !== itemId);
-  S.freightCharges = (S.freightCharges || []).filter(c => !(c.parentType === 'item' && c.parentId === itemId));
+  S.freightCharges = (S.freightCharges || []).filter(c => {
+    if (c.parentType === 'item' && c.parentId === itemId) return false;
+    if (c.parentType === 'component' && compIds.has(c.parentId)) return false;
+    return true;
+  });
   save();
 
   closeModal('modal-add-item');
@@ -17591,14 +18017,26 @@ function autoSetDueDate(sentDate) {
 }
 
 function getItemNonFreightClient(item, pid) {
-  // Per-unit client price excluding any freight built into the line.
-  // Constructed items' shipping components contribute per-unit freight that
-  // should NOT appear in the line item — subtract that out. Item-level
-  // freight_charges (new model) are absolute totals, not per-unit, so they
-  // are handled via the separate invoice freight field, NOT subtracted here.
-  const total = getItemClient(item, pid);
-  const freightComp = getFreightFromComponents(item, pid);
-  return total - freightComp;
+  // Per-unit client price. As of U-Freight Phase 2 Part 2, freight charges
+  // (item- and component-level) live in the freight_charges table as
+  // absolute totals — none of them are baked into the per-unit price, so no
+  // subtraction is needed here. The invoice freight field captures all of
+  // them via getItemAllFreightForInvoice.
+  return getItemClient(item, pid);
+}
+
+// All freight + adjacent for an item, combined for invoice auto-fill.
+// Per Phase 2 Part 2 spec section 2.5, both buckets collapse into the
+// single inv-freight field until Phase 5 splits them on the invoice.
+function getItemAllFreightForInvoice(item, pid) {
+  if (isFreightItem(item)) {
+    return getItemClient(item, pid) * (parseFloat(item.qty) || 1);
+  }
+  let total = getItemFreightClient(item, pid) + getItemAdjacentChargesClient(item, pid);
+  if (item.type === 'constructed') {
+    total += getFreightFromComponents(item, pid) + getItemAdjacentChargesFromComponents(item, pid);
+  }
+  return total;
 }
 
 function getItemFreightClient(item, pid) {
@@ -17708,7 +18146,9 @@ function recalcInvFreight() {
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
       if (!_invSelectedProposalItems.has(item.id)) return;
-      totalFreight += getItemFreightClient(item, pid);
+      // Phase 2 Part 2: combine primary + adjacent + component-level into
+      // the single invoice freight field. Phase 5 splits them on the invoice.
+      totalFreight += getItemAllFreightForInvoice(item, pid);
     });
   });
   const freightEl = $c('inv-freight');
