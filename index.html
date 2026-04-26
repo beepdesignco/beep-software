@@ -1342,6 +1342,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-pdtab="addressbook" onclick="setProjDetailTab('addressbook')" style="margin-bottom:-1px">Address Book</button>
         <button class="view-tab" data-pdtab="documents" onclick="setProjDetailTab('documents')" style="margin-bottom:-1px">Documents</button>
         <button class="view-tab" data-pdtab="expenses" onclick="setProjDetailTab('expenses')" style="margin-bottom:-1px">Expenses</button>
+        <button class="view-tab" data-pdtab="freight" onclick="setProjDetailTab('freight')" style="margin-bottom:-1px">Freight</button>
         <button class="view-tab" data-pdtab="settings" onclick="setProjDetailTab('settings')" style="margin-bottom:-1px">Settings</button>
       </div>
       <div class="contacts-body" id="pd-body" style="padding:22px 30px 40px"><!-- rendered by JS --></div>
@@ -7487,6 +7488,7 @@ function renderProjectDetail() {
   if (_projDetailTab === 'addressbook') body.innerHTML = renderPDAddressBook(proj, pid);
   if (_projDetailTab === 'documents')   body.innerHTML = renderPDDocuments(proj, pid);
   if (_projDetailTab === 'expenses')    body.innerHTML = renderPDExpenses(proj, pid);
+  if (_projDetailTab === 'freight')     body.innerHTML = renderPDFreight(proj, pid);
   if (_projDetailTab === 'settings')    body.innerHTML = renderPDSettings(proj, pid);
 
   // Set up drag-and-drop for Quick References
@@ -9982,6 +9984,343 @@ function openNewExpenseForItem(pid, itemId) {
   openNewExpenseForProject(pid);
   const sel = $c('exp-proposal-item');
   if (sel) sel.value = itemId || '';
+}
+
+// ─── Project Freight Ledger (U-Freight Phase 4 Part 2) ────────
+// Per-project view of charged-vs-actual freight. Reads freight_charges
+// (already-marked-up) and freight_actuals (raw vendor bills); the ledger
+// marks the actuals up at the same rate to compare apples-to-apples.
+//
+// State semantics:
+//   • Known     — variance < 0 → "Overage to bill"; ≥ 0 → silent margin
+//   • Allowance — variance < 0 → overage; > 0 → "Credit available";
+//                 |variance| ≤ 0.50 → "Spot on"
+//   • Deferred  — no actuals → "Pending — Update ledger"; with actuals →
+//                 "Pending billing"
+//   • None      — not in the ledger
+
+function _faMarkupRateFor(charge, proj) {
+  // Mirror the precedence used by the calc helpers.
+  if (charge && charge.markupPctOverride != null && charge.markupPctOverride !== '') {
+    return Number(charge.markupPctOverride);
+  }
+  const cat = (S.freightCategories || []).find(x => x.id === charge?.categoryId);
+  if (cat && cat.defaultMarkupPct != null) return Number(cat.defaultMarkupPct);
+  return Number(proj?.markupPct || 0);
+}
+
+function _faCategoryMarkupRate(categoryId, proj) {
+  const cat = (S.freightCategories || []).find(x => x.id === categoryId);
+  if (cat && cat.defaultMarkupPct != null) return Number(cat.defaultMarkupPct);
+  return Number(proj?.markupPct || 0);
+}
+
+// All freight_charges that belong to a given item (item-level + any
+// component-level whose component belongs to that item).
+function _faChargesForItem(item) {
+  const compIds = new Set((item.components || []).map(c => c.id));
+  return (S.freightCharges || []).filter(c =>
+    (c.parentType === 'item' && c.parentId === item.id) ||
+    (c.parentType === 'component' && compIds.has(c.parentId))
+  );
+}
+
+function _faActualsForItem(itemId) {
+  return (S.freightActuals || []).filter(a => a.proposalItemId === itemId);
+}
+
+// Compute one item's per-category roll-up + an item-level chip.
+function computeItemFreightLedger(item, pid) {
+  const proj = getProject(pid);
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const charges = _faChargesForItem(item);
+  const actuals = _faActualsForItem(item.id);
+
+  // Build per-category buckets keyed by categoryId. Skip 'none' state for
+  // charged math (they contribute 0) but still let an actual create a
+  // bucket if the category has no charge.
+  const byCat = new Map();
+  const ensure = (catId) => {
+    const key = catId || '__nocat__';
+    if (!byCat.has(key)) {
+      byCat.set(key, {
+        categoryId: catId || null,
+        categoryName: catId ? ((S.freightCategories || []).find(c => c.id === catId)?.name || '(category)') : 'Other actuals',
+        states: new Set(),
+        chargedRows: 0,    // count of contributing charges (for empty detection)
+        charged: 0,        // marked-up sum
+        actualRaw: 0,      // raw actuals tagged to this category for this item
+        markupRateForVariance: null,
+      });
+    }
+    return byCat.get(key);
+  };
+
+  charges.forEach(c => {
+    const bucket = ensure(c.categoryId);
+    bucket.states.add(c.state || 'none');
+    bucket.chargedRows++;
+    if (c.state === 'known' || c.state === 'allowance') {
+      // Need an item context to compute marked-up amount; reuse calc helpers.
+      const isComp = c.parentType === 'component';
+      let amt = 0;
+      if (isComp) {
+        const comp = (item.components || []).find(co => co.id === c.parentId);
+        if (comp) amt = _calcComponentFreightChargeMarkedUp(c, comp, item, pid, proj);
+      } else {
+        amt = _calcFreightChargeMarkedUp(c, item, pid, proj);
+      }
+      bucket.charged += amt;
+      // Track the markup rate from the most-recent contributing charge
+      // (good enough — typically all charges in a category share defaults).
+      bucket.markupRateForVariance = _faMarkupRateFor(c, proj);
+    }
+  });
+
+  actuals.forEach(a => {
+    const bucket = ensure(a.freightCategoryId);
+    bucket.actualRaw += parseFloat(a.amount) || 0;
+  });
+
+  // Compute markup-adjusted actual + variance per bucket.
+  const rows = [];
+  byCat.forEach((b) => {
+    if (b.markupRateForVariance == null) {
+      b.markupRateForVariance = _faCategoryMarkupRate(b.categoryId, proj);
+    }
+    const markupAdjActual = b.actualRaw * (1 + b.markupRateForVariance / 100);
+    const variance = b.charged - markupAdjActual;
+    // Dominant state: deferred > known > allowance > none
+    const dominantState = b.states.has('deferred') ? 'deferred'
+                        : b.states.has('known') ? 'known'
+                        : b.states.has('allowance') ? 'allowance'
+                        : 'none';
+    rows.push({ ...b, markupAdjActual, variance, dominantState });
+  });
+
+  // Sort: primary Freight first, then by name; "Other actuals" (no cat) last.
+  rows.sort((a, b) => {
+    if (a.categoryId === primaryCatId && b.categoryId !== primaryCatId) return -1;
+    if (b.categoryId === primaryCatId && a.categoryId !== primaryCatId) return 1;
+    if (!a.categoryId && b.categoryId) return 1;
+    if (!b.categoryId && a.categoryId) return -1;
+    return (a.categoryName || '').localeCompare(b.categoryName || '');
+  });
+
+  // Item-level chip — Deferred dominates; then sum overages/credits.
+  const SPOT_ON = 0.5;
+  let chipKind = null;     // 'pending-update' | 'pending-billing' | 'overage' | 'credit' | 'spot' | null
+  let chipAmount = 0;
+  const deferredRows = rows.filter(r => r.dominantState === 'deferred');
+  if (deferredRows.length) {
+    const totalDeferredActual = deferredRows.reduce((s, r) => s + r.actualRaw, 0);
+    if (totalDeferredActual > 0) {
+      chipKind = 'pending-billing';
+      chipAmount = totalDeferredActual;
+    } else {
+      chipKind = 'pending-update';
+    }
+  } else {
+    let totalOverage = 0, totalCredit = 0;
+    rows.forEach(r => {
+      if (r.dominantState !== 'known' && r.dominantState !== 'allowance') return;
+      // Skip rows with no actuals at all — variance == charged, but we treat
+      // "haven't paid yet" as not-actionable (the item is just charged-only).
+      if (r.actualRaw === 0) return;
+      if (r.variance < -SPOT_ON) totalOverage += -r.variance;
+      else if (r.dominantState === 'allowance' && r.variance > SPOT_ON) totalCredit += r.variance;
+      // Known + positive variance = silent margin (no chip contribution)
+    });
+    if (totalOverage > 0)      { chipKind = 'overage'; chipAmount = totalOverage; }
+    else if (totalCredit > 0)  { chipKind = 'credit';  chipAmount = totalCredit; }
+    else if (rows.some(r => r.actualRaw > 0)) { chipKind = 'spot'; }
+  }
+
+  return { rows, chip: { kind: chipKind, amount: chipAmount } };
+}
+
+function computeProjectFreightSummary(pid) {
+  const proj = getProject(pid);
+  const prop = S.proposals[pid];
+  const primaryCatId = getPrimaryFreightCategoryId();
+  let charged = 0, actual = 0, creditAvailable = 0, overageToBill = 0, deferredActuals = 0;
+
+  // Total charged (marked-up sum across all items, both item-level and
+  // component-level, both primary + adjacent, only known/allowance).
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    charged += getItemFreightClient(item, pid);
+    charged += getItemAdjacentChargesClient(item, pid);
+    if (item.type === 'constructed') {
+      charged += getFreightFromComponents(item, pid);
+      charged += getItemAdjacentChargesFromComponents(item, pid);
+    }
+  }));
+
+  // Total actual (raw vendor bills).
+  (S.freightActuals || []).forEach(a => {
+    if (a.projectId === pid) actual += parseFloat(a.amount) || 0;
+  });
+
+  // Per-item credit / overage / deferred-actuals roll-ups.
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    const ledger = computeItemFreightLedger(item, pid);
+    ledger.rows.forEach(r => {
+      if (r.dominantState === 'deferred') {
+        deferredActuals += r.actualRaw;
+      } else if (r.dominantState === 'known' || r.dominantState === 'allowance') {
+        if (r.actualRaw === 0) return; // unbilled, not actionable
+        if (r.variance < -0.5) overageToBill += -r.variance;
+        else if (r.dominantState === 'allowance' && r.variance > 0.5) creditAvailable += r.variance;
+      }
+    });
+  }));
+
+  return { charged, actual, creditAvailable, overageToBill, deferredActuals };
+}
+
+function renderPDFreight(proj, pid) {
+  const summary = computeProjectFreightSummary(pid);
+  const prop = S.proposals[pid];
+
+  // Build per-item ledger rows. Include items that have any charges
+  // (Known/Allowance/Deferred) or any tagged actuals.
+  const itemRows = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    const charges = _faChargesForItem(item);
+    const actuals = _faActualsForItem(item.id);
+    const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0;
+    if (!hasActivity) return;
+    const ledger = computeItemFreightLedger(item, pid);
+    if (!ledger.rows.length) return;
+    itemRows.push({ item, sp, ledger });
+  }));
+
+  const headerBar = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">Freight Ledger</div>
+    </div>`;
+
+  if (!itemRows.length && summary.charged === 0 && summary.actual === 0) {
+    return `
+    <div>
+      ${headerBar}
+      <div style="background:white;border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center;color:var(--text-mid);font-family:var(--font-b);font-size:13px;font-style:italic">
+        No freight activity recorded for this project yet.<br>
+        <span style="font-size:11px;color:var(--text-light)">Add freight charges to items to see them here, then log vendor freight bills as actuals to reconcile.</span>
+      </div>
+    </div>`;
+  }
+
+  const summaryHTML = renderFreightSummaryHeader(summary);
+  const ledgerHTML = itemRows.length
+    ? itemRows.map(r => renderFreightItemRow(r.item, r.sp, r.ledger, pid)).join('')
+    : `<div style="background:white;border-radius:var(--rl);padding:24px;border:1px solid var(--border);text-align:center;color:var(--text-mid);font-family:var(--font-b);font-size:12px;font-style:italic">All items reconciled or pending.</div>`;
+
+  return `
+  <div>
+    ${headerBar}
+    ${summaryHTML}
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">${ledgerHTML}</div>
+  </div>`;
+}
+
+function renderFreightSummaryHeader(s) {
+  const cell = (label, value, color) => `
+    <div style="flex:1;min-width:140px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:4px">${label}</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${color}">${fmt(value)}</div>
+    </div>`;
+  return `
+    <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);display:flex;gap:18px;flex-wrap:wrap">
+      ${cell('Charged',           s.charged,         'var(--text-dark)')}
+      ${cell('Actual',            s.actual,          'var(--text-dark)')}
+      ${cell('Credit available',  s.creditAvailable, '#1a6e3a')}
+      ${cell('Overage to bill',   s.overageToBill,   '#b33')}
+      ${cell('Deferred actuals',  s.deferredActuals, '#2d5a8a')}
+    </div>`;
+}
+
+function _faStateBadge(state) {
+  const map = {
+    known:     { label: 'Known',     color: '#1a6e3a', bg: 'rgba(26,110,58,0.10)' },
+    allowance: { label: 'Allowance', color: '#7A4A10', bg: 'rgba(122,74,16,0.10)' },
+    deferred:  { label: 'Deferred',  color: '#2d5a8a', bg: 'rgba(45,90,138,0.10)' },
+    none:      { label: 'None',      color: 'var(--text-light)', bg: 'rgba(91,45,34,0.06)' },
+  };
+  const m = map[state] || map.none;
+  return `<span style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:2px 7px;border-radius:8px;color:${m.color};background:${m.bg}">${m.label}</span>`;
+}
+
+function _faChip(chip, item, pid) {
+  if (!chip || !chip.kind) return '';
+  if (chip.kind === 'pending-update') {
+    return `<button class="btn btn-secondary btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 10px;background:rgba(45,90,138,0.10);color:#2d5a8a;border-color:#2d5a8a">Pending — Update ledger</button>`;
+  }
+  const map = {
+    'pending-billing': { label: `Pending billing: ${fmt(chip.amount)}`, color: '#2d5a8a', bg: 'rgba(45,90,138,0.10)' },
+    'overage':         { label: `Overage to bill: ${fmt(chip.amount)}`, color: '#b33',     bg: 'rgba(179,51,51,0.10)' },
+    'credit':          { label: `Credit available: ${fmt(chip.amount)}`, color: '#1a6e3a', bg: 'rgba(26,110,58,0.10)' },
+    'spot':            { label: 'Spot on',                                color: 'var(--text-light)', bg: 'rgba(91,45,34,0.04)' },
+  };
+  const m = map[chip.kind];
+  if (!m) return '';
+  return `<span style="font-size:11px;font-family:var(--font-b);font-weight:700;padding:5px 12px;border-radius:14px;color:${m.color};background:${m.bg};border:1px solid ${m.color}30">${m.label}</span>`;
+}
+
+function _faVarianceCell(row) {
+  if (row.dominantState === 'deferred') {
+    if (row.actualRaw === 0) return '<span style="color:var(--text-light);font-style:italic">awaiting actuals</span>';
+    return `<span style="color:#2d5a8a">${fmt(row.actualRaw)} pending</span>`;
+  }
+  if (row.actualRaw === 0 && row.charged === 0) return '—';
+  if (row.actualRaw === 0) return '<span style="color:var(--text-light)">no actuals yet</span>';
+  const v = row.variance;
+  const SPOT_ON = 0.5;
+  if (Math.abs(v) <= SPOT_ON) return '<span style="color:var(--text-light)">spot on</span>';
+  if (v > 0)  return `<span style="color:#1a6e3a;font-weight:700">+${fmt(v)}</span>`;
+  return `<span style="color:#b33;font-weight:700">${fmt(v)}</span>`;
+}
+
+function renderFreightItemRow(item, sp, ledger, pid) {
+  const itemTypeBadgeHtml = (typeof itemTypeBadge === 'function') ? itemTypeBadge(item.type) : '';
+  const headRow = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--border);margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+        ${itemTypeBadgeHtml}
+        <a onclick="event.preventDefault(); openPMItemDetail('${pid}','${sp.id}','${item.id}')" style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany);cursor:pointer;text-decoration:none">${escH(item.name || '(unnamed)')}</a>
+        <span style="font-size:11px;color:var(--text-mid);font-family:var(--font-b)">· ${escH(sp.name || 'Unassigned')}</span>
+      </div>
+      ${_faChip(ledger.chip, item, pid)}
+    </div>`;
+
+  const grid = `
+    <table style="width:100%;font-family:var(--font-b);font-size:12px;border-collapse:collapse">
+      <thead>
+        <tr style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:0.06em">
+          <th style="text-align:left;padding:4px 6px;font-weight:700">Category</th>
+          <th style="text-align:left;padding:4px 6px;font-weight:700">Status</th>
+          <th style="text-align:right;padding:4px 6px;font-weight:700">Charged</th>
+          <th style="text-align:right;padding:4px 6px;font-weight:700">Actual (raw)</th>
+          <th style="text-align:right;padding:4px 6px;font-weight:700">Variance</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ledger.rows.map(r => `
+          <tr style="border-top:1px solid var(--border)">
+            <td style="padding:6px 6px;color:var(--text-dark);font-weight:600">${escH(r.categoryName)}</td>
+            <td style="padding:6px 6px">${_faStateBadge(r.dominantState)}</td>
+            <td style="padding:6px 6px;text-align:right;color:var(--text-dark)">${r.charged > 0 ? fmt(r.charged) : '—'}</td>
+            <td style="padding:6px 6px;text-align:right;color:var(--text-dark)">${r.actualRaw > 0 ? fmt(r.actualRaw) : '—'}</td>
+            <td style="padding:6px 6px;text-align:right">${_faVarianceCell(r)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  return `
+    <div style="background:white;border-radius:var(--rl);padding:14px 18px;border:1px solid var(--border)">
+      ${headRow}
+      ${grid}
+    </div>`;
 }
 
 // ─── Freight Actual modal (U-Freight Phase 4 Part 1) ──────────
