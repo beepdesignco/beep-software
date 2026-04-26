@@ -19407,7 +19407,8 @@ let _invAdjacentTaxableAmount = 0;
 
 function recalcInvFreight() {
   // Sum freight + adjacent from all selected proposal items.
-  const pid = _currentInvoiceId ? (S.invoices||[]).find(i=>i.id===_currentInvoiceId)?.projectId : $c('inv-project')?.value;
+  const inv = _currentInvoiceId ? (S.invoices||[]).find(i => i.id === _currentInvoiceId) : null;
+  const pid = inv ? inv.projectId : $c('inv-project')?.value;
   if (!pid) return;
   const prop = S.proposals[pid];
   if (!prop) return;
@@ -19420,11 +19421,22 @@ function recalcInvFreight() {
       totalAdjacentTaxable += getItemTaxableAdjacentForInvoice(item, pid);
     });
   });
+  // Write back to the invoice object so the auto-fill survives a
+  // renderInvoiceBuilder() call later in the same handler. The user can
+  // still manually override the input values; saveInvoiceFromBuilder reads
+  // from the DOM at save time.
+  if (inv) {
+    inv.freight = totalFreight;
+    inv.adjacentCharges = totalAdjacent;
+    inv.adjacentChargesTaxableAmount = totalAdjacentTaxable;
+  }
+  _invAdjacentTaxableAmount = totalAdjacentTaxable;
+  // Update DOM if the inputs are present (covers in-place edits without
+  // a full re-render).
   const freightEl = $c('inv-freight');
   if (freightEl) freightEl.value = totalFreight > 0 ? totalFreight.toFixed(2) : '';
   const adjEl = $c('inv-adjacent');
   if (adjEl) adjEl.value = totalAdjacent > 0 ? totalAdjacent.toFixed(2) : '';
-  _invAdjacentTaxableAmount = totalAdjacentTaxable;
   const taxHelp = $c('inv-adjacent-taxable-help');
   if (taxHelp) taxHelp.textContent = totalAdjacentTaxable > 0 ? `Taxable portion: ${fmt(totalAdjacentTaxable)}` : '';
 }
