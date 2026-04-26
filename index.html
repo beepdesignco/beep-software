@@ -3032,7 +3032,7 @@ tr:hover .row-btns { opacity:1; }
       <select class="fi fsel" id="exp-project" onchange="onExpProjectChange()"><!-- populated by JS --></select>
     </div>
     <div class="fg">
-      <label class="fl">Tag to item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — links this expense to a specific proposal item for cost-tracking and freight reconciliation)</span></label>
+      <label class="fl">Tag to item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — links this expense to a specific proposal item for cost-tracking)</span></label>
       <select class="fi fsel" id="exp-proposal-item" disabled>
         <option value="">— Pick a project first —</option>
       </select>
@@ -3103,6 +3103,88 @@ tr:hover .row-btns { opacity:1; }
       <button class="btn btn-danger" id="exp-delete-btn" onclick="deleteExpenseFromModal()" style="display:none;margin-right:auto">Delete Expense</button>
       <button class="btn btn-secondary" onclick="closeModal('modal-expense')">Cancel</button>
       <button class="btn btn-primary" onclick="saveExpense()">Save Expense</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ FREIGHT ACTUAL MODAL ═════════════════ -->
+<!-- U-Freight Phase 4 Part 1. Vendor freight bill logged against a
+     specific item (or component). Optional toggle creates a linked
+     nonbillable expense so the cost lands in P&L. -->
+<div class="overlay" id="modal-freight-actual">
+  <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-freight-actual')">✕</button>
+    <div class="modal-title" id="fa-modal-title">Log Freight Actual</div>
+    <input type="hidden" id="fa-id">
+    <input type="hidden" id="fa-project-id">
+
+    <div class="fg">
+      <label class="fl">Project</label>
+      <div id="fa-project-name" style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);padding:6px 0;font-weight:600">—</div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Item <span style="color:#b33">*</span></label>
+      <select class="fi fsel" id="fa-item" onchange="onFAItemChange()">
+        <option value="">— Pick item —</option>
+      </select>
+    </div>
+
+    <div class="fg" id="fa-component-wrap" style="display:none">
+      <label class="fl">Component <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — pick when the actual is for one specific component)</span></label>
+      <select class="fi fsel" id="fa-component">
+        <option value="">— Whole item —</option>
+      </select>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Category <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — blank reconciles against the item's total charged)</span></label>
+      <select class="fi fsel" id="fa-category">
+        <option value="">— Any —</option>
+      </select>
+    </div>
+
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Amount <span style="color:#b33">*</span></label>
+        <input type="text" class="fi" id="fa-amount" placeholder="$0.00">
+      </div>
+      <div class="fg">
+        <label class="fl">Date <span style="color:#b33">*</span></label>
+        <input type="date" class="fi" id="fa-date">
+      </div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Vendor <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — who you paid)</span></label>
+      <div id="fa-vendor-picker" style="position:relative"></div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Invoice reference <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+      <input type="text" class="fi" id="fa-invoice-ref" placeholder="e.g. FedEx tracking #1234567 or vendor invoice #">
+    </div>
+
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="fa-notes" style="resize:vertical;min-height:40px;font-size:12px"></textarea>
+    </div>
+
+    <div style="background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;margin-bottom:6px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="fa-record-expense" style="accent-color:var(--russet);width:14px;height:14px">
+        Also record as expense for P&amp;L
+      </label>
+      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin-top:4px;line-height:1.4">
+        Creates a linked nonbillable expense in this project so the cost shows in P&amp;L. Use when you want freight costs to count toward project profitability.
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="fa-delete-btn" style="display:none" onclick="deleteFreightActualFromModal()">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-freight-actual')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveFreightActual()">Save</button>
     </div>
   </div>
 </div>
@@ -5464,7 +5546,7 @@ async function loadFromSupabase() {
     invoicesRes, expensesRes, documentsRes, timeRes,
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
     itemTypesRes, posRes, submittalsRes,
-    freightCategoriesRes, freightChargesRes,
+    freightCategoriesRes, freightChargesRes, freightActualsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -5482,9 +5564,10 @@ async function loadFromSupabase() {
     sb.from('submittals').select('*, submittal_signers(*)').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_categories').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_charges').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('freight_actuals').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -5524,6 +5607,7 @@ async function loadFromSupabase() {
   S.freightCategories = ((freightCategoriesRes.data || []).map(dbFreightCategoryToS))
                         .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
   S.freightCharges    = (freightChargesRes.data    || []).map(dbFreightChargeToS);
+  S.freightActuals    = (freightActualsRes.data    || []).map(dbFreightActualToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -5804,6 +5888,27 @@ function dbFreightChargeToS(c) {
     notes: c.notes || '',
     created: c.created_at,
     updated: c.updated_at,
+  };
+}
+
+// Vendor freight bill logged against a specific item (or component) for
+// retainer reconciliation. linkedExpenseId is set when the user opted to
+// also create a nonbillable expense so the cost lands in P&L.
+function dbFreightActualToS(r) {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    proposalItemId: r.proposal_item_id,
+    proposalComponentId: r.proposal_component_id || null,
+    freightCategoryId: r.freight_category_id || null,
+    amount: r.amount != null ? String(r.amount) : '',
+    date: r.date || '',
+    vendorId: r.vendor_id || null,
+    invoiceReference: r.invoice_reference || '',
+    notes: r.notes || '',
+    linkedExpenseId: r.linked_expense_id || null,
+    created: r.created_at,
+    updated: r.updated_at,
   };
 }
 
@@ -6091,6 +6196,7 @@ const _sbShadow = {
   itemTypes: new Map(),
   freightCategories: new Map(),
   freightCharges: new Map(),
+  freightActuals: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -6113,6 +6219,7 @@ function captureSbShadow() {
   _sbShadow.itemTypes      = new Map((S.itemTypes      || []).map(t => [t.id, snap(t)]));
   _sbShadow.freightCategories = new Map((S.freightCategories || []).map(c => [c.id, snap(c)]));
   _sbShadow.freightCharges    = new Map((S.freightCharges    || []).map(c => [c.id, snap(c)]));
+  _sbShadow.freightActuals    = new Map((S.freightActuals    || []).map(r => [r.id, snap(r)]));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
   _sbShadow.submittalSigners = new Map();
@@ -6236,6 +6343,22 @@ function freightChargeToDB(c, studioId) {
       ? null
       : Number(c.markupPctOverride),
     notes: c.notes || null,
+    deleted_at: null,
+  };
+}
+function freightActualToDB(r, studioId) {
+  return {
+    id: r.id, studio_id: studioId,
+    project_id: r.projectId,
+    proposal_item_id: r.proposalItemId,
+    proposal_component_id: r.proposalComponentId || null,
+    freight_category_id: r.freightCategoryId || null,
+    amount: _parseMoney(r.amount) || 0,
+    date: r.date || null,
+    vendor_id: r.vendorId || null,
+    invoice_reference: r.invoiceReference || null,
+    notes: r.notes || null,
+    linked_expense_id: r.linkedExpenseId || null,
     deleted_at: null,
   };
 }
@@ -6621,6 +6744,8 @@ async function syncToSupabase() {
     // freight_charges parent_id is polymorphic to items/components — sync after both exist.
     await syncSafe('freight_charges', new Map((S.freightCharges||[]).map(c => [c.id, c])), _sbShadow.freightCharges, c => freightChargeToDB(c, studioId));
     await syncSafe('expenses',  current.expenses, _sbShadow.expenses, e => expenseToDB(e, studioId));
+    // freight_actuals after expenses so linked_expense_id targets exist on insert.
+    await syncSafe('freight_actuals', new Map((S.freightActuals||[]).map(r => [r.id, r])), _sbShadow.freightActuals, r => freightActualToDB(r, studioId));
     await syncSafe('invoices',  current.invoices, _sbShadow.invoices, i => invoiceToDB(i, studioId));
     await syncSafe('invoice_line_items', current.invoiceLineItems, _sbShadow.invoiceLineItems, l => invLineItemToDB(l), { softDelete: false });
     await syncSafe('invoice_payments',   current.invoicePayments,  _sbShadow.invoicePayments,  p => invPaymentToDB(p),  { softDelete: false });
@@ -6810,6 +6935,7 @@ let S = {
   itemTypes: [],
   freightCategories: [],
   freightCharges: [],
+  freightActuals: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -9856,6 +9982,279 @@ function openNewExpenseForItem(pid, itemId) {
   openNewExpenseForProject(pid);
   const sel = $c('exp-proposal-item');
   if (sel) sel.value = itemId || '';
+}
+
+// ─── Freight Actual modal (U-Freight Phase 4 Part 1) ──────────
+// Logs a vendor freight bill against a specific item (or component).
+// Optional toggle creates a linked nonbillable expense — that's the
+// only path that surfaces freight costs in P&L going forward. The
+// freight_actuals table is the source of truth for retainer
+// reconciliation in Part 2's project Freight ledger.
+//
+// Phase 4 Part 1 has no UI entry point of its own — open via console
+// (`openNewFreightActual('<projectId>')`) for verification. Part 2 wires
+// the Freight tab and the "Update ledger" button.
+
+function openNewFreightActual(pid, opts) {
+  opts = opts || {};
+  $c('fa-modal-title').textContent = 'Log Freight Actual';
+  $c('fa-id').value = '';
+  $c('fa-project-id').value = pid || '';
+  const proj = (S.projects || []).find(p => p.id === pid);
+  $c('fa-project-name').textContent = proj?.name || '—';
+
+  populateFAItemDropdown(pid);
+  $c('fa-item').value = opts.itemId || '';
+  populateFAComponentDropdown(opts.itemId || '');
+  $c('fa-component').value = opts.componentId || '';
+
+  populateFACategoryDropdown();
+  $c('fa-category').value = opts.categoryId || '';
+
+  $c('fa-amount').value = '';
+  $c('fa-date').value = new Date().toISOString().slice(0, 10);
+  $c('fa-invoice-ref').value = '';
+  $c('fa-notes').value = '';
+  $c('fa-record-expense').checked = false;
+
+  renderItemVendorPicker('fa-vendor-picker', null, () => {});
+
+  $c('fa-delete-btn').style.display = 'none';
+  $c('modal-freight-actual').classList.add('open');
+  setTimeout(() => $c('fa-amount').focus(), 80);
+}
+
+function openEditFreightActual(id) {
+  const fa = (S.freightActuals || []).find(x => x.id === id);
+  if (!fa) return;
+  $c('fa-modal-title').textContent = 'Edit Freight Actual';
+  $c('fa-id').value = fa.id;
+  $c('fa-project-id').value = fa.projectId;
+  const proj = (S.projects || []).find(p => p.id === fa.projectId);
+  $c('fa-project-name').textContent = proj?.name || '—';
+
+  populateFAItemDropdown(fa.projectId);
+  $c('fa-item').value = fa.proposalItemId || '';
+  populateFAComponentDropdown(fa.proposalItemId);
+  $c('fa-component').value = fa.proposalComponentId || '';
+
+  populateFACategoryDropdown();
+  $c('fa-category').value = fa.freightCategoryId || '';
+
+  $c('fa-amount').value = fa.amount || '';
+  $c('fa-date').value = fa.date || '';
+  $c('fa-invoice-ref').value = fa.invoiceReference || '';
+  $c('fa-notes').value = fa.notes || '';
+  // Toggle reflects current link state. Unchecking on edit BREAKS the link
+  // (clears linkedExpenseId on save) but does NOT delete the expense.
+  $c('fa-record-expense').checked = !!fa.linkedExpenseId;
+
+  renderItemVendorPicker('fa-vendor-picker', fa.vendorId || null, () => {});
+
+  $c('fa-delete-btn').style.display = '';
+  $c('modal-freight-actual').classList.add('open');
+}
+
+function onFAItemChange() {
+  populateFAComponentDropdown($c('fa-item').value);
+}
+
+function populateFAItemDropdown(pid) {
+  const sel = $c('fa-item');
+  if (!sel) return;
+  const prop = S.proposals[pid];
+  const items = [];
+  (prop?.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      items.push({
+        id: item.id,
+        label: `${item.name || '(unnamed)'} · ${sp.name || 'Unassigned'}`,
+      });
+    });
+  });
+  items.sort((a, b) => a.label.localeCompare(b.label));
+  sel.innerHTML = '<option value="">— Pick item —</option>' +
+    items.map(i => `<option value="${i.id}">${escH(i.label)}</option>`).join('');
+}
+
+function populateFAComponentDropdown(itemId) {
+  const wrap = $c('fa-component-wrap');
+  const sel = $c('fa-component');
+  if (!wrap || !sel) return;
+  if (!itemId) { wrap.style.display = 'none'; sel.innerHTML = ''; return; }
+  let item = null;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => {
+      const f = (sp.items || []).find(i => i.id === itemId);
+      if (f) item = f;
+    });
+  });
+  if (!item || item.type !== 'constructed' || !(item.components || []).length) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = '';
+  sel.innerHTML = '<option value="">— Whole item —</option>' +
+    item.components.map(c => `<option value="${c.id}">${escH(c.name || '(unnamed)')}</option>`).join('');
+}
+
+function populateFACategoryDropdown() {
+  const sel = $c('fa-category');
+  if (!sel) return;
+  const cats = (S.freightCategories || []).slice()
+    .sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— Any (reconciles against item total) —</option>' +
+    cats.map(c => `<option value="${c.id}">${escH(c.name)}</option>`).join('');
+}
+
+function _findItemById(itemId) {
+  let found = null;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => {
+      const f = (sp.items || []).find(i => i.id === itemId);
+      if (f) found = f;
+    });
+  });
+  return found;
+}
+
+async function saveFreightActual() {
+  const id = $c('fa-id').value;
+  const pid = $c('fa-project-id').value;
+  const itemId = $c('fa-item').value;
+  if (!itemId) { toast('Pick an item.'); $c('fa-item').focus(); return; }
+  const amount = parseFloat($c('fa-amount').value);
+  if (!(amount >= 0) || isNaN(amount)) { toast('Enter a valid amount.'); $c('fa-amount').focus(); return; }
+  const date = $c('fa-date').value;
+  if (!date) { toast('Date is required.'); $c('fa-date').focus(); return; }
+
+  const compId = $c('fa-component').value || null;
+  const catId  = $c('fa-category').value || null;
+  const vendorId = $c('fa-vendor-picker')?._selectedId || null;
+  const invRef = $c('fa-invoice-ref').value.trim();
+  const notes  = $c('fa-notes').value.trim();
+  const recordExpense = $c('fa-record-expense').checked;
+
+  if (!S.freightActuals) S.freightActuals = [];
+  if (!S.expenses) S.expenses = [];
+
+  const existing = id ? S.freightActuals.find(x => x.id === id) : null;
+  let linkedExpenseId = existing?.linkedExpenseId || null;
+
+  if (recordExpense) {
+    // Resolve item name + category name for the linked expense's display.
+    const itemObj = _findItemById(itemId);
+    const itemName = itemObj?.name || 'item';
+    const catName = catId ? ((S.freightCategories || []).find(c => c.id === catId)?.name || '') : '';
+    if (linkedExpenseId) {
+      // Update existing linked expense — sync amount, date, category, item.
+      // Per spec: do NOT change expenseType or other unrelated fields.
+      const exp = S.expenses.find(e => e.id === linkedExpenseId);
+      if (exp) {
+        exp.cost = String(amount);
+        exp.date = date;
+        exp.category = catName;
+        exp.proposalItemId = itemId;
+        exp.projectId = pid;
+      } else {
+        // Linked expense was deleted out from under us — recreate.
+        linkedExpenseId = null;
+      }
+    }
+    if (!linkedExpenseId) {
+      linkedExpenseId = uid();
+      S.expenses.push({
+        id: linkedExpenseId,
+        projectId: pid,
+        proposalItemId: itemId,
+        name: 'Freight: ' + itemName,
+        cost: String(amount),
+        date,
+        card: '',
+        expenseType: 'nonbillable',
+        category: catName,
+        notes: 'Linked to freight actual.',
+        trackInPM: false,
+        receipt: null,
+        resolved: false,
+        created: new Date().toISOString(),
+      });
+    }
+  } else if (existing && existing.linkedExpenseId) {
+    // User unchecked the toggle on an existing linked actual. Break the
+    // link but leave the expense in place (user can clean it up via the
+    // Expenses tab if they want it gone).
+    linkedExpenseId = null;
+  }
+
+  if (existing) {
+    Object.assign(existing, {
+      projectId: pid,
+      proposalItemId: itemId,
+      proposalComponentId: compId,
+      freightCategoryId: catId,
+      amount: String(amount),
+      date,
+      vendorId,
+      invoiceReference: invRef,
+      notes,
+      linkedExpenseId,
+    });
+  } else {
+    S.freightActuals.push({
+      id: uid(),
+      projectId: pid,
+      proposalItemId: itemId,
+      proposalComponentId: compId,
+      freightCategoryId: catId,
+      amount: String(amount),
+      date,
+      vendorId,
+      invoiceReference: invRef,
+      notes,
+      linkedExpenseId,
+      created: new Date().toISOString(),
+    });
+  }
+
+  save();
+  closeModal('modal-freight-actual');
+  toast(existing ? 'Freight actual updated.' : 'Freight actual saved.');
+  // Refresh views that may be visible.
+  if (typeof renderProjectDetail === 'function' && S.currentView === 'project-detail') {
+    renderProjectDetail();
+  }
+  if (typeof renderExpenses === 'function' && S.currentView === 'expenses') {
+    renderExpenses();
+  }
+}
+
+function deleteFreightActualFromModal() {
+  const id = $c('fa-id').value;
+  if (!id) return;
+  const fa = (S.freightActuals || []).find(x => x.id === id);
+  if (!fa) return;
+  let alsoDeleteExpense = false;
+  if (fa.linkedExpenseId) {
+    const linkedExp = (S.expenses || []).find(e => e.id === fa.linkedExpenseId);
+    if (linkedExp) {
+      // Default Yes per spec. confirm() returns true for OK.
+      alsoDeleteExpense = confirm('Also delete the linked expense "' + (linkedExp.name || 'Freight expense') + '"?');
+    }
+  } else {
+    if (!confirm('Delete this freight actual?')) return;
+  }
+
+  S.freightActuals = (S.freightActuals || []).filter(x => x.id !== id);
+  if (alsoDeleteExpense && fa.linkedExpenseId) {
+    S.expenses = (S.expenses || []).filter(e => e.id !== fa.linkedExpenseId);
+  }
+  save();
+  closeModal('modal-freight-actual');
+  toast(alsoDeleteExpense ? 'Freight actual + linked expense deleted.' : 'Freight actual deleted.');
+  if (typeof renderProjectDetail === 'function' && S.currentView === 'project-detail') {
+    renderProjectDetail();
+  }
 }
 
 function renderPDSettings(proj, pid) {
