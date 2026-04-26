@@ -10131,12 +10131,18 @@ function computeItemFreightLedger(item, pid) {
   } else {
     let grossOverage = 0, grossCredit = 0;
     rows.forEach(r => {
-      if (r.dominantState !== 'known' && r.dominantState !== 'allowance') return;
+      // Deferred rows drive the pending-* chip and never feed credit/overage.
+      if (r.dominantState === 'deferred') return;
       // Skip rows with no actuals at all — "haven't paid yet" is not actionable.
       if (r.actualRaw === 0) return;
+      // Negative variance = overage. Catches Known overages, Allowance overages,
+      // AND orphan actuals (state='none' from an actual tagged to a category
+      // that has no corresponding freight_charge — charged=$0, so the entire
+      // marked-up actual is an out-of-pocket overage).
       if (r.variance < -SPOT_ON) grossOverage += -r.variance;
+      // Positive variance only credits when state is allowance. Known + positive
+      // is silent margin; 'none' + positive shouldn't occur (charged=0).
       else if (r.dominantState === 'allowance' && r.variance > SPOT_ON) grossCredit += r.variance;
-      // Known + positive variance = silent margin — never enters credit pool.
     });
     itemNetCredit  = Math.max(0, grossCredit  - grossOverage);
     itemNetOverage = Math.max(0, grossOverage - grossCredit);
