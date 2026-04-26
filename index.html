@@ -11824,7 +11824,7 @@ function freightChargesForItem(itemId) {
 
 // Load item's freight_charges into the modal-local state. Falls back to an
 // empty primary-Freight draft when the item has no freight rows yet (legacy
-// items pre-Phase-2 — the user must pick a state before the next save).
+// items pre-Phase-2 — the user must pick a freight cost status before save).
 function loadItemFreightIntoModal(itemId) {
   _modalFreight = _emptyFreightDraft();
   _modalAdjacent = [];
@@ -11863,10 +11863,10 @@ function renderModalFreight() {
   host.innerHTML = `
     <div style="background:rgba(91,45,34,0.04);padding:12px 14px;border-radius:var(--r);border:1px solid var(--border)">
       <div class="frow" style="margin-bottom:0">
-        <div class="fg" style="max-width:180px">
-          <label class="fl">State <span style="color:#b33">*</span></label>
+        <div class="fg" style="max-width:200px">
+          <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
           <select class="fi fsel" id="frt-state" onchange="onFreightStateChange(this.value)">
-            <option value="" ${!f.state ? 'selected' : ''}>— Pick a state —</option>
+            <option value="" ${!f.state ? 'selected' : ''}>— Pick a status —</option>
             <option value="known"     ${f.state === 'known' ? 'selected' : ''}>Known</option>
             <option value="allowance" ${f.state === 'allowance' ? 'selected' : ''}>Allowance</option>
             <option value="deferred"  ${f.state === 'deferred' ? 'selected' : ''}>Deferred</option>
@@ -11950,10 +11950,10 @@ function renderModalAdjacent() {
               ${catOpts.replace(`value="${row.categoryId}"`, `value="${row.categoryId}" selected`)}
             </select>
           </div>
-          <div class="fg" style="max-width:160px">
-            <label class="fl">State <span style="color:#b33">*</span></label>
+          <div class="fg" style="max-width:200px">
+            <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
             <select class="fi fsel" onchange="onAdjacentStateChange(${i}, this.value)">
-              <option value="" ${!row.state ? 'selected' : ''}>— Pick a state —</option>
+              <option value="" ${!row.state ? 'selected' : ''}>— Pick a status —</option>
               <option value="known"     ${row.state === 'known' ? 'selected' : ''}>Known</option>
               <option value="allowance" ${row.state === 'allowance' ? 'selected' : ''}>Allowance</option>
               <option value="deferred"  ${row.state === 'deferred' ? 'selected' : ''}>Deferred</option>
@@ -12038,7 +12038,7 @@ function showItemModalError(msg) {
 // Validate modal freight + adjacent rows. Returns null if OK, else error msg.
 function validateModalFreight() {
   if (!_modalFreight || !_modalFreight.state) {
-    return 'Pick a freight state before saving this item.';
+    return 'Pick a Freight Cost Status before saving this item.';
   }
   if (_modalFreight.state === 'known' || _modalFreight.state === 'allowance') {
     const v = parseFloat(_modalFreight.value);
@@ -12047,7 +12047,7 @@ function validateModalFreight() {
   for (let i = 0; i < _modalAdjacent.length; i++) {
     const r = _modalAdjacent[i];
     if (!r.categoryId) return `Other charge #${i + 1}: pick a category.`;
-    if (!r.state)      return `Other charge #${i + 1}: pick a state.`;
+    if (!r.state)      return `Other charge #${i + 1}: pick a Freight Cost Status.`;
     if (r.state === 'known' || r.state === 'allowance') {
       const v = parseFloat(r.value);
       if (isNaN(v) || v <= 0) return `Other charge #${i + 1}: value must be greater than zero.`;
