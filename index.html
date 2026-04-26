@@ -7229,8 +7229,10 @@ function calcComponentActualCost(comp) {
   const rawPrimary = (comp.costActual || '').toString().trim();
   const primary = rawPrimary ? parse$(rawPrimary) : parse$(comp.netCost) * (parseFloat(comp.qty) || 1);
   const freight = parse$(comp.actualFreight || '');
-  const add = sumAdditionalCosts(comp.additionalCosts);
-  return primary + freight + add;
+  // Per-component additional_costs jsonb retired — expenses tag to items
+  // (not components), so component cost tracking is just costActual now.
+  // The DB column stays for historical recovery but is no longer summed.
+  return primary + freight;
 }
 
 // Item-level "additional expenses" now sources from S.expenses tagged to
@@ -7271,10 +7273,11 @@ function hasAnyActualInput(item) {
   if ((item.actualFreight || '').toString().trim()) return true;
   if (_taggedExpensesForItem(item.id).length > 0) return true;
   if (item.type === 'constructed') {
+    // Per-component additional_costs editor retired — only check costActual /
+    // legacy actualFreight at the component level.
     return (item.components || []).some(c =>
       (c.costActual || '').toString().trim() ||
-      (c.actualFreight || '').toString().trim() ||
-      (c.additionalCosts || []).some(ac => (ac.amount || '').toString().trim())
+      (c.actualFreight || '').toString().trim()
     );
   }
   return false;
@@ -7352,7 +7355,7 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
     const compRows = (item.components||[]).filter(c => !isShippingComp(c)).map(c => {
       const cProp = parse$(c.netCost) * (parseFloat(c.qty)||1);
       const cActual = calcComponentActualCost(c);
-      const cRaw = (c.costActual||'').toString().trim() || (c.actualFreight||'').toString().trim() || (c.additionalCosts||[]).some(ac => (ac.amount||'').trim());
+      const cRaw = (c.costActual||'').toString().trim() || (c.actualFreight||'').toString().trim();
       const delta = cRaw ? (cActual - cProp) : null;
       const deltaColor = delta == null ? 'var(--text-light)' : delta > 0 ? '#b33' : delta < 0 ? '#1a6e3a' : 'var(--text-mid)';
       return `<tr>
@@ -8980,19 +8983,13 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         ${(() => {
           const cProp = parse$(c.netCost) * (parseFloat(c.qty)||1);
           const cActual = calcComponentActualCost(c);
-          const cHasActual = (c.costActual||'').toString().trim() || (c.actualFreight||'').toString().trim() || (c.additionalCosts||[]).some(ac => (ac.amount||'').toString().trim());
+          // Component additional_costs editor retired (jsonb data preserved
+          // in DB but not read or shown). Cost tracking now just compares
+          // proposal net vs the component's Cost Paid (each).
+          const cHasActual = (c.costActual||'').toString().trim() || (c.actualFreight||'').toString().trim();
           const delta = cHasActual ? (cActual - cProp) : null;
           const deltaPct = (delta != null && cProp > 0) ? (delta / cProp * 100) : null;
           const deltaColor = delta == null ? 'var(--text-light)' : delta > 0 ? '#b33' : delta < 0 ? '#1a6e3a' : 'var(--text-mid)';
-          const onAddC = `addCompAdditionalCost('${pid}','${spId}','${itemId}','${c.id}')`;
-          const addlRows = (c.additionalCosts||[]).map(ac => `
-            <div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
-              <input type="text" class="fi" value="${escH(ac.name||'')}" placeholder="e.g. Tariff, CC fee"
-                onchange="saveCompAdditionalCost('${pid}','${spId}','${itemId}','${c.id}','${ac.id}','name',this.value.trim())" style="flex:2;font-size:11px;padding:4px 6px">
-              <input type="text" class="fi" value="${escH(ac.amount||'')}" placeholder="$0.00"
-                onchange="saveCompAdditionalCost('${pid}','${spId}','${itemId}','${c.id}','${ac.id}','amount',this.value.trim())" style="flex:1;max-width:80px;font-size:11px;padding:4px 6px">
-              <button onclick="removeCompAdditionalCost('${pid}','${spId}','${itemId}','${c.id}','${ac.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:2px 4px">✕</button>
-            </div>`).join('');
           return `
         <details style="margin-top:6px;margin-bottom:6px">
           <summary style="font-size:10px;font-family:var(--font-b);color:var(--text-mid);cursor:pointer;padding:4px 0;user-select:none">Cost Tracking${cHasActual?` <span style="color:${deltaColor};font-weight:600;margin-left:4px">${fmt(cActual)}${delta!=null?' (Δ '+(delta>=0?'+':'')+fmt(delta)+')':''}</span>`:''}</summary>
@@ -9008,13 +9005,11 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
                   onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','costActual',this.value.trim())" style="font-size:11px;padding:4px 6px">
               </div>
             </div>
-            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:4px;margin-top:4px">Additional Costs</div>
-            ${addlRows || '<div style="font-size:10px;color:var(--text-light);font-style:italic">No additional costs.</div>'}
-            <button class="btn btn-ghost btn-sm" onclick="${onAddC}" style="font-size:10px;margin-top:4px;padding:3px 8px">+ Add cost</button>
             ${cHasActual ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:baseline">
               <span style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid)">Total Actual</span>
               <span style="font-family:var(--font-h);font-weight:800;font-size:14px;color:${deltaColor}">${fmt(cActual)}${deltaPct!=null?` <span style="font-size:10px">(${delta>=0?'+':''}${deltaPct.toFixed(1)}%)</span>`:''}</span>
             </div>` : ''}
+            <div style="margin-top:8px;font-size:10px;color:var(--text-light);font-style:italic">Additional expenses (P&amp;L impact) tag to the parent item, not individual components — log them on the item-level "Additional Expenses" section.</div>
           </div>
         </details>`;
         })()}
