@@ -2265,20 +2265,30 @@ tr:hover .row-btns { opacity:1; }
       <button class="btn btn-ghost btn-sm" onclick="addModalComponent()" style="margin-top:4px">+ Add Component</button>
     </div>
 
-    <!-- ADDITIONAL CHARGES (readymade only) -->
-    <div id="ai-charges-section" style="display:none">
-      <div class="modal-section-hd">Additional Charges</div>
-      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:8px">
-        Freight, tariffs, tips, or any other costs on top of the base price.
-      </div>
-      <div id="ai-charges-list"><!-- rendered by JS --></div>
-      <button class="btn btn-ghost btn-sm" onclick="addModalCharge()" style="margin-top:4px">+ Add Charge</button>
+    <!-- FREIGHT — required on every item.
+         Locked to the system "Freight" category. State must be picked
+         before save (validated in saveItem). Adjacent (non-Freight)
+         charges are optional in the collapsible section below. -->
+    <div id="ai-charges-section">
+      <div class="modal-section-hd">Freight</div>
+      <div id="ai-freight-row"><!-- rendered by renderModalFreight --></div>
+
+      <details id="ai-adjacent-details" style="margin-top:14px">
+        <summary style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);cursor:pointer;padding:6px 0">Other associated charges <span id="ai-adjacent-count" style="font-weight:400;color:var(--text-light);font-size:11px;text-transform:none;letter-spacing:0;margin-left:6px"></span></summary>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin:6px 0 10px;line-height:1.5">
+          Crating, tariffs, handling, fuel surcharges, residential delivery, lift gate, storage transfer, or anything else attached to this item.
+        </div>
+        <div id="ai-adjacent-list"><!-- rendered by renderModalAdjacent --></div>
+        <button class="btn btn-ghost btn-sm" onclick="addAdjacentCharge()" style="margin-top:4px">+ Add charge</button>
+      </details>
     </div>
 
     <div class="fg" style="margin-top:12px">
       <label class="fl">Notes</label>
       <textarea class="fi" id="ai-notes" style="resize:vertical;min-height:48px" placeholder="Vendor info, specs, sizing, anything useful…"></textarea>
     </div>
+
+    <div id="ai-error" style="display:none;color:#b33;font-size:11px;font-family:var(--font-b);margin-top:10px;padding:8px 10px;background:rgba(180,51,51,0.06);border:1px solid rgba(180,51,51,0.2);border-radius:var(--r)"></div>
 
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="ai-delete-btn" style="display:none" onclick="deleteItemFromModal()">Delete</button>
@@ -10474,16 +10484,82 @@ function isFreightItem(item) {
   return false;
 }
 
-function getFreightFromCharges(item, pid) {
-  // Sum additional charges tagged as Freight on ready-made items
-  if (item.type !== 'readymade' || !item.additionalCharges) return 0;
-  return item.additionalCharges
-    .filter(ch => (ch.category || '').toLowerCase().includes('freight'))
-    .reduce((s, ch) => {
-      const fakeItem = { billCostOnly: ch.billCostOnly || item.billCostOnly, adjustMarkup: ch.adjustMarkup != null ? ch.adjustMarkup : item.adjustMarkup };
-      return s + calcClientPrice(ch.amount, fakeItem, pid);
-    }, 0);
+// ── U-Freight Phase 2 calc helpers (item-level) ─────────────
+// Charges live on the freight_charges table now. Per spec:
+//   • Primary freight = rows where category = system "Freight"
+//   • Adjacent        = rows of any other category (Crating/Tariffs/etc.)
+// Markup precedence per row:
+//   charge.markupPctOverride → category.defaultMarkupPct → project default
+// Tax: charges contribute to taxable amount only when both
+//   project.taxFreight = true AND category.isTaxable = true.
+//
+// IMPORTANT: freight_charges values are item-level totals (NOT per-unit).
+// `value_type='percent'` interprets value/100 against the item's line
+// subtotal (client × qty), so qty is already baked in for percent-based
+// charges and amount-based charges aren't multiplied again here.
+
+function _resolveFreightChargeMarkupPct(charge, proj) {
+  if (charge.markupPctOverride != null && charge.markupPctOverride !== '') {
+    return Number(charge.markupPctOverride);
+  }
+  const cat = (S.freightCategories || []).find(x => x.id === charge.categoryId);
+  if (cat && cat.defaultMarkupPct != null) return Number(cat.defaultMarkupPct);
+  return Number(proj?.markupPct || 0);
 }
+
+function _calcFreightChargeMarkedUp(charge, item, pid, proj) {
+  if (!charge) return 0;
+  if (charge.state !== 'known' && charge.state !== 'allowance') return 0;
+  if (charge.value == null || charge.value === '') return 0;
+  const num = parseFloat(charge.value);
+  if (isNaN(num) || num <= 0) return 0;
+  let base;
+  if (charge.valueType === 'percent') {
+    const qty = parseFloat(item.qty) || (item.type === 'constructed' ? 1 : 0);
+    const line = getItemClient(item, pid) * qty;
+    base = line * (num / 100);
+  } else {
+    base = num;
+  }
+  const markupPct = _resolveFreightChargeMarkupPct(charge, proj);
+  return base * (1 + markupPct / 100);
+}
+
+function _itemFreightChargesByPredicate(item, pid, predicate) {
+  const proj = getProject(pid);
+  return (S.freightCharges || [])
+    .filter(c => c.parentType === 'item' && c.parentId === item.id && predicate(c))
+    .reduce((sum, c) => sum + _calcFreightChargeMarkedUp(c, item, pid, proj), 0);
+}
+
+// Sum of marked-up Other associated charges for this item.
+// Excludes the system "Freight" category. Used by calcProposalTotals
+// (combined with primary into the freight bucket in Part 1; gets its own
+// proposal total line in Part 2).
+function getItemAdjacentChargesClient(item, pid) {
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  return _itemFreightChargesByPredicate(item, pid, c => c.categoryId !== primaryId);
+}
+
+// Sum of marked-up Other associated charges that contribute to taxable
+// amount. Per-row gate: row's category is_taxable AND project.taxFreight.
+function getItemTaxableAdjacentClient(item, pid) {
+  const proj = getProject(pid);
+  if (!proj?.taxFreight) return 0;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  return _itemFreightChargesByPredicate(item, pid, c => {
+    if (c.categoryId === primaryId) return false;
+    const cat = (S.freightCategories || []).find(x => x.id === c.categoryId);
+    return !!(cat && cat.isTaxable);
+  });
+}
+
+// Legacy reader — additional_charges jsonb is empty after Phase 1 wipe.
+// Kept as a no-op stub so any straggler caller doesn't error. Removed
+// fully in a later cleanup pass.
+function getFreightFromCharges(item, pid) { return 0; }
 
 function getFreightFromComponents(item, pid) {
   // Sum components tagged as shipping on constructed orders
@@ -10541,12 +10617,19 @@ function calcProposalTotals(prop, pid) {
           freight += lineTotal;
           if (!item.taxExempt && proj?.taxFreight) taxableAmount += lineTotal;
         } else {
-          const itemFreight = getFreightFromCharges(item, pid) + getFreightFromComponents(item, pid);
-          freight += itemFreight * qty;
-          subtotal += lineTotal - (itemFreight * qty);
+          // U-Freight Phase 2 Part 1: item-level freight + adjacent come from
+          // freight_charges (absolute totals — qty is already baked in for
+          // percent-based charges, and amount-based aren't multiplied again).
+          // Adjacent rolls into the freight bucket for now; Part 2 splits it
+          // into its own proposal-totals line.
+          const itemFreight   = getItemFreightClient(item, pid);
+          const itemAdjacent  = getItemAdjacentChargesClient(item, pid);
+          subtotal += lineTotal;
+          freight  += itemFreight + itemAdjacent;
           if (!item.taxExempt) {
-            taxableAmount += lineTotal - (itemFreight * qty);
-            if (proj?.taxFreight) taxableAmount += itemFreight * qty;
+            taxableAmount += lineTotal;
+            if (proj?.taxFreight) taxableAmount += itemFreight;
+            taxableAmount += getItemTaxableAdjacentClient(item, pid);
           }
         }
       }
@@ -11441,6 +11524,8 @@ function deleteItem(pid, spId, iid) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (!sp) return;
   sp.items = (sp.items||[]).filter(i => i.id !== iid);
+  // Drop the item's freight_charges rows so the sync engine soft-deletes them.
+  S.freightCharges = (S.freightCharges || []).filter(c => !(c.parentType === 'item' && c.parentId === iid));
   save();
   if (S.currentView === 'project-detail') renderProjectDetail();
   else renderPropBody();
@@ -11499,7 +11584,8 @@ function refreshTotals(pid) {
 // ─── ITEM MODAL ───────────────────────────────────────────
 
 let _modalComponents = [];
-let _modalCharges = [];
+// _modalCharges retired in U-Freight Phase 2 — replaced by _modalFreight +
+// _modalAdjacent (defined further below).
 
 function setItemType(type) {
   $c('ai-type').value = type;
@@ -11508,7 +11594,8 @@ function setItemType(type) {
     b.classList.toggle('active', t && t.id === type);
   });
   $c('ai-components-section').style.display = type === 'constructed' ? '' : 'none';
-  $c('ai-charges-section').style.display = type === 'readymade' ? '' : 'none';
+  // ai-charges-section (Freight + Other associated charges) is always shown
+  // — every item type carries a required Freight state in the new model.
   $c('ai-price-row').style.display = type === 'constructed' ? 'none' : '';
   $c('ai-category-wrap').style.display = type === 'openline' ? '' : 'none';
   // Constructed items don't have item-level vendor/contact/brand — each
@@ -11706,51 +11793,318 @@ function readModalComponentsFromDOM() {
   });
 }
 
-function addModalCharge(ch) {
-  _modalCharges.push(ch || { id: uid(), name: '', category: '', amount: '', billCostOnly: false, adjustMarkup: null });
+// ─── Item-level freight charges (U-Freight Phase 2 Part 1) ───
+// _modalFreight is the single primary-Freight row for the item being edited.
+// _modalAdjacent is the (zero or more) Other associated charges. Both are
+// committed to S.freightCharges in saveItem; the sync engine handles the
+// per-row upsert/delete diff via the standard freight_charges table sync.
 
-  renderModalCharges();
+let _modalFreight = null;     // { id, state, valueType, value, markupOverride, notes }
+let _modalAdjacent = [];      // [{ id, categoryId, state, valueType, value, markupOverride, notes }]
+
+function _emptyFreightDraft() {
+  return { id: null, state: '', valueType: 'amount', value: '', markupOverride: null, notes: '' };
 }
 
-function renderModalCharges() {
-  const list = $c('ai-charges-list');
-  const catOpts = CHARGE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('');
-  list.innerHTML = _modalCharges.map((ch, i) => `
-    <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px;background:rgba(91,45,34,0.04);padding:8px 10px;border-radius:var(--r);border:1px solid var(--border)" data-chidx="${i}">
-      <div style="flex:1">
-        <label class="fl">Description</label>
-        <input type="text" class="fi ch-name" value="${escH(ch.name)}" placeholder="e.g. Freight" style="font-size:12px;padding:6px 8px">
-      </div>
-      <div style="width:130px">
-        <label class="fl">Category</label>
-        <select class="fi fsel ch-cat" style="font-size:12px;padding:6px 8px">
-          <option value="">—</option>${catOpts.replace(`"${ch.category}"`, `"${ch.category}" selected`)}
-        </select>
-      </div>
-      <div style="width:90px">
-        <label class="fl">Amount</label>
-        <input type="text" class="fi ch-amt" value="${escH(ch.amount)}" placeholder="$0" style="font-size:12px;padding:6px 8px">
-      </div>
-      <button type="button" class="remove-poc-btn" onclick="removeModalCharge(${i})" style="margin-bottom:4px">✕</button>
-    </div>`).join('');
+function getPrimaryFreightCategoryId() {
+  const cat = (S.freightCategories || []).find(c => c.isSystem && c.name === 'Freight');
+  return cat?.id || null;
 }
 
-function removeModalCharge(idx) {
-  readModalChargesFromDOM();
-  _modalCharges.splice(idx, 1);
-
-  renderModalCharges();
+function getNonPrimaryFreightCategories() {
+  const primaryId = getPrimaryFreightCategoryId();
+  return (S.freightCategories || [])
+    .filter(c => c.id !== primaryId)
+    .sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
 }
 
-function readModalChargesFromDOM() {
-  const rows = $c('ai-charges-list').children;
-  [...rows].forEach((el, i) => {
-    if (_modalCharges[i]) {
-      _modalCharges[i].name = el.querySelector('.ch-name')?.value.trim() || '';
-      _modalCharges[i].category = el.querySelector('.ch-cat')?.value || '';
-      _modalCharges[i].amount = el.querySelector('.ch-amt')?.value.trim() || '';
+function freightChargesForItem(itemId) {
+  return (S.freightCharges || []).filter(c => c.parentType === 'item' && c.parentId === itemId);
+}
+
+// Load item's freight_charges into the modal-local state. Falls back to an
+// empty primary-Freight draft when the item has no freight rows yet (legacy
+// items pre-Phase-2 — the user must pick a state before the next save).
+function loadItemFreightIntoModal(itemId) {
+  _modalFreight = _emptyFreightDraft();
+  _modalAdjacent = [];
+  if (!itemId) return;
+  const primaryId = getPrimaryFreightCategoryId();
+  const rows = freightChargesForItem(itemId);
+  rows.forEach(r => {
+    if (r.categoryId === primaryId) {
+      _modalFreight = {
+        id: r.id, state: r.state || '',
+        valueType: r.valueType || 'amount',
+        value: r.value != null ? String(r.value) : '',
+        markupOverride: r.markupPctOverride,
+        notes: r.notes || '',
+      };
+    } else {
+      _modalAdjacent.push({
+        id: r.id, categoryId: r.categoryId || '',
+        state: r.state || '',
+        valueType: r.valueType || 'amount',
+        value: r.value != null ? String(r.value) : '',
+        markupOverride: r.markupPctOverride,
+        notes: r.notes || '',
+      });
     }
   });
+}
+
+function renderModalFreight() {
+  const host = $c('ai-freight-row');
+  if (!host) return;
+  const f = _modalFreight || _emptyFreightDraft();
+  const showValue = f.state === 'known' || f.state === 'allowance';
+  const valueLabel = f.valueType === 'percent' ? '% of item line subtotal' : 'Amount ($)';
+  const markupOn = f.markupOverride != null;
+  host.innerHTML = `
+    <div style="background:rgba(91,45,34,0.04);padding:12px 14px;border-radius:var(--r);border:1px solid var(--border)">
+      <div class="frow" style="margin-bottom:0">
+        <div class="fg" style="max-width:180px">
+          <label class="fl">State <span style="color:#b33">*</span></label>
+          <select class="fi fsel" id="frt-state" onchange="onFreightStateChange(this.value)">
+            <option value="" ${!f.state ? 'selected' : ''}>— Pick a state —</option>
+            <option value="known"     ${f.state === 'known' ? 'selected' : ''}>Known</option>
+            <option value="allowance" ${f.state === 'allowance' ? 'selected' : ''}>Allowance</option>
+            <option value="deferred"  ${f.state === 'deferred' ? 'selected' : ''}>Deferred</option>
+            <option value="none"      ${f.state === 'none' ? 'selected' : ''}>None</option>
+          </select>
+        </div>
+        ${showValue ? `
+        <div class="fg">
+          <label class="fl">${escH(valueLabel)} <span style="color:#b33">*</span></label>
+          <div style="display:flex;gap:4px">
+            <input type="number" class="fi" id="frt-value" value="${escH(String(f.value || ''))}" step="0.01" min="0" placeholder="0"
+              oninput="onFreightFieldChange('value', this.value)">
+            <select class="fi fsel" style="max-width:70px" onchange="onFreightFieldChange('valueType', this.value); renderModalFreight()">
+              <option value="amount"  ${f.valueType === 'amount' ? 'selected' : ''}>$</option>
+              <option value="percent" ${f.valueType === 'percent' ? 'selected' : ''}>%</option>
+            </select>
+          </div>
+        </div>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+          <input type="checkbox" ${markupOn ? 'checked' : ''} onchange="onFreightMarkupToggle(this.checked)" style="accent-color:var(--russet);width:13px;height:13px">
+          Override markup
+        </label>
+        ${markupOn ? `
+        <input type="number" class="fi" value="${escH(String(f.markupOverride))}" min="0" step="0.5" placeholder="%"
+          oninput="onFreightFieldChange('markupOverride', this.value)" style="width:80px;font-size:11px">
+        <span style="font-size:11px;color:var(--text-light)">% (skips category default + project default)</span>` : ''}
+      </div>
+      <div class="fg" style="margin-top:8px;margin-bottom:0">
+        <input type="text" class="fi" id="frt-notes" value="${escH(f.notes || '')}" placeholder="Notes (optional)"
+          style="font-size:12px" oninput="onFreightFieldChange('notes', this.value)">
+      </div>
+    </div>`;
+}
+
+function onFreightStateChange(newState) {
+  if (!_modalFreight) _modalFreight = _emptyFreightDraft();
+  _modalFreight.state = newState || '';
+  // CHECK constraint: deferred/none must clear value + valueType
+  if (newState === 'deferred' || newState === 'none' || !newState) {
+    _modalFreight.value = '';
+  }
+  renderModalFreight();
+}
+
+function onFreightFieldChange(field, value) {
+  if (!_modalFreight) _modalFreight = _emptyFreightDraft();
+  _modalFreight[field] = value;
+}
+
+function onFreightMarkupToggle(on) {
+  if (!_modalFreight) _modalFreight = _emptyFreightDraft();
+  _modalFreight.markupOverride = on ? 0 : null;
+  renderModalFreight();
+}
+
+function renderModalAdjacent() {
+  const host = $c('ai-adjacent-list');
+  if (!host) return;
+  const cats = getNonPrimaryFreightCategories();
+  const catOpts = cats.map(c => `<option value="${c.id}">${escH(c.name)}</option>`).join('');
+  if (!_modalAdjacent.length) {
+    host.innerHTML = '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No additional charges. Click + Add charge below.</div>';
+  } else {
+    host.innerHTML = _modalAdjacent.map((row, i) => {
+      const showValue = row.state === 'known' || row.state === 'allowance';
+      const markupOn = row.markupOverride != null;
+      const valueLabel = row.valueType === 'percent' ? '% of item' : '$';
+      return `
+      <div style="background:rgba(91,45,34,0.025);padding:10px 12px;border-radius:var(--r);border:1px solid var(--border);margin-bottom:8px" data-aci="${i}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid)">Charge ${i + 1}</span>
+          <button type="button" onclick="removeAdjacentCharge(${i})" class="remove-poc-btn">✕</button>
+        </div>
+        <div class="frow" style="margin-bottom:0">
+          <div class="fg" style="max-width:180px">
+            <label class="fl">Category <span style="color:#b33">*</span></label>
+            <select class="fi fsel" onchange="onAdjacentChange(${i}, 'categoryId', this.value)">
+              <option value="" ${!row.categoryId ? 'selected' : ''}>— Pick category —</option>
+              ${catOpts.replace(`value="${row.categoryId}"`, `value="${row.categoryId}" selected`)}
+            </select>
+          </div>
+          <div class="fg" style="max-width:160px">
+            <label class="fl">State <span style="color:#b33">*</span></label>
+            <select class="fi fsel" onchange="onAdjacentStateChange(${i}, this.value)">
+              <option value="" ${!row.state ? 'selected' : ''}>— Pick a state —</option>
+              <option value="known"     ${row.state === 'known' ? 'selected' : ''}>Known</option>
+              <option value="allowance" ${row.state === 'allowance' ? 'selected' : ''}>Allowance</option>
+              <option value="deferred"  ${row.state === 'deferred' ? 'selected' : ''}>Deferred</option>
+              <option value="none"      ${row.state === 'none' ? 'selected' : ''}>None</option>
+            </select>
+          </div>
+          ${showValue ? `
+          <div class="fg">
+            <label class="fl">${escH(valueLabel)}</label>
+            <div style="display:flex;gap:4px">
+              <input type="number" class="fi" value="${escH(String(row.value || ''))}" step="0.01" min="0" placeholder="0"
+                oninput="onAdjacentChange(${i}, 'value', this.value)">
+              <select class="fi fsel" style="max-width:70px" onchange="onAdjacentChange(${i}, 'valueType', this.value); renderModalAdjacent()">
+                <option value="amount"  ${row.valueType === 'amount' ? 'selected' : ''}>$</option>
+                <option value="percent" ${row.valueType === 'percent' ? 'selected' : ''}>%</option>
+              </select>
+            </div>
+          </div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+            <input type="checkbox" ${markupOn ? 'checked' : ''} onchange="onAdjacentMarkupToggle(${i}, this.checked)" style="accent-color:var(--russet);width:13px;height:13px">
+            Override markup
+          </label>
+          ${markupOn ? `
+          <input type="number" class="fi" value="${escH(String(row.markupOverride))}" min="0" step="0.5" placeholder="%"
+            oninput="onAdjacentChange(${i}, 'markupOverride', this.value)" style="width:80px;font-size:11px">
+          <span style="font-size:11px;color:var(--text-light)">%</span>` : ''}
+        </div>
+        <div class="fg" style="margin-top:8px;margin-bottom:0">
+          <input type="text" class="fi" value="${escH(row.notes || '')}" placeholder="Notes (optional)" style="font-size:12px"
+            oninput="onAdjacentChange(${i}, 'notes', this.value)">
+        </div>
+      </div>`;
+    }).join('');
+  }
+  const cnt = $c('ai-adjacent-count');
+  if (cnt) cnt.textContent = _modalAdjacent.length ? `(${_modalAdjacent.length})` : '';
+}
+
+function addAdjacentCharge() {
+  _modalAdjacent.push({ id: null, categoryId: '', state: '', valueType: 'amount', value: '', markupOverride: null, notes: '' });
+  renderModalAdjacent();
+  // Auto-expand the details if it was closed
+  const det = $c('ai-adjacent-details');
+  if (det && !det.open) det.open = true;
+}
+
+function removeAdjacentCharge(i) {
+  _modalAdjacent.splice(i, 1);
+  renderModalAdjacent();
+}
+
+function onAdjacentChange(i, field, value) {
+  if (!_modalAdjacent[i]) return;
+  _modalAdjacent[i][field] = value;
+}
+
+function onAdjacentStateChange(i, newState) {
+  if (!_modalAdjacent[i]) return;
+  _modalAdjacent[i].state = newState || '';
+  if (newState === 'deferred' || newState === 'none' || !newState) {
+    _modalAdjacent[i].value = '';
+  }
+  renderModalAdjacent();
+}
+
+function onAdjacentMarkupToggle(i, on) {
+  if (!_modalAdjacent[i]) return;
+  _modalAdjacent[i].markupOverride = on ? 0 : null;
+  renderModalAdjacent();
+}
+
+function showItemModalError(msg) {
+  const el = $c('ai-error');
+  if (!el) return;
+  if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.textContent = msg;
+  el.style.display = '';
+}
+
+// Validate modal freight + adjacent rows. Returns null if OK, else error msg.
+function validateModalFreight() {
+  if (!_modalFreight || !_modalFreight.state) {
+    return 'Pick a freight state before saving this item.';
+  }
+  if (_modalFreight.state === 'known' || _modalFreight.state === 'allowance') {
+    const v = parseFloat(_modalFreight.value);
+    if (isNaN(v) || v <= 0) return 'Freight value must be greater than zero.';
+  }
+  for (let i = 0; i < _modalAdjacent.length; i++) {
+    const r = _modalAdjacent[i];
+    if (!r.categoryId) return `Other charge #${i + 1}: pick a category.`;
+    if (!r.state)      return `Other charge #${i + 1}: pick a state.`;
+    if (r.state === 'known' || r.state === 'allowance') {
+      const v = parseFloat(r.value);
+      if (isNaN(v) || v <= 0) return `Other charge #${i + 1}: value must be greater than zero.`;
+    }
+  }
+  return null;
+}
+
+// Push the modal's freight + adjacent state into S.freightCharges as the
+// single source-of-truth for this item. Diff strategy: drop every existing
+// row for this item, then push the desired set with stable ids preserved
+// where possible (so the sync engine sees updates instead of delete+insert).
+function commitItemFreightCharges(itemId) {
+  if (!S.freightCharges) S.freightCharges = [];
+  const primaryId = getPrimaryFreightCategoryId();
+
+  const desired = [];
+  if (_modalFreight && _modalFreight.state) {
+    desired.push({
+      id: _modalFreight.id || uid(),
+      parentType: 'item',
+      parentId: itemId,
+      categoryId: primaryId,
+      state: _modalFreight.state,
+      valueType: (_modalFreight.state === 'known' || _modalFreight.state === 'allowance')
+        ? (_modalFreight.valueType || 'amount') : null,
+      value: (_modalFreight.state === 'known' || _modalFreight.state === 'allowance')
+        ? (_modalFreight.value !== '' ? Number(_modalFreight.value) : null) : null,
+      markupPctOverride: _modalFreight.markupOverride == null || _modalFreight.markupOverride === ''
+        ? null : Number(_modalFreight.markupOverride),
+      notes: _modalFreight.notes || '',
+    });
+  }
+  _modalAdjacent.forEach(r => {
+    desired.push({
+      id: r.id || uid(),
+      parentType: 'item',
+      parentId: itemId,
+      categoryId: r.categoryId,
+      state: r.state,
+      valueType: (r.state === 'known' || r.state === 'allowance') ? (r.valueType || 'amount') : null,
+      value: (r.state === 'known' || r.state === 'allowance')
+        ? (r.value !== '' ? Number(r.value) : null) : null,
+      markupPctOverride: r.markupOverride == null || r.markupOverride === ''
+        ? null : Number(r.markupOverride),
+      notes: r.notes || '',
+    });
+  });
+
+  // Replace this item's freight_charges in S with the desired set
+  S.freightCharges = S.freightCharges.filter(c => !(c.parentType === 'item' && c.parentId === itemId));
+  S.freightCharges.push(...desired);
+}
+
+// Legacy stubs — kept as no-ops for now in case any straggler caller exists.
+// Old additional_charges jsonb is empty after Phase 1 wipe.
+function readModalChargesFromDOM() { /* no-op (legacy additional_charges retired) */
 }
 
 function openAddItemModal(pid, spId) {
@@ -11776,9 +12130,11 @@ function openAddItemModal(pid, spId) {
   $c('ai-billcost').checked = false;
   $c('ai-adj-markup').value = '';
   _modalComponents = [];
-  _modalCharges = [];
   renderModalComponents();
-  renderModalCharges();
+  loadItemFreightIntoModal(null);
+  renderModalFreight();
+  renderModalAdjacent();
+  showItemModalError(null);
   initItemPickers(null);
   $c('modal-add-item').classList.add('open');
   setTimeout(() => $c('ai-name').focus(), 80);
@@ -11870,9 +12226,11 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-adj-markup').value = item.adjustMarkup != null ? item.adjustMarkup : '';
 
   _modalComponents = (item.components || []).map(c => ({ ...c }));
-  _modalCharges = (item.additionalCharges || []).map(ch => ({ ...ch }));
   renderModalComponents();
-  renderModalCharges();
+  loadItemFreightIntoModal(item.id);
+  renderModalFreight();
+  renderModalAdjacent();
+  showItemModalError(null);
   initItemPickers(item);
   $c('modal-add-item').classList.add('open');
 }
@@ -11883,10 +12241,14 @@ function saveItem() {
   const itemId = $c('ai-id').value;
   const type = $c('ai-type').value;
   const name = $c('ai-name').value.trim();
-  if (!name) { $c('ai-name').focus(); return; }
+  if (!name) { showItemModalError('Item name is required.'); $c('ai-name').focus(); return; }
+
+  // Freight state is required on every item (U-Freight Phase 2).
+  const freightErr = validateModalFreight();
+  if (freightErr) { showItemModalError(freightErr); return; }
+  showItemModalError(null);
 
   readModalComponentsFromDOM();
-  readModalChargesFromDOM();
 
   const adjVal = $c('ai-adj-markup').value;
   const itemTypeId = $c('ai-item-type')?.value || null;
@@ -11929,7 +12291,7 @@ function saveItem() {
     item = { ...base, qty: baseComp ? (baseComp.qty || '1') : '1', components: comps };
   } else if (type === 'readymade') {
     item = { ...base, netPrice: $c('ai-net').value.trim(),
-      qty: $c('ai-qty').value || '1', qtyUnit, link: '', additionalCharges: _modalCharges.filter(ch => ch.name || ch.amount) };
+      qty: $c('ai-qty').value || '1', qtyUnit, link: '', additionalCharges: [] };
   } else {
     item = { ...base, netPrice: $c('ai-net').value.trim(),
       qty: $c('ai-qty').value || '1', qtyUnit, category: $c('ai-category').value };
@@ -11951,6 +12313,10 @@ function saveItem() {
     toast('Item added.');
   }
 
+  // Persist freight + adjacent charges into S.freightCharges. Done AFTER
+  // the item is in S so a brand-new item.id is available as parent_id.
+  commitItemFreightCharges(item.id);
+
   save();
 
   closeModal('modal-add-item');
@@ -11965,6 +12331,7 @@ function deleteItemFromModal() {
   if (!itemId || !confirm('Remove this item?')) return;
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   if (sp) sp.items = (sp.items || []).filter(i => i.id !== itemId);
+  S.freightCharges = (S.freightCharges || []).filter(c => !(c.parentType === 'item' && c.parentId === itemId));
   save();
 
   closeModal('modal-add-item');
@@ -17213,19 +17580,29 @@ function autoSetDueDate(sentDate) {
 }
 
 function getItemNonFreightClient(item, pid) {
-  // Client price minus any freight components/charges
+  // Per-unit client price excluding any freight built into the line.
+  // Constructed items' shipping components contribute per-unit freight that
+  // should NOT appear in the line item — subtract that out. Item-level
+  // freight_charges (new model) are absolute totals, not per-unit, so they
+  // are handled via the separate invoice freight field, NOT subtracted here.
   const total = getItemClient(item, pid);
   const freightComp = getFreightFromComponents(item, pid);
-  const freightCharge = getFreightFromCharges(item, pid);
-  return total - freightComp - freightCharge;
+  return total - freightComp;
 }
 
 function getItemFreightClient(item, pid) {
+  // Primary freight (system "Freight" category) for this item.
+  // For a freight-typed open-line item, the entire line value IS the freight.
+  // Otherwise, sum marked-up freight_charges rows tagged with the primary
+  // Freight category. Component-level shipping freight is reported separately
+  // via getFreightFromComponents (Part 2 will fold that into freight_charges).
   if (isFreightItem(item)) {
-    const qty = parseFloat(item.qty)||1;
+    const qty = parseFloat(item.qty) || 1;
     return getItemClient(item, pid) * qty;
   }
-  return getFreightFromComponents(item, pid) + getFreightFromCharges(item, pid);
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return 0;
+  return _itemFreightChargesByPredicate(item, pid, c => c.categoryId === primaryId);
 }
 
 function toggleInvProposalItem(pid, spId, itemId, checked) {
