@@ -9121,6 +9121,8 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
 
         ${!isAllowance ? renderCostTrackingCard(pid, spId, itemId, item) : ''}
 
+        ${!isAllowance ? renderItemFreightCard(item, pid, spId) : ''}
+
         <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           ${renderTrackingSection(pid, spId, itemId, '', item.trackingNumbers)}
           ${item.type === 'constructed' && (item.components||[]).some(c => (c.trackingNumbers||[]).length) ? `
@@ -10198,6 +10200,7 @@ function renderPDFreight(proj, pid) {
   const headerBar = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
       <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">Freight Ledger</div>
+      <button class="btn btn-primary btn-sm" onclick="openNewFreightActual('${pid}')">+ Log freight actual</button>
     </div>`;
 
   if (!itemRows.length && summary.charged === 0 && summary.actual === 0) {
@@ -10281,6 +10284,30 @@ function _faVarianceCell(row) {
   return `<span style="color:#b33;font-weight:700">${fmt(v)}</span>`;
 }
 
+// Render the list of existing freight_actuals for an item — each row is
+// clickable to open the freight-actual editor. Used both in the project
+// Freight ledger card and in the PM item detail panel's Freight section.
+function _faActualsListForItem(itemId) {
+  const actuals = (S.freightActuals || [])
+    .filter(a => a.proposalItemId === itemId)
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if (!actuals.length) {
+    return '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">No freight actuals logged yet.</div>';
+  }
+  return actuals.map(a => {
+    const cat = a.freightCategoryId ? ((S.freightCategories || []).find(c => c.id === a.freightCategoryId)?.name || '') : '';
+    const vendor = a.vendorId ? ((S.vendors || []).find(v => v.id === a.vendorId)?.name || '') : '';
+    const linkedNote = a.linkedExpenseId ? ' · <span style="color:var(--russet);font-style:italic">linked expense</span>' : '';
+    const meta = [a.date, cat, vendor, a.invoiceReference].filter(Boolean).map(escH).join(' · ');
+    return `
+      <div onclick="openEditFreightActual('${a.id}')" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;cursor:pointer;font-family:var(--font-b);font-size:11px" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
+        <span style="color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${meta || '<span style="color:var(--text-light);font-style:italic">no metadata</span>'}${linkedNote}</span>
+        <span style="font-weight:700;color:var(--pecan);font-family:var(--font-h);font-size:13px;flex-shrink:0">${fmt(parseFloat(a.amount) || 0)}</span>
+      </div>`;
+  }).join('');
+}
+
 function renderFreightItemRow(item, sp, ledger, pid) {
   const itemTypeBadgeHtml = (typeof itemTypeBadge === 'function') ? itemTypeBadge(item.type) : '';
   const headRow = `
@@ -10290,7 +10317,10 @@ function renderFreightItemRow(item, sp, ledger, pid) {
         <a onclick="event.preventDefault(); openPMItemDetail('${pid}','${sp.id}','${item.id}')" style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany);cursor:pointer;text-decoration:none">${escH(item.name || '(unnamed)')}</a>
         <span style="font-size:11px;color:var(--text-mid);font-family:var(--font-b)">· ${escH(sp.name || 'Unassigned')}</span>
       </div>
-      ${_faChip(ledger.chip, item, pid)}
+      <div style="display:flex;align-items:center;gap:8px">
+        ${_faChip(ledger.chip, item, pid)}
+        <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px" title="Log a vendor freight bill against this item">+ Log actual</button>
+      </div>
     </div>`;
 
   const grid = `
@@ -10314,12 +10344,70 @@ function renderFreightItemRow(item, sp, ledger, pid) {
             <td style="padding:6px 6px;text-align:right">${_faVarianceCell(r)}</td>
           </tr>`).join('')}
       </tbody>
-    </table>`;
+    </table>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">Logged actuals</div>
+      ${_faActualsListForItem(item.id)}
+    </div>`;
 
   return `
     <div style="background:white;border-radius:var(--rl);padding:14px 18px;border:1px solid var(--border)">
       ${headRow}
       ${grid}
+    </div>`;
+}
+
+// Compact freight section for the PM item detail panel — same data as
+// the project Freight tab's per-item row, scoped to this item only.
+function renderItemFreightCard(item, pid, spId) {
+  const charges = _faChargesForItem(item);
+  const actuals = _faActualsForItem(item.id);
+  const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0;
+  if (!hasActivity) {
+    return `
+    <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Freight</div>
+        <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);font-style:italic">No freight charges or actuals on this item.</div>
+    </div>`;
+  }
+  const ledger = computeItemFreightLedger(item, pid);
+  const chip = _faChip(ledger.chip, item, pid);
+  const grid = ledger.rows.map(r => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:5px 6px;color:var(--text-dark);font-weight:600">${escH(r.categoryName)}</td>
+      <td style="padding:5px 6px">${_faStateBadge(r.dominantState)}</td>
+      <td style="padding:5px 6px;text-align:right;color:var(--text-dark)">${r.charged > 0 ? fmt(r.charged) : '—'}</td>
+      <td style="padding:5px 6px;text-align:right;color:var(--text-dark)">${r.actualRaw > 0 ? fmt(r.actualRaw) : '—'}</td>
+      <td style="padding:5px 6px;text-align:right">${_faVarianceCell(r)}</td>
+    </tr>`).join('');
+  return `
+    <div style="background:white;border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Freight</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${chip}
+          <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
+        </div>
+      </div>
+      <table style="width:100%;font-family:var(--font-b);font-size:11px;border-collapse:collapse">
+        <thead>
+          <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
+            <th style="text-align:left;padding:4px 6px;font-weight:700">Category</th>
+            <th style="text-align:left;padding:4px 6px;font-weight:700">Status</th>
+            <th style="text-align:right;padding:4px 6px;font-weight:700">Charged</th>
+            <th style="text-align:right;padding:4px 6px;font-weight:700">Actual</th>
+            <th style="text-align:right;padding:4px 6px;font-weight:700">Variance</th>
+          </tr>
+        </thead>
+        <tbody>${grid}</tbody>
+      </table>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">Logged actuals</div>
+        ${_faActualsListForItem(item.id)}
+      </div>
     </div>`;
 }
 
