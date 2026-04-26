@@ -10109,10 +10109,16 @@ function computeItemFreightLedger(item, pid) {
     return (a.categoryName || '').localeCompare(b.categoryName || '');
   });
 
-  // Item-level chip — Deferred dominates; then sum overages/credits.
+  // Item-level netting — credits and overages on different categories of
+  // the same item offset each other before driving the chip. The user
+  // thinks of reconciliation as a project-level pool, not per-category
+  // bookkeeping. The per-category mini-rows still display their gross
+  // variances for transparency.
   const SPOT_ON = 0.5;
   let chipKind = null;     // 'pending-update' | 'pending-billing' | 'overage' | 'credit' | 'spot' | null
   let chipAmount = 0;
+  let itemNetCredit = 0;
+  let itemNetOverage = 0;
   const deferredRows = rows.filter(r => r.dominantState === 'deferred');
   if (deferredRows.length) {
     const totalDeferredActual = deferredRows.reduce((s, r) => s + r.actualRaw, 0);
@@ -10123,61 +10129,30 @@ function computeItemFreightLedger(item, pid) {
       chipKind = 'pending-update';
     }
   } else {
-    let totalOverage = 0, totalCredit = 0;
+    let grossOverage = 0, grossCredit = 0;
     rows.forEach(r => {
       if (r.dominantState !== 'known' && r.dominantState !== 'allowance') return;
-      // Skip rows with no actuals at all — variance == charged, but we treat
-      // "haven't paid yet" as not-actionable (the item is just charged-only).
+      // Skip rows with no actuals at all — "haven't paid yet" is not actionable.
       if (r.actualRaw === 0) return;
-      if (r.variance < -SPOT_ON) totalOverage += -r.variance;
-      else if (r.dominantState === 'allowance' && r.variance > SPOT_ON) totalCredit += r.variance;
-      // Known + positive variance = silent margin (no chip contribution)
+      if (r.variance < -SPOT_ON) grossOverage += -r.variance;
+      else if (r.dominantState === 'allowance' && r.variance > SPOT_ON) grossCredit += r.variance;
+      // Known + positive variance = silent margin — never enters credit pool.
     });
-    if (totalOverage > 0)      { chipKind = 'overage'; chipAmount = totalOverage; }
-    else if (totalCredit > 0)  { chipKind = 'credit';  chipAmount = totalCredit; }
+    itemNetCredit  = Math.max(0, grossCredit  - grossOverage);
+    itemNetOverage = Math.max(0, grossOverage - grossCredit);
+    if (itemNetOverage > SPOT_ON)      { chipKind = 'overage'; chipAmount = itemNetOverage; }
+    else if (itemNetCredit > SPOT_ON)  { chipKind = 'credit';  chipAmount = itemNetCredit; }
     else if (rows.some(r => r.actualRaw > 0)) { chipKind = 'spot'; }
   }
 
-  return { rows, chip: { kind: chipKind, amount: chipAmount } };
+  return { rows, chip: { kind: chipKind, amount: chipAmount }, itemNetCredit, itemNetOverage };
 }
 
 function computeProjectFreightSummary(pid) {
-  const proj = getProject(pid);
   const prop = S.proposals[pid];
-  const primaryCatId = getPrimaryFreightCategoryId();
-  let charged = 0, actual = 0, creditAvailable = 0, overageToBill = 0, deferredActuals = 0;
-
-  // Total charged (marked-up sum across all items, both item-level and
-  // component-level, both primary + adjacent, only known/allowance).
-  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
-    charged += getItemFreightClient(item, pid);
-    charged += getItemAdjacentChargesClient(item, pid);
-    if (item.type === 'constructed') {
-      charged += getFreightFromComponents(item, pid);
-      charged += getItemAdjacentChargesFromComponents(item, pid);
-    }
-  }));
-
-  // Total actual (raw vendor bills).
-  (S.freightActuals || []).forEach(a => {
-    if (a.projectId === pid) actual += parseFloat(a.amount) || 0;
-  });
-
-  // Per-item credit / overage / deferred-actuals roll-ups.
-  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
-    const ledger = computeItemFreightLedger(item, pid);
-    ledger.rows.forEach(r => {
-      if (r.dominantState === 'deferred') {
-        deferredActuals += r.actualRaw;
-      } else if (r.dominantState === 'known' || r.dominantState === 'allowance') {
-        if (r.actualRaw === 0) return; // unbilled, not actionable
-        if (r.variance < -0.5) overageToBill += -r.variance;
-        else if (r.dominantState === 'allowance' && r.variance > 0.5) creditAvailable += r.variance;
-      }
-    });
-  }));
-
-  return { charged, actual, creditAvailable, overageToBill, deferredActuals };
+  const items = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => items.push(item)));
+  return _computeFreightSummaryFromItems(items, pid);
 }
 
 // Filter state for the Freight tab. Persists across re-renders within
@@ -10256,11 +10231,12 @@ function renderFreightTabContent(pid) {
     <div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">${ledgerHTML}</div>`;
 }
 
-// Same shape as computeProjectFreightSummary but scoped to a passed-in
-// item list (used to make summary reflect active filters).
+// Per-project (or filter-scoped) summary. Sums per-item nets so credits
+// and overages cross-cancel both within an item and across items —
+// reconciliation is a project-level pool, not per-category bookkeeping.
 function _computeFreightSummaryFromItems(items, pid) {
-  const proj = getProject(pid);
-  let charged = 0, actual = 0, creditAvailable = 0, overageToBill = 0, deferredActuals = 0;
+  let charged = 0, actual = 0, deferredActuals = 0;
+  let projItemNetCredits = 0, projItemNetOverages = 0;
   items.forEach(item => {
     charged += getItemFreightClient(item, pid);
     charged += getItemAdjacentChargesClient(item, pid);
@@ -10273,16 +10249,20 @@ function _computeFreightSummaryFromItems(items, pid) {
     });
     const ledger = computeItemFreightLedger(item, pid);
     ledger.rows.forEach(r => {
-      if (r.dominantState === 'deferred') {
-        deferredActuals += r.actualRaw;
-      } else if (r.dominantState === 'known' || r.dominantState === 'allowance') {
-        if (r.actualRaw === 0) return;
-        if (r.variance < -0.5) overageToBill += -r.variance;
-        else if (r.dominantState === 'allowance' && r.variance > 0.5) creditAvailable += r.variance;
-      }
+      if (r.dominantState === 'deferred') deferredActuals += r.actualRaw;
     });
+    projItemNetCredits  += ledger.itemNetCredit  || 0;
+    projItemNetOverages += ledger.itemNetOverage || 0;
   });
-  return { charged, actual, creditAvailable, overageToBill, deferredActuals };
+  const projectNetCredit  = Math.max(0, projItemNetCredits  - projItemNetOverages);
+  const projectNetOverage = Math.max(0, projItemNetOverages - projItemNetCredits);
+  return {
+    charged, actual, deferredActuals,
+    projectNetCredit, projectNetOverage,
+    // Kept for transparency / possible sub-text display.
+    grossItemCredits:  projItemNetCredits,
+    grossItemOverages: projItemNetOverages,
+  };
 }
 
 function renderPDFreight(proj, pid) {
@@ -10366,12 +10346,37 @@ function renderFreightSummaryHeader(s) {
       <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:4px">${label}</div>
       <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${color}">${fmt(value)}</div>
     </div>`;
+
+  // Net reconciliation cell: collapses credit + overage into one column
+  // showing whichever side wins after netting across items. Sub-text
+  // shows the gross item-level totals for transparency.
+  const SPOT_ON = 0.5;
+  let netLabel, netColor, netSub = '';
+  if (s.projectNetOverage > SPOT_ON) {
+    netLabel = `${fmt(s.projectNetOverage)} overage`;
+    netColor = '#b33';
+  } else if (s.projectNetCredit > SPOT_ON) {
+    netLabel = `${fmt(s.projectNetCredit)} credit`;
+    netColor = '#1a6e3a';
+  } else {
+    netLabel = `${fmt(0)} reconciled`;
+    netColor = 'var(--text-light)';
+  }
+  if ((s.grossItemCredits || 0) > SPOT_ON || (s.grossItemOverages || 0) > SPOT_ON) {
+    netSub = `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">${fmt(s.grossItemCredits || 0)} credits · ${fmt(s.grossItemOverages || 0)} overages</div>`;
+  }
+  const netCell = `
+    <div style="flex:1;min-width:160px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:4px">Net reconciliation</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${netColor}">${netLabel}</div>
+      ${netSub}
+    </div>`;
+
   return `
     <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);display:flex;gap:18px;flex-wrap:wrap">
       ${cell('Charged',           s.charged,         'var(--text-dark)')}
       ${cell('Actual',            s.actual,          'var(--text-dark)')}
-      ${cell('Credit available',  s.creditAvailable, '#1a6e3a')}
-      ${cell('Overage to bill',   s.overageToBill,   '#b33')}
+      ${netCell}
       ${cell('Deferred actuals',  s.deferredActuals, '#2d5a8a')}
     </div>`;
 }
