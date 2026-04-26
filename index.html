@@ -11682,17 +11682,32 @@ function setItemType(type) {
     b.classList.toggle('active', t && t.id === type);
   });
   $c('ai-components-section').style.display = type === 'constructed' ? '' : 'none';
-  // ai-charges-section (Freight + Other associated charges) is always shown
-  // — every item type carries a required Freight state in the new model.
   $c('ai-price-row').style.display = type === 'constructed' ? 'none' : '';
   $c('ai-category-wrap').style.display = type === 'openline' ? '' : 'none';
-  // Constructed items don't have item-level vendor/contact/brand — each
-  // component carries its own. Hide the item-level pickers and show a
-  // small note explaining where to set them.
+  // Constructed items: no item-level vendor/contact/brand AND no item-level
+  // freight/adjacent (those live per-component instead). Ready-made and
+  // open-line items get the full item-level set.
   const constructed = type === 'constructed';
-  if ($c('ai-vendor-fg'))         $c('ai-vendor-fg').style.display         = constructed ? 'none' : '';
-  if ($c('ai-contact-brand-row')) $c('ai-contact-brand-row').style.display = constructed ? 'none' : '';
+  if ($c('ai-vendor-fg'))               $c('ai-vendor-fg').style.display               = constructed ? 'none' : '';
+  if ($c('ai-contact-brand-row'))       $c('ai-contact-brand-row').style.display       = constructed ? 'none' : '';
   if ($c('ai-constructed-vendor-note')) $c('ai-constructed-vendor-note').style.display = constructed ? '' : 'none';
+  if ($c('ai-charges-section'))         $c('ai-charges-section').style.display         = constructed ? 'none' : '';
+  // When switching INTO constructed mid-edit, drop any item-level freight
+  // state — both the modal-local draft and any persisted rows on this item.
+  // Component-level freight is unaffected. Only kicks in when the modal is
+  // already open (typeof _modalFreight === 'object').
+  if (constructed && typeof _modalFreight !== 'undefined') {
+    _modalFreight = _emptyFreightDraft();
+    _modalAdjacent = [];
+    const itemId = $c('ai-id')?.value;
+    if (itemId) {
+      S.freightCharges = (S.freightCharges || []).filter(
+        c => !(c.parentType === 'item' && c.parentId === itemId)
+      );
+    }
+    if (typeof renderModalFreight === 'function') renderModalFreight();
+    if (typeof renderModalAdjacent === 'function') renderModalAdjacent();
+  }
 }
 
 function populateRoomSelect(pid) {
@@ -12663,14 +12678,16 @@ function saveItem() {
   const name = $c('ai-name').value.trim();
   if (!name) { showItemModalError('Item name is required.'); $c('ai-name').focus(); return; }
 
-  // Freight state is required on every item (U-Freight Phase 2).
-  const freightErr = validateModalFreight();
-  if (freightErr) { showItemModalError(freightErr); return; }
+  // Item-level Freight Cost Status is required on ready-made and open-line
+  // items only. Constructed items don't carry item-level freight (it lives
+  // per-component) — the per-component validation runs below.
+  if (type !== 'constructed') {
+    const freightErr = validateModalFreight();
+    if (freightErr) { showItemModalError(freightErr); return; }
+  }
 
   readModalComponentsFromDOM();
 
-  // For constructed items, every non-empty component also needs its own
-  // Freight Cost Status before save (U-Freight Phase 2 Part 2).
   if (type === 'constructed') {
     const compsForValidation = _modalComponents.filter(c => c.name || c.netCost);
     const compErr = validateModalComponentsFreight(compsForValidation);
