@@ -1341,6 +1341,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-pdtab="management" onclick="setProjDetailTab('management')" style="margin-bottom:-1px">Project Mgmt</button>
         <button class="view-tab" data-pdtab="addressbook" onclick="setProjDetailTab('addressbook')" style="margin-bottom:-1px">Address Book</button>
         <button class="view-tab" data-pdtab="documents" onclick="setProjDetailTab('documents')" style="margin-bottom:-1px">Documents</button>
+        <button class="view-tab" data-pdtab="expenses" onclick="setProjDetailTab('expenses')" style="margin-bottom:-1px">Expenses</button>
         <button class="view-tab" data-pdtab="settings" onclick="setProjDetailTab('settings')" style="margin-bottom:-1px">Settings</button>
       </div>
       <div class="contacts-body" id="pd-body" style="padding:22px 30px 40px"><!-- rendered by JS --></div>
@@ -3028,7 +3029,13 @@ tr:hover .row-btns { opacity:1; }
     <div id="exp-invoice-banner" style="display:none"></div>
     <div class="fg">
       <label class="fl">Project</label>
-      <select class="fi fsel" id="exp-project"><!-- populated by JS --></select>
+      <select class="fi fsel" id="exp-project" onchange="onExpProjectChange()"><!-- populated by JS --></select>
+    </div>
+    <div class="fg">
+      <label class="fl">Tag to item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — links this expense to a specific proposal item for cost-tracking and freight reconciliation)</span></label>
+      <select class="fi fsel" id="exp-proposal-item" disabled>
+        <option value="">— Pick a project first —</option>
+      </select>
     </div>
     <div class="fg">
       <label class="fl">Expense Name</label>
@@ -7353,6 +7360,7 @@ function renderProjectDetail() {
   if (_projDetailTab === 'management')  body.innerHTML = renderPDManagement(proj, pid);
   if (_projDetailTab === 'addressbook') body.innerHTML = renderPDAddressBook(proj, pid);
   if (_projDetailTab === 'documents')   body.innerHTML = renderPDDocuments(proj, pid);
+  if (_projDetailTab === 'expenses')    body.innerHTML = renderPDExpenses(proj, pid);
   if (_projDetailTab === 'settings')    body.innerHTML = renderPDSettings(proj, pid);
 
   // Set up drag-and-drop for Quick References
@@ -8931,8 +8939,9 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       <div style="text-align:right">
         <div style="font-family:var(--font-h);font-weight:800;font-size:22px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
         ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
-        <div style="display:flex;gap:6px;margin-top:4px">
+        <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;justify-content:flex-end">
           <button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')">Edit Item</button>
+          <button class="btn btn-ghost btn-sm" onclick="openNewExpenseForItem('${pid}','${itemId}')" title="Open the expense modal pre-filled with this item">+ Add expense</button>
           ${canDeleteItem(itemId) ? `<button class="btn btn-danger btn-sm" onclick="deleteItemFromPM('${pid}','${spId}','${itemId}')" style="font-size:10px">Delete Item</button>` : ''}
         </div>
       </div>
@@ -9797,6 +9806,56 @@ function renderPDAddressBook(proj, pid) {
 
   html += '</div>';
   return html;
+}
+
+// ─── Project Expenses tab (U-Freight Phase 3) ───────────────
+// Project-scoped view of S.expenses where projectId matches the open
+// project. Sorted newest-first by date. Opens the existing modal-expense
+// pre-filled with project, and (from the PM detail panel) optionally with
+// proposalItemId pre-filled too.
+
+function renderPDExpenses(proj, pid) {
+  const expenses = (S.expenses || [])
+    .filter(e => e.projectId === pid)
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created || '').localeCompare(a.created || ''));
+
+  const headerBar = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">Expenses</div>
+      <button class="btn btn-primary btn-sm" onclick="openNewExpenseForProject('${pid}')">+ Add expense</button>
+    </div>`;
+
+  if (!expenses.length) {
+    return `
+    <div>
+      ${headerBar}
+      <div style="background:white;border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center;color:var(--text-mid);font-family:var(--font-b);font-size:13px;font-style:italic">
+        No expenses recorded on this project yet.
+      </div>
+    </div>`;
+  }
+
+  const rows = expenses.map(exp => renderExpenseCard(exp)).join('');
+  return `
+  <div>
+    ${headerBar}
+    <div style="display:flex;flex-direction:column;gap:8px">${rows}</div>
+  </div>`;
+}
+
+function openNewExpenseForProject(pid) {
+  openNewExpenseModal();
+  const sel = $c('exp-project');
+  if (sel) sel.value = pid || '';
+  // Refresh the item-tag dropdown to reflect the pre-filled project.
+  if (typeof refreshExpenseItemDropdown === 'function') refreshExpenseItemDropdown();
+}
+
+function openNewExpenseForItem(pid, itemId) {
+  openNewExpenseForProject(pid);
+  const sel = $c('exp-proposal-item');
+  if (sel) sel.value = itemId || '';
 }
 
 function renderPDSettings(proj, pid) {
@@ -16591,12 +16650,56 @@ function openNewExpenseModal() {
     S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
   $c('exp-card').innerHTML = '<option value="">— Select card —</option>' +
     (S.paymentCards||[]).map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join('');
+  refreshExpenseItemDropdown();
 
   renderExpenseInvoiceBanner(null);
   setExpenseFormEnabled(true);
   const delBtn = $c('exp-delete-btn');
   if (delBtn) delBtn.style.display = 'none';
   $c('modal-expense').classList.add('open');
+}
+
+// Refill the "Tag to item" picker based on the currently-picked project.
+// Disabled with a "Pick a project first" prompt when no project is set.
+// Preserves the current selection if the same item is still available
+// under the new project (rare — projects don't share item ids).
+function refreshExpenseItemDropdown() {
+  const sel = $c('exp-proposal-item');
+  if (!sel) return;
+  const prev = sel.value;
+  const pid  = $c('exp-project')?.value || '';
+  if (!pid) {
+    sel.innerHTML = '<option value="">— Pick a project first —</option>';
+    sel.disabled = true;
+    return;
+  }
+  const prop = S.proposals[pid];
+  const items = [];
+  (prop?.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      items.push({
+        id: item.id,
+        label: `${item.name || '(unnamed)'} · ${sp.name || 'Unassigned'}`,
+      });
+    });
+  });
+  items.sort((a, b) => a.label.localeCompare(b.label));
+  const opts = ['<option value="">— Not tagged —</option>'];
+  items.forEach(i => opts.push(`<option value="${i.id}">${escH(i.label)}</option>`));
+  sel.innerHTML = opts.join('');
+  sel.disabled = false;
+  // Restore prior selection if still valid (almost always: same project,
+  // re-render after a sibling field changed).
+  if (prev && [...sel.options].some(o => o.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function onExpProjectChange() {
+  // Items from the prior project no longer apply — clear the tag.
+  const sel = $c('exp-proposal-item');
+  if (sel) sel.value = '';
+  refreshExpenseItemDropdown();
 }
 
 function deleteExpenseFromModal() {
@@ -16628,6 +16731,13 @@ function openEditExpense(expId) {
   $c('exp-card').innerHTML = '<option value="">— Select card —</option>' +
     (S.paymentCards||[]).map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join('');
   $c('exp-card').value = exp.card || '';
+
+  // Repopulate the item-tag picker for this project, then preselect the
+  // previously-tagged item (if any). Done AFTER project + card selects so
+  // the dropdown reads the right project from the DOM.
+  refreshExpenseItemDropdown();
+  const itemSel = $c('exp-proposal-item');
+  if (itemSel) itemSel.value = exp.proposalItemId || '';
 
   renderExpReceiptPreview();
   renderExpenseInvoiceBanner(exp);
@@ -16701,6 +16811,7 @@ async function saveExpense() {
   const expense = {
     id: expId,
     projectId: pid,
+    proposalItemId: $c('exp-proposal-item')?.value || null,
     name,
     cost: $c('exp-cost').value.trim(),
     date: $c('exp-date').value,
@@ -16821,6 +16932,24 @@ function renderExpenseCard(exp) {
   const label = typeLabels[exp.expenseType] || exp.expenseType;
   const onSentInvoice = !exp.resolved && getExpenseInvoices(exp.id).some(l => l.inv.status !== 'draft');
   const canDelete = !exp.resolved && !onSentInvoice;
+  // Tag-to-item line (Phase 3): "Tag: Smith chair · Living Room" when the
+  // expense is linked to a proposal item, muted "— Not tagged" otherwise.
+  // Resolves the live item even after project moves so deleted items show
+  // as missing rather than dangling text.
+  let tagDisplay = '<span style="color:var(--text-light);font-style:italic">— Not tagged</span>';
+  if (exp.proposalItemId) {
+    let found = null;
+    Object.values(S.proposals || {}).forEach(prop => {
+      (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+        if (it.id === exp.proposalItemId) found = { item: it, sp };
+      }));
+    });
+    if (found) {
+      tagDisplay = `<span style="color:var(--russet)">${escH(found.item.name || '(unnamed)')} · ${escH(found.sp.name || 'Unassigned')}</span>`;
+    } else {
+      tagDisplay = '<span style="color:var(--text-light);font-style:italic">— Tagged item missing</span>';
+    }
+  }
   return `
   <div style="background:white;border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t);display:flex;align-items:center;justify-content:space-between" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditExpense('${exp.id}')">
     <div>
@@ -16834,6 +16963,9 @@ function renderExpenseCard(exp) {
       <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
         ${proj ? escH(proj.name)+' · ' : ''}${exp.date ? escH(exp.date)+' · ' : ''}${exp.card ? escH(exp.card) : ''}
         ${exp.resolved && exp.resolvedInvoiceNumber ? ' · <span style="color:var(--russet)">Invoice '+escH(exp.resolvedInvoiceNumber)+'</span>' : ''}
+      </div>
+      <div style="font-size:11px;font-family:var(--font-b);color:var(--text-mid);margin-top:3px">
+        Tag: ${tagDisplay}
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:10px">
