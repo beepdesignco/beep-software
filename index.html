@@ -1876,6 +1876,14 @@ tr:hover .row-btns { opacity:1; }
           <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">States where you collect sales tax. Each entry: state name, tax rate, your resale # in that state, and how often you file. Project Settings → State picks from this list and auto-fills the tax rate.</div>
           <div id="as-tax-states-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
           <button class="btn btn-primary btn-sm" onclick="openTaxStateEditor(null)">+ Add Tax State</button>
+
+          <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:28px 0 10px;border-top:1px solid var(--border);padding-top:20px">Freight &amp; associated charges</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">Categories of freight-related charges that appear on items and components. Default markup blank = use the project's markup; explicit 0 = bill at cost. Taxable means it's subject to sales tax when the project's freight tax flag is on.</div>
+          <div id="as-freight-cats-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:6px;max-width:420px;align-items:center">
+            <input type="text" class="fi" id="as-freight-cat-input" placeholder="New freight category…" style="flex:1" onkeydown="if(event.key==='Enter'){addFreightCategory();event.preventDefault()}">
+            <button class="btn btn-primary btn-sm" onclick="addFreightCategory()">Add</button>
+          </div>
         </div>
 
         <div id="settab-reminders" class="settings-panel" style="display:none;max-width:820px">
@@ -5428,6 +5436,7 @@ async function loadFromSupabase() {
     invoicesRes, expensesRes, documentsRes, timeRes,
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
     itemTypesRes, posRes, submittalsRes,
+    freightCategoriesRes, freightChargesRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -5443,9 +5452,11 @@ async function loadFromSupabase() {
     sb.from('item_types').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('purchase_orders').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('submittals').select('*, submittal_signers(*)').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('freight_categories').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('freight_charges').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -5482,6 +5493,9 @@ async function loadFromSupabase() {
     s.signers = (row.submittal_signers || []).map(dbSubmittalSignerToS).sort((a,b) => a.sortOrder - b.sortOrder);
     return s;
   });
+  S.freightCategories = ((freightCategoriesRes.data || []).map(dbFreightCategoryToS))
+                        .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  S.freightCharges    = (freightChargesRes.data    || []).map(dbFreightChargeToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -5731,6 +5745,40 @@ function dbItemTypeToS(t) {
   };
 }
 
+// ── Freight categories / charges (U-Freight Phase 1) ──
+// Categories are studio-configurable freight charge taxonomies.
+// `defaultMarkupPct = null` is the sentinel for "use project default at
+// calc time"; explicit `0` means "no markup". Charges live polymorphically
+// on items OR components via parent_type + parent_id.
+function dbFreightCategoryToS(c) {
+  return {
+    id: c.id,
+    name: c.name || '',
+    defaultMarkupPct: c.default_markup_pct,        // null preserved as null
+    isTaxable: !!c.is_taxable,
+    sortOrder: c.sort_order || 0,
+    isSystem: !!c.is_system,
+    created: c.created_at,
+    updated: c.updated_at,
+  };
+}
+
+function dbFreightChargeToS(c) {
+  return {
+    id: c.id,
+    parentType: c.parent_type,                     // 'item' | 'component'
+    parentId: c.parent_id,
+    categoryId: c.category_id || null,
+    state: c.state || 'none',                      // 'known' | 'allowance' | 'deferred' | 'none'
+    valueType: c.value_type || null,               // 'amount' | 'percent' | null
+    value: c.value != null ? String(c.value) : null,
+    markupPctOverride: c.markup_pct_override,
+    notes: c.notes || '',
+    created: c.created_at,
+    updated: c.updated_at,
+  };
+}
+
 function dbVendorContactToS(c) {
   return {
     id: c.id,
@@ -5847,6 +5895,7 @@ function dbExpenseToS(e) {
     status: e.status || '',
     resolvedInvoiceId: e.resolved_invoice_id || '',
     resolvedInvoiceNumber: e.resolved_invoice_number || '',
+    proposalItemId: e.proposal_item_id || null,
     created: e.created_at,
   };
 }
@@ -5936,7 +5985,6 @@ function dbItemToS(it) {
     groupComponents: !!it.group_components,
     additionalCharges: it.additional_charges || [],
     costActual: it.cost_actual != null ? String(it.cost_actual) : '',
-    actualFreight: it.actual_freight != null ? String(it.actual_freight) : '',
     additionalCosts: it.additional_costs || [],
     _invoiceIds: it.invoice_ids || [],
     _expenseId: it.expense_id || null,
@@ -5982,7 +6030,6 @@ function dbCompToS(c) {
     billCostOnly: !!c.bill_cost_only,
     adjustMarkup: c.adjust_markup,
     costActual: c.cost_actual != null ? String(c.cost_actual) : '',
-    actualFreight: c.actual_freight != null ? String(c.actual_freight) : '',
     additionalCosts: c.additional_costs || [],
     files: c.files || [],
     links: c.links || [],
@@ -6014,6 +6061,8 @@ const _sbShadow = {
   brands: new Map(),
   vendorBrands: new Set(),       // "vendorId:brandId" strings
   itemTypes: new Map(),
+  freightCategories: new Map(),
+  freightCharges: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -6034,6 +6083,8 @@ function captureSbShadow() {
   _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
   _sbShadow.brands         = new Map((S.brands         || []).map(b => [b.id, snap(b)]));
   _sbShadow.itemTypes      = new Map((S.itemTypes      || []).map(t => [t.id, snap(t)]));
+  _sbShadow.freightCategories = new Map((S.freightCategories || []).map(c => [c.id, snap(c)]));
+  _sbShadow.freightCharges    = new Map((S.freightCharges    || []).map(c => [c.id, snap(c)]));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
   _sbShadow.submittalSigners = new Map();
@@ -6125,6 +6176,38 @@ function itemTypeToDB(t, studioId) {
     description: t.description || null,
     color: t.color || null,
     sort_order: t.sortOrder || 0,
+    deleted_at: null,
+  };
+}
+function freightCategoryToDB(c, studioId) {
+  return {
+    id: c.id, studio_id: studioId,
+    name: c.name || '',
+    // null sentinel ("use project default") is preserved; explicit 0 stays 0.
+    default_markup_pct: c.defaultMarkupPct == null ? null : Number(c.defaultMarkupPct),
+    is_taxable: !!c.isTaxable,
+    sort_order: c.sortOrder || 0,
+    is_system: !!c.isSystem,
+    deleted_at: null,
+  };
+}
+function freightChargeToDB(c, studioId) {
+  return {
+    id: c.id, studio_id: studioId,
+    parent_type: c.parentType || 'item',
+    parent_id: c.parentId,
+    category_id: c.categoryId || null,
+    state: c.state || 'none',
+    // CHECK constraint: value_type + value required when state is known/allowance,
+    // both must be null when state is deferred/none.
+    value_type: (c.state === 'known' || c.state === 'allowance') ? (c.valueType || 'amount') : null,
+    value: (c.state === 'known' || c.state === 'allowance')
+      ? (c.value != null && c.value !== '' ? Number(c.value) : null)
+      : null,
+    markup_pct_override: c.markupPctOverride == null || c.markupPctOverride === ''
+      ? null
+      : Number(c.markupPctOverride),
+    notes: c.notes || null,
     deleted_at: null,
   };
 }
@@ -6224,6 +6307,7 @@ function expenseToDB(e, studioId) {
     status: e.status || null,
     resolved_invoice_id: e.resolvedInvoiceId || null,
     resolved_invoice_number: e.resolvedInvoiceNumber || null,
+    proposal_item_id: e.proposalItemId || null,
     receipt: e.receipt && e.receipt.storagePath ? e.receipt : null,
     receipt_path: e.receipt?.storagePath || null,
     deleted_at: null,
@@ -6331,7 +6415,7 @@ function itemToDB(it) {
     allowance: !!it.allowance, tax_exempt: !!it.taxExempt, bill_cost_only: !!it.billCostOnly,
     adjust_markup: it.adjustMarkup ?? null, group_components: !!it.groupComponents,
     additional_charges: it.additionalCharges || [],
-    cost_actual: _parseMoney(it.costActual), actual_freight: _parseMoney(it.actualFreight),
+    cost_actual: _parseMoney(it.costActual),
     additional_costs: it.additionalCosts || [],
     invoice_ids: it._invoiceIds || [], expense_id: it._expenseId || null,
     invoice_line_id: it._invoiceLineId || null, invoice_number: it._invoiceNumber || null,
@@ -6358,7 +6442,7 @@ function componentToDB(c) {
     description: c.description || null, note: c.note || null,
     allowance: !!c.allowance, tax_exempt: !!c.taxExempt, bill_cost_only: !!c.billCostOnly,
     adjust_markup: c.adjustMarkup ?? null,
-    cost_actual: _parseMoney(c.costActual), actual_freight: _parseMoney(c.actualFreight),
+    cost_actual: _parseMoney(c.costActual),
     additional_costs: c.additionalCosts || [],
     files: c.files || [], links: c.links || [],
     tracking_numbers: c.trackingNumbers || [], activity_log: c.activityLog || [],
@@ -6467,6 +6551,8 @@ async function syncToSupabase() {
     // Brands before vendor_brands so FK targets exist before links
     await syncSafe('brands', new Map((S.brands||[]).map(b => [b.id, b])), _sbShadow.brands, b => brandToDB(b, studioId));
     await syncSafe('item_types', new Map((S.itemTypes||[]).map(t => [t.id, t])), _sbShadow.itemTypes, t => itemTypeToDB(t, studioId));
+    // Freight categories before freight_charges so the FK target exists.
+    await syncSafe('freight_categories', new Map((S.freightCategories||[]).map(c => [c.id, c])), _sbShadow.freightCategories, c => freightCategoryToDB(c, studioId));
     await syncSafe('purchase_orders', new Map((S.purchaseOrders||[]).map(p => [p.id, p])), _sbShadow.purchaseOrders, p => poToDB(p, studioId));
     // Submittals + signers — flatten signers out of the parent for the child sync
     const currentSubs = new Map();
@@ -6504,6 +6590,8 @@ async function syncToSupabase() {
     await syncSafe('proposal_spaces',     current.spaces,     _sbShadow.spaces,     s => spaceToDB(s));
     await syncSafe('proposal_items',      current.items,      _sbShadow.items,      i => itemToDB(i));
     await syncSafe('proposal_components', current.components, _sbShadow.components, c => componentToDB(c));
+    // freight_charges parent_id is polymorphic to items/components — sync after both exist.
+    await syncSafe('freight_charges', new Map((S.freightCharges||[]).map(c => [c.id, c])), _sbShadow.freightCharges, c => freightChargeToDB(c, studioId));
     await syncSafe('expenses',  current.expenses, _sbShadow.expenses, e => expenseToDB(e, studioId));
     await syncSafe('invoices',  current.invoices, _sbShadow.invoices, i => invoiceToDB(i, studioId));
     await syncSafe('invoice_line_items', current.invoiceLineItems, _sbShadow.invoiceLineItems, l => invLineItemToDB(l), { softDelete: false });
@@ -6686,6 +6774,8 @@ let S = {
   brands: [],
   vendorTypes: [],
   itemTypes: [],
+  freightCategories: [],
+  freightCharges: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -7037,12 +7127,10 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
   const onRemoveItem = (cid) => `removePMAdditionalCost('${pid}','${spId}','${itemId}','${cid}')`;
   const onFieldItem = (cid, field) => `savePMAdditionalCost('${pid}','${spId}','${itemId}','${cid}','${field}',this.value.trim())`;
 
-  const freightRow = `
-    <div>
-      <label class="fl">Actual Freight Paid</label>
-      <input type="text" class="fi" value="${escH(item.actualFreight||'')}" placeholder="$0.00"
-        onchange="savePMField('${pid}','${spId}','${itemId}','actualFreight',this.value.trim())">
-    </div>`;
+  // Item-level "Actual Freight Paid" input was removed in U-Freight Phase 1.
+  // The actual_freight column is dropped; freight actuals will source from
+  // expenses linked via expenses.proposal_item_id (wired in Phase 3).
+  const freightRow = '';
 
   const addlBlock = `
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
@@ -8707,7 +8795,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         <details style="margin-top:6px;margin-bottom:6px">
           <summary style="font-size:10px;font-family:var(--font-b);color:var(--text-mid);cursor:pointer;padding:4px 0;user-select:none">Cost Tracking${cHasActual?` <span style="color:${deltaColor};font-weight:600;margin-left:4px">${fmt(cActual)}${delta!=null?' (Δ '+(delta>=0?'+':'')+fmt(delta)+')':''}</span>`:''}</summary>
           <div style="padding-top:6px;background:rgba(91,45,34,0.02);border-radius:var(--rs);padding:8px">
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
               <div>
                 <label class="fl">Proposal Net</label>
                 <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:5px 0;font-weight:600">${fmt(cProp)}</div>
@@ -8716,11 +8804,6 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
                 <label class="fl">Actual Cost</label>
                 <input type="text" class="fi" value="${escH(c.costActual||'')}" placeholder="$0.00"
                   onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','costActual',this.value.trim())" style="font-size:11px;padding:4px 6px">
-              </div>
-              <div>
-                <label class="fl">Actual Freight</label>
-                <input type="text" class="fi" value="${escH(c.actualFreight||'')}" placeholder="$0.00"
-                  onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','actualFreight',this.value.trim())" style="font-size:11px;padding:4px 6px">
               </div>
             </div>
             <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:4px;margin-top:4px">Additional Costs</div>
@@ -13455,7 +13538,7 @@ function setSettingsTab(tab) {
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'notes')  renderInvoiceNotesList();
-  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); }
+  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); renderFreightCategoriesList(); }
   if (tab === 'reminders') renderRemindersPanel();
 }
 
@@ -13911,6 +13994,176 @@ function removeItemType(id) {
   });
   save();
   renderItemTypesList();
+}
+
+// ── Freight categories (U-Freight Phase 1) ─────────────────
+// Studio-configurable list of freight charge taxonomies. System-seeded
+// rows can be edited (rename / markup / taxable / sort) but not deleted.
+// User-added rows can be deleted; the FK on freight_charges is on-delete-
+// set-null so existing charges become uncategorized rather than blocking.
+
+function countFreightChargesByCategory(categoryId) {
+  return (S.freightCharges || []).filter(c => c.categoryId === categoryId).length;
+}
+
+function renderFreightCategoriesList() {
+  const el = $c('as-freight-cats-list');
+  if (!el) return;
+  const cats = (S.freightCategories || []).slice()
+    .sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  if (!cats.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:8px 0">No freight categories yet. Add one below.</div>';
+    return;
+  }
+  el.innerHTML = cats.map(c => {
+    const inUse = countFreightChargesByCategory(c.id);
+    const markupValue = c.defaultMarkupPct == null ? '' : c.defaultMarkupPct;
+    const sysChip = c.isSystem
+      ? '<span style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-light);background:rgba(91,45,34,0.06);padding:2px 6px;border-radius:8px">System</span>'
+      : '';
+    const delBtn = c.isSystem
+      ? '<span style="width:24px;display:inline-block"></span>'
+      : `<button onclick="removeFreightCategory('${c.id}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>`;
+    return `
+    <div draggable="true" data-fcid="${c.id}"
+      ondragstart="onFreightCatDragStart(event,'${c.id}')"
+      ondragover="onFreightCatDragOver(event,'${c.id}')"
+      ondragend="onFreightCatDragEnd(event)"
+      style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r)">
+      <span style="color:var(--text-light);user-select:none;cursor:grab;font-size:13px;letter-spacing:-2px">⋮⋮</span>
+      <input type="text" class="fi" value="${escH(c.name)}" style="flex:2;font-size:12px;font-weight:700;color:var(--mahogany)"
+        onchange="renameFreightCategory('${c.id}', this.value.trim())">
+      <div style="display:flex;align-items:center;gap:4px">
+        <input type="number" class="fi" value="${markupValue}" placeholder="Project default" min="0" step="0.5"
+          title="Blank = use the project default markup. Explicit 0 = bill at cost. Otherwise the percent."
+          style="width:130px;font-size:11px;text-align:right;padding:5px 8px"
+          onchange="updateFreightCategoryMarkup('${c.id}', this.value)">
+        <span style="font-size:11px;color:var(--text-light)">%</span>
+      </div>
+      <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-mid);cursor:pointer;user-select:none">
+        <input type="checkbox" ${c.isTaxable ? 'checked' : ''}
+          onchange="updateFreightCategoryField('${c.id}','isTaxable',this.checked)"
+          style="accent-color:var(--russet);width:13px;height:13px">
+        Taxable
+      </label>
+      ${sysChip}
+      <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);min-width:54px;text-align:right">${inUse} in use</span>
+      ${delBtn}
+    </div>`;
+  }).join('');
+}
+
+function addFreightCategory() {
+  const input = $c('as-freight-cat-input');
+  const name = (input?.value || '').trim();
+  if (!name) return;
+  if ((S.freightCategories || []).some(c => c.name.toLowerCase() === name.toLowerCase())) {
+    toast('A freight category named "' + name + '" already exists.');
+    return;
+  }
+  if (!S.freightCategories) S.freightCategories = [];
+  const maxOrder = S.freightCategories.reduce((m, c) => Math.max(m, c.sortOrder || 0), 0);
+  S.freightCategories.push({
+    id: uid(),
+    name,
+    defaultMarkupPct: null,    // null sentinel → "use project default"
+    isTaxable: true,
+    sortOrder: maxOrder + 1,
+    isSystem: false,
+    created: new Date().toISOString(),
+  });
+  input.value = '';
+  save();
+  renderFreightCategoriesList();
+}
+
+function renameFreightCategory(id, newName) {
+  const c = (S.freightCategories || []).find(x => x.id === id);
+  if (!c) return;
+  newName = String(newName || '').trim();
+  if (!newName || newName === c.name) return;
+  if ((S.freightCategories || []).some(x => x.id !== id && x.name.toLowerCase() === newName.toLowerCase())) {
+    toast('"' + newName + '" already exists.');
+    renderFreightCategoriesList();
+    return;
+  }
+  c.name = newName;
+  save();
+  renderFreightCategoriesList();
+}
+
+function updateFreightCategoryMarkup(id, raw) {
+  const c = (S.freightCategories || []).find(x => x.id === id);
+  if (!c) return;
+  const trimmed = String(raw || '').trim();
+  if (trimmed === '') {
+    c.defaultMarkupPct = null;
+  } else {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0) {
+      toast('Enter a number ≥ 0, or blank for "Project default".');
+      renderFreightCategoriesList();
+      return;
+    }
+    c.defaultMarkupPct = n;
+  }
+  save();
+  renderFreightCategoriesList();
+}
+
+function updateFreightCategoryField(id, field, value) {
+  const c = (S.freightCategories || []).find(x => x.id === id);
+  if (!c) return;
+  c[field] = value;
+  save();
+  renderFreightCategoriesList();
+}
+
+function removeFreightCategory(id) {
+  const c = (S.freightCategories || []).find(x => x.id === id);
+  if (!c) return;
+  if (c.isSystem) { toast('System categories can\'t be deleted.'); return; }
+  const inUse = countFreightChargesByCategory(id);
+  const msg = inUse
+    ? 'Delete category "' + c.name + '"? ' + inUse + ' freight charge' + (inUse !== 1 ? 's' : '') + ' reference it — those charges will become uncategorized.'
+    : 'Delete category "' + c.name + '"?';
+  if (!confirm(msg)) return;
+  S.freightCategories = (S.freightCategories || []).filter(x => x.id !== id);
+  // Clear in-memory references so the next sync reflects the orphaning;
+  // DB FK is on-delete-set-null as a safety net regardless.
+  (S.freightCharges || []).forEach(fc => { if (fc.categoryId === id) fc.categoryId = null; });
+  save();
+  renderFreightCategoriesList();
+}
+
+// Drag-reorder. Mutates sort_order on the in-memory list as the user drags
+// over each row; persists once on dragend (one save per drag, not per swap).
+let _freightCatDragId = null;
+
+function onFreightCatDragStart(e, id) {
+  _freightCatDragId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', id);
+  e.currentTarget.style.opacity = '0.4';
+}
+
+function onFreightCatDragOver(e, overId) {
+  if (!_freightCatDragId || _freightCatDragId === overId) return;
+  e.preventDefault();
+  const cats = (S.freightCategories || []).slice().sort((a, b) => (a.sortOrder - b.sortOrder));
+  const dragIdx = cats.findIndex(c => c.id === _freightCatDragId);
+  const overIdx = cats.findIndex(c => c.id === overId);
+  if (dragIdx < 0 || overIdx < 0) return;
+  const [moved] = cats.splice(dragIdx, 1);
+  cats.splice(overIdx, 0, moved);
+  cats.forEach((c, i) => { c.sortOrder = i + 1; });
+  renderFreightCategoriesList();
+}
+
+function onFreightCatDragEnd(e) {
+  e.currentTarget.style.opacity = '';
+  _freightCatDragId = null;
+  save();
 }
 
 // ── Tax States ──────────────────────────────────────────────
