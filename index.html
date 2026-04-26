@@ -6686,8 +6686,12 @@ const SHIPPING_STATUSES = [
 
 const DEFAULT_TASK_STATUSES = ['In Progress','Purgatory','Completed'];
 
-function isShippingComp(c) { return c.componentType === 'shipping'; }
-function isExcludedFromGrouping(c) { return c.componentType === 'shipping' || c.componentType === 'receiving'; }
+// componentType='shipping' was retired in U-Freight (freight now lives in
+// freight_charges, not on the component label). Stub kept so any straggler
+// caller compiles; always returns false. The shipping-only display branches
+// in the card / detail panel render with empty arrays and skip themselves.
+function isShippingComp(c) { return false; }
+function isExcludedFromGrouping(c) { return c.componentType === 'receiving'; }
 function getShippingStatusColor(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).color || '#c47a20'; }
 function getShippingStatusLabel(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).l || 'Needs Payment'; }
 
@@ -6719,7 +6723,9 @@ const COMPONENT_TYPES = [
   { id:'labor',        label:'Labor' },
   { id:'hardware',     label:'Hardware' },
   { id:'service',      label:'Service' },
-  { id:'shipping',     label:'Shipping / Handling' },
+  // 'shipping' retired in U-Freight — freight is captured per-component in
+  // the Freight section, not via componentType. Migration phase0_13 converts
+  // any historical 'shipping' rows to 'other'.
   { id:'receiving',    label:'Receiving / Storage' },
   { id:'installation', label:'Installation' },
   { id:'other',        label:'Other' },
@@ -22548,7 +22554,7 @@ function addSampleData() {
               { id:uid(), name:'Upholstery Fabric', componentType:'material', contact:'Paul+', netCost:'120', qty:8, qtyUnit:'yds', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Foam & Batting', componentType:'material', contact:'', netCost:'340', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Upholstery Labor', componentType:'labor', contact:'Douglass Workroom', netCost:'850', billCostOnly:false, adjustMarkup:null, note:'' },
-              { id:uid(), name:'Freight', componentType:'shipping', contact:'', netCost:'120', billCostOnly:false, adjustMarkup:null, note:'' },
+              { id:uid(), name:'Freight', componentType:'other', contact:'', netCost:'120', billCostOnly:false, adjustMarkup:null, note:'' },
               { id:uid(), name:'Installation', componentType:'installation', contact:'', netCost:'250', billCostOnly:true, adjustMarkup:null, note:'' },
             ]
           },
