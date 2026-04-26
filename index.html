@@ -7233,10 +7233,29 @@ function calcComponentActualCost(comp) {
   return primary + freight + add;
 }
 
+// Item-level "additional expenses" now sources from S.expenses tagged to
+// the item via proposal_item_id (not the legacy additional_costs jsonb).
+// Lets the same dollars feed both the item rollup and project P&L.
+function _sumTaggedExpensesForItem(itemId) {
+  if (!itemId) return 0;
+  return (S.expenses || [])
+    .filter(e => e.proposalItemId === itemId)
+    .reduce((s, e) => s + (parse$(e.cost) || 0), 0);
+}
+
+function _taggedExpensesForItem(itemId) {
+  if (!itemId) return [];
+  return (S.expenses || [])
+    .filter(e => e.proposalItemId === itemId)
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+
 function calcItemActualCost(item) {
   if (!item) return 0;
   const itemFreight = parse$(item.actualFreight || '');
-  const itemAdd = sumAdditionalCosts(item.additionalCosts);
+  // Tagged expenses replace the legacy item-level additional_costs jsonb.
+  const itemAdd = _sumTaggedExpensesForItem(item.id);
   if (item.type === 'constructed') {
     const compsCost = (item.components || []).reduce((s, c) => s + calcComponentActualCost(c), 0);
     return compsCost + itemFreight + itemAdd;
@@ -7250,7 +7269,7 @@ function hasAnyActualInput(item) {
   if (!item) return false;
   if ((item.costActual || '').toString().trim()) return true;
   if ((item.actualFreight || '').toString().trim()) return true;
-  if ((item.additionalCosts || []).some(c => (c.amount || '').toString().trim())) return true;
+  if (_taggedExpensesForItem(item.id).length > 0) return true;
   if (item.type === 'constructed') {
     return (item.components || []).some(c =>
       (c.costActual || '').toString().trim() ||
@@ -7284,19 +7303,39 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
   const varPct = (variance != null && proposalNet > 0) ? (variance / proposalNet * 100) : null;
   const varColor = variance == null ? 'var(--text-light)' : variance > 0 ? '#b33' : variance < 0 ? '#1a6e3a' : 'var(--text-mid)';
 
-  const onAddItem = () => `addPMAdditionalCost('${pid}','${spId}','${itemId}')`;
-  const onRemoveItem = (cid) => `removePMAdditionalCost('${pid}','${spId}','${itemId}','${cid}')`;
-  const onFieldItem = (cid, field) => `savePMAdditionalCost('${pid}','${spId}','${itemId}','${cid}','${field}',this.value.trim())`;
-
   // Item-level "Actual Freight Paid" input was removed in U-Freight Phase 1.
   // The actual_freight column is dropped; freight actuals will source from
   // expenses linked via expenses.proposal_item_id (wired in Phase 3).
   const freightRow = '';
 
+  // "Additional Expenses" — replaces the legacy additional_costs jsonb at
+  // item level. Lists S.expenses tagged via proposal_item_id, clickable to
+  // edit. Same dollars feed the item rollup AND project P&L. Component-
+  // level additional_costs is unchanged (out of scope for this pass).
+  const taggedExpenses = _taggedExpensesForItem(itemId);
+  const typeColors = { billable:'#b33', passthrough:'#2d5a8a', nonbillable:'#8a8a8a' };
+  const typeLabels = { billable:'Billable', passthrough:'Pass-Through', nonbillable:'Non-Billable' };
+  const expensesListHTML = taggedExpenses.length ? taggedExpenses.map(e => {
+    const color = typeColors[e.expenseType] || '#8a8a8a';
+    const label = typeLabels[e.expenseType] || e.expenseType || '';
+    return `
+      <div onclick="openEditExpense('${e.id}')" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;cursor:pointer;font-family:var(--font-b);font-size:11px" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
+        <div style="display:flex;align-items:center;gap:6px;overflow:hidden;flex:1;min-width:0">
+          <span style="font-weight:700;color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(e.name || '(unnamed)')}</span>
+          ${label ? `<span style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:1px 6px;border-radius:7px;background:${color}15;color:${color};border:1px solid ${color}30;flex-shrink:0">${label}</span>` : ''}
+          ${e.date ? `<span style="color:var(--text-light);font-size:10px;flex-shrink:0">· ${escH(e.date)}</span>` : ''}
+        </div>
+        <span style="font-weight:700;color:var(--pecan);font-family:var(--font-h);font-size:13px;flex-shrink:0">${fmt(parse$(e.cost) || 0)}</span>
+      </div>`;
+  }).join('') : '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No expenses tagged to this item.</div>';
+
   const addlBlock = `
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
-      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:6px">Additional Actual Costs</div>
-      ${renderAdditionalCostsList(item.additionalCosts, onFieldItem, onRemoveItem, onAddItem)}
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Additional Expenses</div>
+        <button class="btn btn-ghost btn-sm" onclick="openNewExpenseForItem('${pid}','${itemId}')" style="font-size:10px;padding:4px 10px">+ Add expense</button>
+      </div>
+      ${expensesListHTML}
     </div>`;
 
   const variancePill = hasActual ? `
@@ -17857,6 +17896,11 @@ async function saveExpense() {
   save();
   closeModal('modal-expense');
   if (S.currentView === 'expenses') renderExpenses();
+  // Refresh project-detail when open — Expenses tab list and PM item
+  // detail panel both reflect tagged expenses.
+  if (S.currentView === 'project-detail' && typeof renderProjectDetail === 'function') {
+    renderProjectDetail();
+  }
   if (invoiceNumbersTouched.length) {
     toast('Expense saved — invoice ' + invoiceNumbersTouched.join(', ') + ' updated to match.');
   } else {
@@ -17891,6 +17935,9 @@ function deleteExpense(expId) {
   S.expenses = (S.expenses||[]).filter(e => e.id !== expId);
   save();
   renderExpenses();
+  if (S.currentView === 'project-detail' && typeof renderProjectDetail === 'function') {
+    renderProjectDetail();
+  }
   toast(drafts.length ? 'Expense deleted and removed from ' + drafts.length + ' draft invoice.' : 'Expense deleted.');
 }
 
