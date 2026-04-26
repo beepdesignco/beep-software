@@ -2209,10 +2209,21 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
 
-    <!-- ACTUAL COST PAID (all types) -->
-    <div class="fg">
+    <!-- ACTUAL COST PAID — readymade + openline only.
+         Constructed items capture actual cost per-component instead. -->
+    <div class="fg" id="ai-cost-actual-wrap">
       <label class="fl">Actual Cost Paid <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— what you actually paid the vendor (leave blank to use proposal net)</span></label>
       <input type="text" class="fi" id="ai-cost-actual" placeholder="$0.00">
+    </div>
+
+    <!-- CONSTRUCTED ITEM ACTUAL-COST ROLLUP (sum of per-component costs).
+         Read-only; updates live as the user edits component cost paid. -->
+    <div id="ai-constructed-rollup" style="display:none;background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-family:var(--font-b);font-size:12px;color:var(--text-mid)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap">
+        <span style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid)">Actuals</span>
+        <span>Total actual cost: <strong id="ai-actual-cost-total" style="color:var(--text-dark);font-weight:700">$0.00</strong></span>
+        <span>Billed on invoices: <strong id="ai-billed-total" style="color:var(--text-dark);font-weight:700">$0.00</strong></span>
+      </div>
     </div>
 
     <!-- CATEGORY (openline only) -->
@@ -11698,6 +11709,12 @@ function setItemType(type) {
   if ($c('ai-contact-brand-row'))       $c('ai-contact-brand-row').style.display       = constructed ? 'none' : '';
   if ($c('ai-constructed-vendor-note')) $c('ai-constructed-vendor-note').style.display = constructed ? '' : 'none';
   if ($c('ai-charges-section'))         $c('ai-charges-section').style.display         = constructed ? 'none' : '';
+  // Actual Cost Paid lives at the item level for readymade/openline; for
+  // constructed it's per-component (each component row has its own input)
+  // and the item-level rollup shows the sum + invoices-billed total.
+  if ($c('ai-cost-actual-wrap'))        $c('ai-cost-actual-wrap').style.display        = constructed ? 'none' : '';
+  if ($c('ai-constructed-rollup'))      $c('ai-constructed-rollup').style.display      = constructed ? '' : 'none';
+  if (constructed) refreshConstructedRollup();
   // When switching INTO constructed mid-edit, drop any item-level freight
   // state — both the modal-local draft and any persisted rows on this item.
   // Component-level freight is unaffected. Only kicks in when the modal is
@@ -11781,10 +11798,13 @@ function renderModalComponents() {
       </div>
       <div class="frow">
         <div class="fg"><label class="fl">Net Cost (each)</label>
-          <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00">
+          <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00" oninput="refreshConstructedRollup()">
+        </div>
+        <div class="fg"><label class="fl">Cost Paid (each) <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— actual</span></label>
+          <input type="text" class="fi comp-cost-actual" value="${escH(c.costActual||'')}" placeholder="$0.00" oninput="refreshConstructedRollup()">
         </div>
         <div class="fg" style="max-width:70px"><label class="fl">Qty</label>
-          <input type="number" class="fi comp-qty" value="${c.qty || 1}" min="0.25" step="0.25" style="text-align:center">
+          <input type="number" class="fi comp-qty" value="${c.qty || 1}" min="0.25" step="0.25" style="text-align:center" oninput="refreshConstructedRollup()">
         </div>
         <div class="fg" style="max-width:90px"><label class="fl">Unit</label>
           <select class="fi fsel comp-unit" style="font-size:11px;padding:5px 6px"><option value="">—</option>${qtyUnitOptions(c.qtyUnit||'')}</select>
@@ -11829,6 +11849,7 @@ function renderModalComponents() {
     initComponentPickers(c);
     initComponentFreightUI(c);
   });
+  refreshConstructedRollup();
 }
 
 // Mount vendor / vendor-contact / brand pickers on a single component row.
@@ -11908,6 +11929,7 @@ function readModalComponentsFromDOM() {
       // those mutate _modalComponents[i] directly via onChange callbacks,
       // so legacy `c.contact` is preserved in place — never read from DOM.
       _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
+      _modalComponents[i].costActual = el.querySelector('.comp-cost-actual')?.value.trim() || '';
       _modalComponents[i].qty = parseFloat(el.querySelector('.comp-qty')?.value) || 1;
       _modalComponents[i].qtyUnit = el.querySelector('.comp-unit')?.value || '';
       _modalComponents[i].allowance = el.querySelector('.comp-allowance')?.checked || false;
@@ -12244,6 +12266,58 @@ function commitItemFreightCharges(itemId) {
 // Legacy stubs — kept as no-ops for now in case any straggler caller exists.
 // Old additional_charges jsonb is empty after Phase 1 wipe.
 function readModalChargesFromDOM() { /* no-op (legacy additional_charges retired) */
+}
+
+// Sum of invoice line item totals (qty × price) referencing this proposal item
+// directly. Excludes cancelled invoices. Includes whole-item lines AND any
+// component-level lines that ladder up to this item via proposalComponentId.
+function getItemBilledOnInvoices(itemId) {
+  if (!itemId) return 0;
+  let total = 0;
+  // Build the component-id set for this item (so component-level lines roll up).
+  let compIds = new Set();
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+      if (it.id === itemId) (it.components || []).forEach(c => compIds.add(c.id));
+    }));
+  });
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'cancelled') return;
+    (inv.lineItems || []).forEach(l => {
+      const matchesItem = l.proposalItemId === itemId && !l.proposalComponentId;
+      const matchesComp = l.proposalComponentId && compIds.has(l.proposalComponentId);
+      if (matchesItem || matchesComp) {
+        total += (Number(l.qty) || 1) * (Number(l.price) || 0);
+      }
+    });
+  });
+  return total;
+}
+
+// Refresh the constructed-item actuals rollup block in the Add/Edit Item
+// modal. Sums the per-component costActual inputs (live from DOM) and pulls
+// the billed-on-invoices total from S. Called on every component cost edit.
+function refreshConstructedRollup() {
+  const wrap = $c('ai-constructed-rollup');
+  if (!wrap || wrap.style.display === 'none') return;
+  // Read live values from the DOM rather than _modalComponents — covers the
+  // case where the user is mid-edit and DOM is ahead of the in-memory copy.
+  let actualTotal = 0;
+  $a('#ai-components-list .person-entry').forEach(el => {
+    const costEl = el.querySelector('.comp-cost-actual');
+    const netEl  = el.querySelector('.comp-net');
+    const qtyEl  = el.querySelector('.comp-qty');
+    const cost = parse$(costEl?.value || '');
+    const net  = parse$(netEl?.value || '');
+    const qty  = parseFloat(qtyEl?.value) || 1;
+    // If costPaid blank, treat as net (matches legacy "leave blank to use net" intent).
+    const perUnit = cost > 0 ? cost : net;
+    actualTotal += perUnit * qty;
+  });
+  const itemId = $c('ai-id')?.value;
+  const billedTotal = itemId ? getItemBilledOnInvoices(itemId) : 0;
+  const aEl = $c('ai-actual-cost-total'); if (aEl) aEl.textContent = fmt(actualTotal);
+  const bEl = $c('ai-billed-total');      if (bEl) bEl.textContent = fmt(billedTotal);
 }
 
 // ─── Component-level freight charges (U-Freight Phase 2 Part 2) ───
@@ -12726,7 +12800,9 @@ function saveItem() {
     taxExempt: $c('ai-taxexempt').checked,
     billCostOnly: $c('ai-billcost').checked,
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
-    costActual: $c('ai-cost-actual').value.trim(),
+    // Constructed items track actual cost per-component, not at the item
+    // level — clear the item-level field on save (the input is hidden).
+    costActual: type === 'constructed' ? '' : $c('ai-cost-actual').value.trim(),
     itemTypeId: itemTypeId || null,
     vendorId: pickedVendorId,
     vendorContactId: pickedContactId,
