@@ -166,7 +166,7 @@ function render(d) {
   }).join('');
 
   const taxAmount = Number(invoice.tax || 0);
-  const subtotal = Number(invoice.subtotal || 0) + Number(invoice.freight || 0) - Number(invoice.discount || 0);
+  const subtotal = Number(invoice.subtotal || 0) + Number(invoice.freight || 0) + Number(invoice.adjacent_charges || 0) - Number(invoice.discount || 0);
 
   let statusBanner = '';
   if (isPaid) statusBanner = '<div class="status-banner status-paid">✓ This invoice has been paid in full. Thank you.</div>';
@@ -262,6 +262,7 @@ function render(d) {
               <div class="row"><span>TAX</span><span>${invoice.tax_rate}%</span></div>
             ` : ''}
             ${invoice.freight ? `<div class="row"><span>Freight</span><span>${fmt(invoice.freight)}</span></div>` : ''}
+            ${invoice.adjacent_charges ? `<div class="row"><span>Other associated charges</span><span>${fmt(invoice.adjacent_charges)}</span></div>` : ''}
             ${invoice.discount ? `<div class="row"><span>Discount</span><span>-${fmt(invoice.discount)}</span></div>` : ''}
           </div>
           <div>

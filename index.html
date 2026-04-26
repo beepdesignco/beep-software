@@ -5974,6 +5974,8 @@ function dbInvoiceToS(inv) {
     subtotal: Number(inv.subtotal || 0),
     freight: Number(inv.freight || 0),
     freightTaxable: !!inv.freight_taxable,
+    adjacentCharges: Number(inv.adjacent_charges || 0),
+    adjacentChargesTaxableAmount: Number(inv.adjacent_charges_taxable_amount || 0),
     discountType: inv.discount_type || '',
     discountValue: Number(inv.discount_value || 0),
     discount: Number(inv.discount || 0),
@@ -6474,6 +6476,8 @@ function invoiceToDB(inv, studioId) {
     sent_date: inv.sentDate || null, due_date: inv.dueDate || null, notes: inv.notes || null,
     subtotal: Number(inv.subtotal || 0), freight: Number(inv.freight || 0),
     freight_taxable: !!inv.freightTaxable,
+    adjacent_charges: Number(inv.adjacentCharges || 0),
+    adjacent_charges_taxable_amount: Number(inv.adjacentChargesTaxableAmount || 0),
     discount_type: inv.discountType || null, discount_value: Number(inv.discountValue || 0),
     discount: Number(inv.discount || 0),
     cc_fee_pct: Number(inv.ccFeePct || 0), cc_fee: Number(inv.ccFee || 0),
@@ -17580,13 +17584,15 @@ function recalcStoredInvoiceTotals(inv) {
   });
   const freight = inv.freight || 0;
   if (inv.freightTaxable) taxableAmt += freight;
+  const adjacent = inv.adjacentCharges || 0;
+  taxableAmt += Math.min(inv.adjacentChargesTaxableAmount || 0, adjacent);
   const discType = inv.discountType || '';
   const discVal = inv.discountValue || 0;
   let discount = 0;
-  if (discType === 'pct') discount = (subtotal + freight) * (discVal / 100);
+  if (discType === 'pct') discount = (subtotal + freight + adjacent) * (discVal / 100);
   else if (discType === 'flat') discount = discVal;
   const tax = Math.max(0, (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate);
-  const afterDiscount = subtotal + freight - discount;
+  const afterDiscount = subtotal + freight + adjacent - discount;
   const ccPct = inv.ccFeePct || 0;
   const ccFee = ccPct > 0 ? (afterDiscount + tax) * (ccPct / 100) : 0;
   inv.subtotal = subtotal;
@@ -19260,25 +19266,40 @@ function autoSetDueDate(sentDate) {
 }
 
 function getItemNonFreightClient(item, pid) {
-  // Per-unit client price. As of U-Freight Phase 2 Part 2, freight charges
-  // (item- and component-level) live in the freight_charges table as
-  // absolute totals — none of them are baked into the per-unit price, so no
-  // subtraction is needed here. The invoice freight field captures all of
-  // them via getItemAllFreightForInvoice.
+  // Per-unit client price. Freight charges (item- and component-level) live
+  // in the freight_charges table as absolute totals — none of them are
+  // baked into the per-unit price, so no subtraction is needed here. The
+  // invoice's freight + adjacent fields capture them separately via the
+  // split helpers below.
   return getItemClient(item, pid);
 }
 
-// All freight + adjacent for an item, combined for invoice auto-fill.
-// Per Phase 2 Part 2 spec section 2.5, both buckets collapse into the
-// single inv-freight field until Phase 5 splits them on the invoice.
-function getItemAllFreightForInvoice(item, pid) {
+// Phase 5 Part 1 — split invoice freight auto-fill into two buckets.
+// Primary Freight (system Freight category) → inv.freight
+// Other associated charges (Crating, Tariffs, Handling, etc.) → inv.adjacentCharges
+// Each helper sums marked-up amounts at item + (when constructed) component scope.
+
+function getItemFreightForInvoice(item, pid) {
   if (isFreightItem(item)) {
     return getItemClient(item, pid) * (parseFloat(item.qty) || 1);
   }
-  let total = getItemFreightClient(item, pid) + getItemAdjacentChargesClient(item, pid);
-  if (item.type === 'constructed') {
-    total += getFreightFromComponents(item, pid) + getItemAdjacentChargesFromComponents(item, pid);
-  }
+  let total = getItemFreightClient(item, pid);
+  if (item.type === 'constructed') total += getFreightFromComponents(item, pid);
+  return total;
+}
+
+function getItemAdjacentForInvoice(item, pid) {
+  // Open-line freight items have no adjacent component.
+  if (isFreightItem(item)) return 0;
+  let total = getItemAdjacentChargesClient(item, pid);
+  if (item.type === 'constructed') total += getItemAdjacentChargesFromComponents(item, pid);
+  return total;
+}
+
+function getItemTaxableAdjacentForInvoice(item, pid) {
+  if (isFreightItem(item)) return 0;
+  let total = getItemTaxableAdjacentClient(item, pid);
+  if (item.type === 'constructed') total += getItemTaxableAdjacentFromComponents(item, pid);
   return total;
 }
 
@@ -19379,25 +19400,33 @@ function toggleInvItemExpand(itemId) {
   renderInvoiceBuilder();
 }
 
+// Auto-computed taxable portion of the adjacent-charges field. Frozen at
+// auto-fill time; not recomputed when the user manually overrides the
+// adjacent input (mirrors the manual-freight-override semantics).
+let _invAdjacentTaxableAmount = 0;
+
 function recalcInvFreight() {
-  // Sum freight from all selected proposal items
+  // Sum freight + adjacent from all selected proposal items.
   const pid = _currentInvoiceId ? (S.invoices||[]).find(i=>i.id===_currentInvoiceId)?.projectId : $c('inv-project')?.value;
   if (!pid) return;
   const prop = S.proposals[pid];
   if (!prop) return;
-  let totalFreight = 0;
+  let totalFreight = 0, totalAdjacent = 0, totalAdjacentTaxable = 0;
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
       if (!_invSelectedProposalItems.has(item.id)) return;
-      // Phase 2 Part 2: combine primary + adjacent + component-level into
-      // the single invoice freight field. Phase 5 splits them on the invoice.
-      totalFreight += getItemAllFreightForInvoice(item, pid);
+      totalFreight  += getItemFreightForInvoice(item, pid);
+      totalAdjacent += getItemAdjacentForInvoice(item, pid);
+      totalAdjacentTaxable += getItemTaxableAdjacentForInvoice(item, pid);
     });
   });
   const freightEl = $c('inv-freight');
-  if (freightEl) {
-    freightEl.value = totalFreight > 0 ? totalFreight.toFixed(2) : '';
-  }
+  if (freightEl) freightEl.value = totalFreight > 0 ? totalFreight.toFixed(2) : '';
+  const adjEl = $c('inv-adjacent');
+  if (adjEl) adjEl.value = totalAdjacent > 0 ? totalAdjacent.toFixed(2) : '';
+  _invAdjacentTaxableAmount = totalAdjacentTaxable;
+  const taxHelp = $c('inv-adjacent-taxable-help');
+  if (taxHelp) taxHelp.textContent = totalAdjacentTaxable > 0 ? `Taxable portion: ${fmt(totalAdjacentTaxable)}` : '';
 }
 
 function toggleAllInvItems() {
@@ -19563,20 +19592,27 @@ function recalcInvoice() {
     if (l.taxable) taxableAmt += lineTotal;
   });
 
-  // Freight
+  // Freight (primary)
   const freight = parse$($c('inv-freight').value);
   if ($c('inv-freight-taxable').checked) taxableAmt += freight;
+
+  // Adjacent (Other associated charges) — taxable portion is per-category,
+  // auto-computed at recalcInvFreight time and held in _invAdjacentTaxableAmount.
+  // Manual edits to inv-adjacent freeze the taxable portion (same semantics
+  // as today's manual freight override).
+  const adjacent = parse$($c('inv-adjacent')?.value || '');
+  taxableAmt += Math.min(_invAdjacentTaxableAmount || 0, adjacent);
 
   // Discount
   const discType = $c('inv-disc-type').value;
   const discVal = parseFloat($c('inv-disc-value').value) || 0;
   let discount = 0;
-  if (discType === 'pct') discount = (subtotal + freight) * (discVal / 100);
+  if (discType === 'pct') discount = (subtotal + freight + adjacent) * (discVal / 100);
   else if (discType === 'flat') discount = discVal;
 
   // Tax
   const tax = (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate;
-  const afterDiscount = subtotal + freight - discount;
+  const afterDiscount = subtotal + freight + adjacent - discount;
 
   // CC Fee
   const ccPct = parseFloat($c('inv-cc-fee').value) || 0;
@@ -19586,6 +19622,8 @@ function recalcInvoice() {
 
   $c('inv-subtotal').textContent = fmt(subtotal);
   $c('inv-freight-total').textContent = freight > 0 ? fmt(freight) : '$0.00';
+  const adjTotalEl = $c('inv-adjacent-total');
+  if (adjTotalEl) adjTotalEl.textContent = adjacent > 0 ? fmt(adjacent) : '$0.00';
   $c('inv-disc-total').textContent = discount > 0 ? '-' + fmt(discount) : '—';
   $c('inv-tax-label').textContent = proj?.taxRate ? `Tax (${proj.taxRate}%)` : 'Tax';
   $c('inv-tax-total').textContent = fmt(tax > 0 ? tax : 0);
@@ -19831,7 +19869,14 @@ function renderInvoiceBuilder() {
     <button class="btn btn-ghost btn-sm" onclick="addInvManualLine()" style="margin-top:6px">+ Add Line Item</button>
   </div>`;
 
-  // Freight
+  // Freight + Other associated charges. Freight has a single Taxable
+  // checkbox; adjacent's taxable portion is per-category and computed
+  // under the hood by recalcInvFreight (see the sub-line under the input).
+  const adjTaxableAuto = Number(inv.adjacentChargesTaxableAmount || 0);
+  // Initialize from the saved invoice (recalcInvFreight overwrites this
+  // when the user toggles items in/out — manual adjacent overrides keep
+  // it frozen at the last auto-fill value).
+  _invAdjacentTaxableAmount = adjTaxableAuto;
   html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div class="frow" style="align-items:flex-end">
       <div class="fg" style="flex:1">
@@ -19841,6 +19886,11 @@ function renderInvoiceBuilder() {
       <div style="padding-bottom:12px">
         <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="inv-freight-taxable" ${inv.freightTaxable?'checked':''} onchange="recalcInvoice()" style="accent-color:var(--russet);width:12px;height:12px"> Taxable</label>
       </div>
+    </div>
+    <div class="fg" style="margin-top:6px">
+      <label class="fl">Other associated charges <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(crating, tariffs, handling, etc. — taxability per source category)</span></label>
+      <input type="text" class="fi" id="inv-adjacent" value="${inv.adjacentCharges||''}" placeholder="$0.00" onchange="recalcInvoice()">
+      <div id="inv-adjacent-taxable-help" style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px">${adjTaxableAuto > 0 ? 'Taxable portion: ' + fmt(adjTaxableAuto) : ''}</div>
     </div>
   </div>`;
 
@@ -19932,6 +19982,7 @@ function renderInvoiceBuilder() {
       <div style="display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-family:var(--font-b);font-size:13px">
         <span style="color:var(--text-mid)">Subtotal</span><span id="inv-subtotal" style="text-align:right">$0.00</span>
         <span style="color:var(--text-mid)">Freight</span><span id="inv-freight-total" style="text-align:right">$0.00</span>
+        <span style="color:var(--text-mid)">Other associated charges</span><span id="inv-adjacent-total" style="text-align:right">$0.00</span>
         <span style="color:var(--text-mid)">Discount</span><span id="inv-disc-total" style="text-align:right">—</span>
         <span style="color:var(--text-mid)" id="inv-tax-label">Tax${proj?.taxRate?' ('+proj.taxRate+'%)':''}</span><span id="inv-tax-total" style="text-align:right">$0.00</span>
         <span style="color:var(--text-mid)">CC Fee</span><span id="inv-cc-total" style="text-align:right">—</span>
@@ -20472,6 +20523,7 @@ ${line}
 <tr><td style="padding:8px 36px 18px">
   <table width="100%" cellpadding="0" cellspacing="0">
     ${inv.freight ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Freight</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.freight)}</td></tr>` : ''}
+    ${inv.adjacentCharges ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Other associated charges</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.adjacentCharges)}</td></tr>` : ''}
     ${inv.discount ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Discount</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">-${fmtInner(inv.discount)}</td></tr>` : ''}
     ${inv.tax ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Tax</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.tax)}</td></tr>` : ''}
     <tr><td style="font-family:'Oswald',sans-serif;font-size:14px;color:${mahogany};text-transform:uppercase;letter-spacing:.1em;padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">Total</td>
@@ -21000,13 +21052,18 @@ function saveInvoiceFromBuilder(status, opts = {}) {
   });
   const freight = parse$($c('inv-freight')?.value||'');
   if ($c('inv-freight-taxable')?.checked) taxableAmt += freight;
+  // Adjacent (Other associated charges) — taxable portion is per-category,
+  // captured at auto-fill time in _invAdjacentTaxableAmount.
+  const adjacent = parse$($c('inv-adjacent')?.value || '');
+  const adjacentTaxable = Math.min(_invAdjacentTaxableAmount || 0, adjacent);
+  taxableAmt += adjacentTaxable;
   const discType = $c('inv-disc-type')?.value || '';
   const discVal = parseFloat($c('inv-disc-value')?.value) || 0;
   let discount = 0;
-  if (discType === 'pct') discount = (subtotal + freight) * (discVal / 100);
+  if (discType === 'pct') discount = (subtotal + freight + adjacent) * (discVal / 100);
   else if (discType === 'flat') discount = discVal;
   const tax = Math.max(0, (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate);
-  const afterDiscount = subtotal + freight - discount;
+  const afterDiscount = subtotal + freight + adjacent - discount;
   const ccPct = parseFloat($c('inv-cc-fee')?.value) || 0;
   const ccFee = ccPct > 0 ? (afterDiscount + tax) * (ccPct / 100) : 0;
   const total = afterDiscount + tax + ccFee;
@@ -21062,6 +21119,8 @@ function saveInvoiceFromBuilder(status, opts = {}) {
     status,
     lineItems: JSON.parse(JSON.stringify(linesForSave)),
     freight, freightTaxable: $c('inv-freight-taxable')?.checked || false,
+    adjacentCharges: adjacent,
+    adjacentChargesTaxableAmount: adjacentTaxable,
     discountType: discType, discountValue: discVal, discount,
     ccFeePct: ccPct, ccFee,
     taxRate: proj?.taxRate || 0,
@@ -21743,11 +21802,12 @@ async function exportInvoicePDF(invId) {
   // ── Totals block — same cell-grid as line items; no oversized accents
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
-  const subtotalGross = (inv.subtotal||0) + (inv.freight||0) - (inv.discount||0);
+  const subtotalGross = (inv.subtotal||0) + (inv.freight||0) + (inv.adjacentCharges||0) - (inv.discount||0);
 
   const totalsRows = [];
   totalsRows.push(['Subtotal', fmt(subtotalGross)]);
   if (inv.freight) totalsRows.push(['Freight', fmt(inv.freight)]);
+  if (inv.adjacentCharges) totalsRows.push(['Other associated charges', fmt(inv.adjacentCharges)]);
   if (inv.discount) totalsRows.push(['Discount', '-' + fmt(inv.discount)]);
   if (inv.tax) totalsRows.push([`Tax${inv.taxRate?' ('+inv.taxRate+'%)':''}`, fmt(inv.tax)]);
   if (inv.ccFee) totalsRows.push([`CC Fee${inv.ccFeePct?' ('+inv.ccFeePct+'%)':''}`, fmt(inv.ccFee)]);
@@ -22275,7 +22335,7 @@ function renderDashboard() {
     const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
     const total = inv.total || 0;
     const paidFrac = total > 0 ? Math.min(1, paid / total) : 0;
-    const preTax = (inv.subtotal||0) + (inv.freight||0) - (inv.discount||0);
+    const preTax = (inv.subtotal||0) + (inv.freight||0) + (inv.adjacentCharges||0) - (inv.discount||0);
     revPreTaxPaid += preTax * paidFrac;
     revPreTaxUnpaid += preTax * (1 - paidFrac);
     revPostTaxPaid += total * paidFrac;
@@ -22290,7 +22350,7 @@ function renderDashboard() {
     const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
     const total = inv.total || 0;
     const unpaidFrac = total > 0 ? Math.max(0, 1 - paid / total) : 0;
-    const preTax = (inv.subtotal||0) + (inv.freight||0) - (inv.discount||0);
+    const preTax = (inv.subtotal||0) + (inv.freight||0) + (inv.adjacentCharges||0) - (inv.discount||0);
     outstandingPreTax += preTax * unpaidFrac;
     outstandingGross += total * unpaidFrac;
     const isOverdue = inv.dueDate && new Date(inv.dueDate) < today;
@@ -22356,7 +22416,9 @@ function renderDashboard() {
     const nonTaxed = (inv.lineItems||[]).reduce((s,l) => {
       if (l.taxable) return s;
       return s + (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
-    }, 0) + ((inv.freightTaxable || !inv.freight) ? 0 : inv.freight);
+    }, 0)
+      + ((inv.freightTaxable || !inv.freight) ? 0 : inv.freight)
+      + Math.max(0, (inv.adjacentCharges || 0) - (inv.adjacentChargesTaxableAmount || 0));
     taxByState[key].nonTaxedSubtotal += nonTaxed;
   });
 
