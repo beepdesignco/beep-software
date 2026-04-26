@@ -10180,30 +10180,130 @@ function computeProjectFreightSummary(pid) {
   return { charged, actual, creditAvailable, overageToBill, deferredActuals };
 }
 
+// Filter state for the Freight tab. Persists across re-renders within
+// the same session; cleared via the "Clear filters" button. Stored at
+// module level so refresh-on-actual-change keeps the user's view intact.
+let _freightTabFilters = { space: '', itemType: '', freightStatus: '', search: '' };
+
+function onFreightFilterChange(field, value) {
+  _freightTabFilters[field] = value;
+  // Update only the content container so the filter inputs keep focus
+  // (search input would lose cursor position on every keystroke otherwise).
+  if (S.currentView === 'project-detail' && _projDetailTab === 'freight') {
+    const pid = S._detailProjectId || $c('pd-id')?.value;
+    if (pid) renderFreightTabContent(pid);
+  }
+}
+
+function clearFreightFilters() {
+  _freightTabFilters = { space: '', itemType: '', freightStatus: '', search: '' };
+  if (S.currentView === 'project-detail' && _projDetailTab === 'freight') {
+    renderProjectDetail();
+  }
+}
+
+// Build the filtered list of items shown in the Freight tab ledger.
+// Filters: space, itemType (proposal_items.item_type_id), freightStatus
+// (matches if the item has any freight_charge in that state), search
+// (substring match on item name, case-insensitive).
+function _freightTabFilteredItems(pid) {
+  const prop = S.proposals[pid];
+  const f = _freightTabFilters;
+  const search = (f.search || '').toLowerCase().trim();
+  const out = [];
+  (prop?.spaces || []).forEach(sp => {
+    if (f.space && sp.id !== f.space) return;
+    (sp.items || []).forEach(item => {
+      const charges = _faChargesForItem(item);
+      const actuals = _faActualsForItem(item.id);
+      const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0;
+      if (!hasActivity) return;
+      if (f.itemType && item.itemTypeId !== f.itemType) return;
+      if (f.freightStatus && !charges.some(c => c.state === f.freightStatus)) return;
+      if (search && !(item.name || '').toLowerCase().includes(search)) return;
+      out.push({ item, sp });
+    });
+  });
+  return out;
+}
+
+// Renders the contents of the Freight tab (summary + list) into the
+// pd-freight-content container. Called both on full tab render and
+// when filters change.
+function renderFreightTabContent(pid) {
+  const host = $c('pd-freight-content');
+  if (!host) return;
+  const filtered = _freightTabFilteredItems(pid);
+  const itemRows = filtered.map(({ item, sp }) => {
+    const ledger = computeItemFreightLedger(item, pid);
+    return ledger.rows.length ? { item, sp, ledger } : null;
+  }).filter(Boolean);
+
+  // Summary reflects whatever is currently filtered in.
+  const summary = _computeFreightSummaryFromItems(itemRows.map(r => r.item), pid);
+  const summaryHTML = renderFreightSummaryHeader(summary);
+
+  let ledgerHTML;
+  if (!itemRows.length) {
+    const filtersActive = _freightTabFilters.space || _freightTabFilters.itemType || _freightTabFilters.freightStatus || _freightTabFilters.search;
+    ledgerHTML = `<div style="background:white;border-radius:var(--rl);padding:24px;border:1px solid var(--border);text-align:center;color:var(--text-mid);font-family:var(--font-b);font-size:12px;font-style:italic">${filtersActive ? 'No items match the current filters.' : 'All items reconciled or pending.'}</div>`;
+  } else {
+    ledgerHTML = itemRows.map(r => renderFreightItemRow(r.item, r.sp, r.ledger, pid)).join('');
+  }
+
+  host.innerHTML = `
+    ${summaryHTML}
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">${ledgerHTML}</div>`;
+}
+
+// Same shape as computeProjectFreightSummary but scoped to a passed-in
+// item list (used to make summary reflect active filters).
+function _computeFreightSummaryFromItems(items, pid) {
+  const proj = getProject(pid);
+  let charged = 0, actual = 0, creditAvailable = 0, overageToBill = 0, deferredActuals = 0;
+  items.forEach(item => {
+    charged += getItemFreightClient(item, pid);
+    charged += getItemAdjacentChargesClient(item, pid);
+    if (item.type === 'constructed') {
+      charged += getFreightFromComponents(item, pid);
+      charged += getItemAdjacentChargesFromComponents(item, pid);
+    }
+    (S.freightActuals || []).forEach(a => {
+      if (a.proposalItemId === item.id) actual += parseFloat(a.amount) || 0;
+    });
+    const ledger = computeItemFreightLedger(item, pid);
+    ledger.rows.forEach(r => {
+      if (r.dominantState === 'deferred') {
+        deferredActuals += r.actualRaw;
+      } else if (r.dominantState === 'known' || r.dominantState === 'allowance') {
+        if (r.actualRaw === 0) return;
+        if (r.variance < -0.5) overageToBill += -r.variance;
+        else if (r.dominantState === 'allowance' && r.variance > 0.5) creditAvailable += r.variance;
+      }
+    });
+  });
+  return { charged, actual, creditAvailable, overageToBill, deferredActuals };
+}
+
 function renderPDFreight(proj, pid) {
-  const summary = computeProjectFreightSummary(pid);
   const prop = S.proposals[pid];
 
-  // Build per-item ledger rows. Include items that have any charges
-  // (Known/Allowance/Deferred) or any tagged actuals.
-  const itemRows = [];
-  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
-    const charges = _faChargesForItem(item);
-    const actuals = _faActualsForItem(item.id);
-    const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0;
-    if (!hasActivity) return;
-    const ledger = computeItemFreightLedger(item, pid);
-    if (!ledger.rows.length) return;
-    itemRows.push({ item, sp, ledger });
-  }));
+  // Quick check: any activity at all on this project? Show the empty
+  // state if not — filters wouldn't change that.
+  const anyActivity = (prop?.spaces || []).some(sp =>
+    (sp.items || []).some(item =>
+      _faChargesForItem(item).some(c => c.state !== 'none') ||
+      _faActualsForItem(item.id).length > 0
+    )
+  );
 
   const headerBar = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany)">Freight Ledger</div>
       <button class="btn btn-primary btn-sm" onclick="openNewFreightActual('${pid}')">+ Log freight actual</button>
     </div>`;
 
-  if (!itemRows.length && summary.charged === 0 && summary.actual === 0) {
+  if (!anyActivity) {
     return `
     <div>
       ${headerBar}
@@ -10214,16 +10314,49 @@ function renderPDFreight(proj, pid) {
     </div>`;
   }
 
-  const summaryHTML = renderFreightSummaryHeader(summary);
-  const ledgerHTML = itemRows.length
-    ? itemRows.map(r => renderFreightItemRow(r.item, r.sp, r.ledger, pid)).join('')
-    : `<div style="background:white;border-radius:var(--rl);padding:24px;border:1px solid var(--border);text-align:center;color:var(--text-mid);font-family:var(--font-b);font-size:12px;font-style:italic">All items reconciled or pending.</div>`;
+  // Build filter dropdowns from the project's data.
+  const spaces = (prop?.spaces || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const itemTypesInProject = new Set();
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    if (item.itemTypeId) itemTypesInProject.add(item.itemTypeId);
+  }));
+  const itemTypeOpts = (S.itemTypes || [])
+    .filter(t => itemTypesInProject.has(t.id))
+    .sort((a, b) => (a.sortOrder - b.sortOrder) || (a.name || '').localeCompare(b.name || ''));
+
+  const f = _freightTabFilters;
+  const filterBar = `
+    <div style="background:white;border-radius:var(--r);padding:10px 14px;border:1px solid var(--border);margin-bottom:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="text" class="fi" placeholder="Search by item name…" value="${escH(f.search || '')}"
+        oninput="onFreightFilterChange('search', this.value)"
+        style="font-size:12px;padding:6px 10px;flex:1;min-width:160px">
+      <select class="fi fsel" onchange="onFreightFilterChange('space', this.value)" style="font-size:12px;padding:6px 10px;width:auto">
+        <option value="">All spaces</option>
+        ${spaces.map(sp => `<option value="${sp.id}" ${sp.id === f.space ? 'selected' : ''}>${escH(sp.name || '(unnamed)')}</option>`).join('')}
+      </select>
+      <select class="fi fsel" onchange="onFreightFilterChange('itemType', this.value)" style="font-size:12px;padding:6px 10px;width:auto">
+        <option value="">All item types</option>
+        ${itemTypeOpts.map(t => `<option value="${t.id}" ${t.id === f.itemType ? 'selected' : ''}>${escH(t.name)}</option>`).join('')}
+      </select>
+      <select class="fi fsel" onchange="onFreightFilterChange('freightStatus', this.value)" style="font-size:12px;padding:6px 10px;width:auto">
+        <option value="">All freight statuses</option>
+        <option value="known"     ${f.freightStatus === 'known' ? 'selected' : ''}>Known</option>
+        <option value="allowance" ${f.freightStatus === 'allowance' ? 'selected' : ''}>Allowance</option>
+        <option value="deferred"  ${f.freightStatus === 'deferred' ? 'selected' : ''}>Deferred</option>
+      </select>
+      <button class="btn btn-ghost btn-sm" onclick="clearFreightFilters()" style="font-size:11px;padding:5px 10px">Clear</button>
+    </div>`;
+
+  // pd-freight-content gets re-populated by renderFreightTabContent on
+  // any filter change, leaving the filter bar's input focus intact.
+  // setTimeout defers initial population so the host div exists in DOM.
+  setTimeout(() => renderFreightTabContent(pid), 0);
 
   return `
   <div>
     ${headerBar}
-    ${summaryHTML}
-    <div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">${ledgerHTML}</div>
+    ${filterBar}
+    <div id="pd-freight-content"></div>
   </div>`;
 }
 
