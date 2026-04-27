@@ -22294,8 +22294,11 @@ function saveInvoiceFromBuilder(status, opts = {}) {
     files: [..._invFiles],
   });
 
-  // Run automations when marking as sent
-  if (status === 'sent' && prevStatus !== 'sent') {
+  // Run automations when marking as sent. Also re-run when saving an
+  // already-sent invoice so newly added expense/allocation lines pick up
+  // their status flips. The function is idempotent — already-invoiced
+  // items / allocations are no-ops.
+  if (status === 'sent') {
     processInvoiceSentAutomations(inv);
   }
 
