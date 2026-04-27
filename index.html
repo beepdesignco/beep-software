@@ -1715,6 +1715,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab"        data-settab="notes"   onclick="setSettingsTab('notes')"   style="margin-bottom:-1px">Invoice Notes</button>
         <button class="view-tab"        data-settab="categories" onclick="setSettingsTab('categories')" style="margin-bottom:-1px">Categories</button>
         <button class="view-tab"        data-settab="reminders" onclick="setSettingsTab('reminders')" style="margin-bottom:-1px">Reminders</button>
+        <button class="view-tab"        data-settab="appearance" onclick="setSettingsTab('appearance')" style="margin-bottom:-1px">Appearance</button>
       </div>
 
       <div class="contacts-body" style="padding:30px">
@@ -1886,6 +1887,13 @@ tr:hover .row-btns { opacity:1; }
             <input type="text" class="fi" id="as-freight-cat-input" placeholder="New freight category…" style="flex:1" onkeydown="if(event.key==='Enter'){addFreightCategory();event.preventDefault()}">
             <button class="btn btn-primary btn-sm" onclick="addFreightCategory()">Add</button>
           </div>
+        </div>
+
+        <div id="settab-appearance" class="settings-panel" style="display:none;max-width:980px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic;line-height:1.5">
+            Theme picker. Click a swatch to apply instantly. Saved per-device — cross-device sync coming later.
+          </div>
+          <div id="as-theme-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px"></div>
         </div>
 
         <div id="settab-reminders" class="settings-panel" style="display:none;max-width:820px">
@@ -3670,6 +3678,9 @@ async function afterSignIn() {
   AUTH.member = members[0];
   AUTH.studio = members[0].studios;
   AUTH.ready = true;
+
+  // Apply this user's saved theme (or fall back to localStorage default).
+  if (typeof applyTheme === 'function') applyTheme(getCurrentThemeId());
 
   renderAuthBadge();
 
@@ -6969,8 +6980,148 @@ const ITEM_TYPES = [
   { id:'openline',    label:'Open Line Item',    badge:'OL' },
 ];
  
+// ─── THEME PRESETS ─────────────────────────────────────────
+// 12 themes total. Each preset defines the 5 spec roles
+// (background / surface / text / accent / border). applyTheme also
+// derives values for the brand variables the existing CSS uses
+// (--mahogany / --pecan / --text-mid / --text-light / --border-mid /
+// --cloud-dark) so the rest of the app doesn't have to be refactored.
+//
+// Beep Light keeps its specific brown trio (mahogany / pecan / russet)
+// — they're its visual identity. The other 11 themes derive those from
+// text + accent.
+//
+// Status colors (#1a6e3a green, #c47a20 orange, etc.) stay theme-
+// independent — they're semantic, managed via S.statusColors.
+
+const THEMES = [
+  // ── Brand ──
+  { id: 'beep_light',  name: 'Beep Light',  group: 'brand',
+    background: '#F3E8D6', surface: '#FFFFFF', text: '#2A1008', accent: '#963D27', border: 'rgba(91,45,34,0.14)',
+    // Beep keeps its full brown trio explicitly:
+    brand: { mahogany: '#3F151C', pecan: '#5B2D22', textMid: '#7A4535', textLight: 'rgba(91,45,34,0.45)', borderMid: 'rgba(91,45,34,0.22)', cloudDark: '#E6D5BF' } },
+  { id: 'beep_dark',   name: 'Beep Dark',   group: 'brand',
+    background: '#1F100A', surface: '#2A1810', text: '#F3E8D6', accent: '#C97A45', border: 'rgba(243,232,214,0.16)',
+    brand: { mahogany: '#F5DCC2', pecan: '#E0B58A', textMid: 'rgba(243,232,214,0.70)', textLight: 'rgba(243,232,214,0.40)', borderMid: 'rgba(243,232,214,0.28)', cloudDark: '#3A1F14' } },
+  // ── Light presets ──
+  { id: 'atelier',     name: 'Atelier Cream', group: 'light',
+    background: '#FAF7F2', surface: '#FFFFFF', text: '#1A1A18', accent: '#2A2A26', border: '#E8E3DA' },
+  { id: 'linen',       name: 'Linen', group: 'light',
+    background: '#F1EEE7', surface: '#FAF9F4', text: '#2D2C26', accent: '#6B7556', border: '#DDD8CC' },
+  { id: 'paper',       name: 'Paper', group: 'light',
+    background: '#FBFBF8', surface: '#FFFFFF', text: '#0A0A0A', accent: '#C8392E', border: '#E5E5E0' },
+  { id: 'porcelain',   name: 'Porcelain', group: 'light',
+    background: '#F6F9FC', surface: '#FFFFFF', text: '#102032', accent: '#4A8FD4', border: '#E1E8EF' },
+  { id: 'aubergine',   name: 'Aubergine', group: 'light',
+    background: '#FCFAFB', surface: '#FFFFFF', text: '#2C1A2E', accent: '#6B3D5C', border: '#EDE6E8' },
+  { id: 'sellier',     name: 'Sellier', group: 'light',
+    background: '#F4ECDB', surface: '#FCF8EE', text: '#2C1A10', accent: '#E86A1B', border: '#DDD0B0' },
+  { id: 'meadow',      name: 'Meadow', group: 'light',
+    background: '#C3A55C', surface: '#BCD382', text: '#522000', accent: '#ABF5ED',
+    // Spec: 4-color theme — border derived from text at 18%.
+    border: 'rgba(82,32,0,0.18)' },
+  // ── Dark presets ──
+  { id: 'graphite',    name: 'Graphite', group: 'dark',
+    background: '#1A1916', surface: '#25231E', text: '#EDE8DC', accent: '#C9A96A', border: '#34322B' },
+  { id: 'slate',       name: 'Slate', group: 'dark',
+    background: '#181E25', surface: '#232B34', text: '#DDE5EC', accent: '#5BA8A0', border: '#2D3640' },
+  { id: 'ink',         name: 'Ink', group: 'dark',
+    background: '#0E0E0E', surface: '#1B1B1B', text: '#F5F4F0', accent: '#DC4F47', border: '#2A2A2A' },
+];
+const DEFAULT_THEME_ID = 'beep_light';
+
+// Convert a hex color to "r,g,b" string for use in rgba(...). Supports
+// 3- and 6-digit hex; passes rgba() values through unchanged.
+function _themeHexToRgb(hex) {
+  if (!hex) return '0,0,0';
+  if (hex.startsWith('rgba') || hex.startsWith('rgb')) {
+    const m = hex.match(/rgba?\(([^)]+)\)/);
+    if (m) return m[1].split(',').slice(0, 3).map(s => s.trim()).join(',');
+  }
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+
+// Apply a theme by setting all the relevant CSS custom properties on
+// :root. Keeps the existing brand variable names so the app's CSS
+// (which references --mahogany / --pecan / --text-mid etc. throughout)
+// keeps working without a refactor.
+function applyTheme(themeId) {
+  const t = THEMES.find(x => x.id === themeId) || THEMES.find(x => x.id === DEFAULT_THEME_ID);
+  if (!t) return;
+  const r = document.documentElement;
+  // Spec roles
+  r.style.setProperty('--background', t.background);
+  r.style.setProperty('--surface',    t.surface);
+  r.style.setProperty('--text',       t.text);
+  r.style.setProperty('--accent',     t.accent);
+  r.style.setProperty('--border',     t.border);
+  // Map to existing brand vars.
+  // Beep themes carry an explicit `brand` block; other themes derive.
+  const textRgb = _themeHexToRgb(t.text);
+  const brand = t.brand || {
+    mahogany:   t.text,
+    pecan:      t.accent,
+    textMid:    `rgba(${textRgb},0.65)`,
+    textLight:  `rgba(${textRgb},0.42)`,
+    borderMid:  `rgba(${textRgb},0.22)`,
+    cloudDark:  t.surface, // good-enough hover bg fallback
+  };
+  r.style.setProperty('--cloud',       t.background);
+  r.style.setProperty('--white',       t.surface);
+  r.style.setProperty('--text-dark',   t.text);
+  r.style.setProperty('--russet',      t.accent);
+  r.style.setProperty('--mahogany',    brand.mahogany);
+  r.style.setProperty('--pecan',       brand.pecan);
+  r.style.setProperty('--text-mid',    brand.textMid);
+  r.style.setProperty('--text-light',  brand.textLight);
+  r.style.setProperty('--border',      t.border);
+  r.style.setProperty('--border-mid',  brand.borderMid);
+  r.style.setProperty('--cloud-dark',  brand.cloudDark);
+  // Persist locally for instant load on next visit (pre-auth bootstrap).
+  try { localStorage.setItem('beep_theme', t.id); } catch (_e) {}
+  // Persist per-user to studio_members.preferences.theme so it follows
+  // the user across devices. Best-effort; localStorage is the fallback.
+  saveUserThemePreference(t.id);
+  // Mark active swatch in the picker if it's open
+  document.querySelectorAll('[data-theme-swatch]').forEach(el => {
+    el.classList.toggle('theme-swatch-active', el.dataset.themeSwatch === t.id);
+  });
+}
+
+function getCurrentThemeId() {
+  // Prefer the per-user value loaded from studio_members.preferences.
+  // Fall back to localStorage for the pre-auth bootstrap paint.
+  const fromMember = (typeof AUTH !== 'undefined' && AUTH?.member?.preferences?.theme) || null;
+  if (fromMember) return fromMember;
+  try { return localStorage.getItem('beep_theme') || DEFAULT_THEME_ID; }
+  catch (_e) { return DEFAULT_THEME_ID; }
+}
+
+async function saveUserThemePreference(themeId) {
+  if (typeof AUTH === 'undefined' || !AUTH?.member?.id || !AUTH?.user?.id) return;
+  if (AUTH.member.preferences?.theme === themeId) return;
+  const next = { ...(AUTH.member.preferences || {}), theme: themeId };
+  AUTH.member.preferences = next;
+  try {
+    const { error } = await sb
+      .from('studio_members')
+      .update({ preferences: next })
+      .eq('id', AUTH.member.id);
+    if (error) console.warn('[BEEP theme] save failed:', error.message);
+  } catch (e) {
+    console.warn('[BEEP theme] save threw:', e);
+  }
+}
+
+// Apply on script load so the theme is in place before first paint.
+// (Safe: only touches CSS variables, no DOM lookup beyond :root.)
+applyTheme(getCurrentThemeId());
+
 // ─── STATE ────────────────────────────────────────────────
- 
+
 const CATEGORIES = [
   'Fabric & Upholstery','Lighting','Wall Treatments','Flooring',
   'Window Treatments','Tile','Furniture','Countertops & Millwork',
@@ -15856,6 +16007,44 @@ function setSettingsTab(tab) {
   if (tab === 'notes')  renderInvoiceNotesList();
   if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); renderFreightCategoriesList(); }
   if (tab === 'reminders') renderRemindersPanel();
+  if (tab === 'appearance') renderAppearanceSettings();
+}
+
+function renderAppearanceSettings() {
+  const grid = $c('as-theme-grid');
+  if (!grid) return;
+  const current = getCurrentThemeId();
+  const groupLabel = { brand: 'Beep Brand', light: 'Light', dark: 'Dark' };
+  const order = ['brand', 'light', 'dark'];
+  const grouped = {};
+  THEMES.forEach(t => { (grouped[t.group] = grouped[t.group] || []).push(t); });
+
+  grid.innerHTML = order.filter(g => grouped[g]).map(g => `
+    <div style="grid-column:1/-1;font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:6px 0 -4px">${groupLabel[g]}</div>
+    ${grouped[g].map(t => {
+      const active = t.id === current;
+      return `
+      <button data-theme-swatch="${t.id}" onclick="applyTheme('${t.id}')"
+        class="${active ? 'theme-swatch-active' : ''}"
+        style="text-align:left;padding:0;background:${t.surface};border:2px solid ${active ? 'var(--russet)' : t.border};border-radius:var(--rl);cursor:pointer;overflow:hidden;font-family:var(--font-b);transition:transform .12s ease, box-shadow .12s ease"
+        onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 14px rgba(0,0,0,0.08)'"
+        onmouseleave="this.style.transform='';this.style.boxShadow=''">
+        <div style="height:84px;background:${t.background};position:relative;border-bottom:1px solid ${t.border}">
+          <div style="position:absolute;left:12px;top:12px;right:12px;bottom:12px;background:${t.surface};border:1px solid ${t.border};border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;justify-content:space-between">
+            <div style="height:6px;width:60%;background:${t.text};opacity:.85;border-radius:2px"></div>
+            <div style="display:flex;gap:4px;align-items:center">
+              <div style="height:14px;width:36px;background:${t.accent};border-radius:3px"></div>
+              <div style="height:6px;flex:1;background:${t.text};opacity:.25;border-radius:2px"></div>
+            </div>
+          </div>
+        </div>
+        <div style="padding:10px 12px;display:flex;justify-content:space-between;align-items:center;background:${t.surface};color:${t.text}">
+          <span style="font-family:var(--font-h);font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase">${escH(t.name)}</span>
+          ${active ? '<span style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--russet);font-weight:700">Active</span>' : ''}
+        </div>
+      </button>`;
+    }).join('')}
+  `).join('');
 }
 
 // ── Reminders settings ──
