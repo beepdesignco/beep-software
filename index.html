@@ -3035,11 +3035,26 @@ tr:hover .row-btns { opacity:1; }
       <label class="fl">Project</label>
       <select class="fi fsel" id="exp-project" onchange="onExpProjectChange()"><!-- populated by JS --></select>
     </div>
-    <div class="fg">
+    <div class="fg" id="exp-tag-single-wrap">
       <label class="fl">Tag to item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — links this expense to a specific proposal item for cost-tracking)</span></label>
       <select class="fi fsel" id="exp-proposal-item" disabled>
         <option value="">— Pick a project first —</option>
       </select>
+    </div>
+    <div style="display:flex;gap:16px;padding:4px 0">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="exp-split-toggle" onchange="onExpSplitToggle()" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        Split across multiple items
+      </label>
+    </div>
+    <div class="fg" id="exp-split-wrap" style="display:none">
+      <label class="fl">Allocations <span id="exp-split-sum-label" style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— sum must equal Net Cost</span></label>
+      <div id="exp-split-rows" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <button class="btn btn-ghost btn-sm" onclick="addExpAllocationRow()" style="font-size:11px">+ Add Item</button>
+        <button class="btn btn-ghost btn-sm" onclick="splitExpEvenly()" style="font-size:11px">Split Evenly</button>
+        <span id="exp-split-sum" style="margin-left:auto;font-family:var(--font-b);font-size:11px;color:var(--text-mid)"></span>
+      </div>
     </div>
     <div class="fg">
       <label class="fl">Expense Name</label>
@@ -5594,7 +5609,7 @@ async function loadFromSupabase() {
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
     itemTypesRes, posRes, submittalsRes,
     freightCategoriesRes, freightChargesRes, freightActualsRes, freightSettlementsRes,
-    estimatesRes,
+    estimatesRes, expenseAllocationsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -5615,9 +5630,10 @@ async function loadFromSupabase() {
     sb.from('freight_actuals').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_settlements').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('estimates').select('*').eq('studio_id', studioId).is('deleted_at', null).order('created_at'),
+    sb.from('expense_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -5641,6 +5657,15 @@ async function loadFromSupabase() {
   S.projects       = projects.map(dbProjectToS);
   S.invoices       = (invoicesRes.data       || []).map(dbInvoiceToS);
   S.expenses       = (expensesRes.data       || []).map(dbExpenseToS);
+  // Fold expense_allocations onto each expense as `expense.allocations[]`.
+  // PM rollup + invoice picker prefer allocations when present; fall back
+  // to the legacy expense.proposalItemId single-FK when allocations is empty.
+  const _allocsByExpense = {};
+  (expenseAllocationsRes.data || []).forEach(r => {
+    const a = dbExpenseAllocationToS(r);
+    (_allocsByExpense[a.expenseId] = _allocsByExpense[a.expenseId] || []).push(a);
+  });
+  S.expenses.forEach(e => { e.allocations = _allocsByExpense[e.id] || []; });
   S.documents      = (documentsRes.data      || []).map(dbDocumentToS);
   S.timeEntries    = (timeRes.data           || []).map(dbTimeToS);
   S.vendors        = (vendorsRes.data        || []).map(dbVendorToS);
@@ -5989,6 +6014,21 @@ function dbFreightSettlementToS(r) {
   };
 }
 
+function dbExpenseAllocationToS(r) {
+  return {
+    id: r.id,
+    expenseId: r.expense_id,
+    proposalItemId: r.proposal_item_id || null,
+    amount: r.amount != null ? Number(r.amount) : 0,
+    notes: r.notes || '',
+    status: r.status || 'draft',                 // 'draft' | 'invoiced' | 'resolved'
+    invoiceLineItemId: r.invoice_line_item_id || null,
+    resolvedAt: r.resolved_at || null,
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+
 function dbEstimateToS(r) {
   // Estimates store the entire snapshot in `snapshot` jsonb. Spread it
   // first, then overlay the columns the DB owns (id/status/dates/etc.)
@@ -6302,6 +6342,7 @@ const _sbShadow = {
   freightActuals: new Map(),
   freightSettlements: new Map(),
   estimates: new Map(),
+  expenseAllocations: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -6326,6 +6367,9 @@ function captureSbShadow() {
   _sbShadow.freightCharges    = new Map((S.freightCharges    || []).map(c => [c.id, snap(c)]));
   _sbShadow.freightActuals    = new Map((S.freightActuals    || []).map(r => [r.id, snap(r)]));
   _sbShadow.freightSettlements = new Map((S.freightSettlements || []).map(r => [r.id, snap(r)]));
+  _sbShadow.expenseAllocations = new Map();
+  (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
+    _sbShadow.expenseAllocations.set(a.id, { ...snap(a), _expenseId: e.id })));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
   _sbShadow.submittalSigners = new Map();
@@ -6483,6 +6527,21 @@ function freightSettlementToDB(r, studioId) {
     deleted_at: null,
   };
 }
+function expenseAllocationToDB(a, studioId) {
+  return {
+    id: a.id,
+    studio_id: studioId,
+    expense_id: a.expenseId,
+    proposal_item_id: a.proposalItemId || null,
+    amount: Number(a.amount || 0),
+    notes: a.notes || null,
+    status: a.status || 'draft',
+    invoice_line_item_id: a.invoiceLineItemId || null,
+    resolved_at: a.resolvedAt || null,
+    deleted_at: null,
+  };
+}
+
 function estimateToDB(e, studioId) {
   // The full snapshot lives in `snapshot` jsonb. The structured columns
   // (freight/hours/etc.) are kept for potential reporting but the JS
@@ -6811,10 +6870,16 @@ async function syncToSupabase() {
       documentVersions: new Map(),
       spaces: new Map(), items: new Map(), components: new Map(),
       estimates: new Map(),
+      expenseAllocations: new Map(),
     };
     (S.invoices || []).forEach(inv => {
       (inv.lineItems || []).forEach((l, i) => current.invoiceLineItems.set(l.id, { ...l, _invoiceId: inv.id, _sortOrder: i }));
       (inv.payments  || []).forEach(p   => current.invoicePayments.set(p.id, { ...p, _invoiceId: inv.id }));
+    });
+    (S.expenses || []).forEach(e => {
+      (e.allocations || []).forEach(a => {
+        current.expenseAllocations.set(a.id, { ...a, expenseId: a.expenseId || e.id });
+      });
     });
     (S.documents || []).forEach(d => {
       (d.versions || []).forEach(v => current.documentVersions.set(v.id, { ...v, _documentId: d.id }));
@@ -6896,6 +6961,8 @@ async function syncToSupabase() {
     await syncSafe('invoices',  current.invoices, _sbShadow.invoices, i => invoiceToDB(i, studioId));
     await syncSafe('invoice_line_items', current.invoiceLineItems, _sbShadow.invoiceLineItems, l => invLineItemToDB(l), { softDelete: false });
     await syncSafe('invoice_payments',   current.invoicePayments,  _sbShadow.invoicePayments,  p => invPaymentToDB(p),  { softDelete: false });
+    // expense_allocations after expenses + invoice_line_items so both FK targets exist.
+    await syncSafe('expense_allocations', current.expenseAllocations, _sbShadow.expenseAllocations, a => expenseAllocationToDB(a, studioId));
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     await syncSafe('documents', current.documents, _sbShadow.documents, d => documentToDB(d, studioId));
@@ -7549,17 +7616,30 @@ function calcComponentActualCost(comp) {
 // Item-level "additional expenses" now sources from S.expenses tagged to
 // the item via proposal_item_id (not the legacy additional_costs jsonb).
 // Lets the same dollars feed both the item rollup and project P&L.
+//
+// Allocation-aware: if an expense has explicit allocations, sum the slice
+// targeting this item. Else fall back to the legacy single-FK shape
+// (whole expense.cost belongs to the one item it points at).
 function _sumTaggedExpensesForItem(itemId) {
   if (!itemId) return 0;
-  return (S.expenses || [])
-    .filter(e => e.proposalItemId === itemId)
-    .reduce((s, e) => s + (parse$(e.cost) || 0), 0);
+  return (S.expenses || []).reduce((s, e) => {
+    const allocs = e.allocations || [];
+    if (allocs.length) {
+      return s + allocs.filter(a => a.proposalItemId === itemId)
+                       .reduce((n, a) => n + (parse$(a.amount) || 0), 0);
+    }
+    return e.proposalItemId === itemId ? s + (parse$(e.cost) || 0) : s;
+  }, 0);
 }
 
 function _taggedExpensesForItem(itemId) {
   if (!itemId) return [];
   return (S.expenses || [])
-    .filter(e => e.proposalItemId === itemId)
+    .filter(e => {
+      const allocs = e.allocations || [];
+      if (allocs.length) return allocs.some(a => a.proposalItemId === itemId);
+      return e.proposalItemId === itemId;
+    })
     .slice()
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 }
@@ -18357,6 +18437,12 @@ function openNewExpenseModal() {
     (S.paymentCards||[]).map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join('');
   refreshExpenseItemDropdown();
 
+  // Reset split UI to single-item mode
+  _expAllocDraft = [];
+  $c('exp-split-toggle').checked = false;
+  $c('exp-split-wrap').style.display = 'none';
+  $c('exp-tag-single-wrap').style.display = '';
+
   renderExpenseInvoiceBanner(null);
   setExpenseFormEnabled(true);
   const delBtn = $c('exp-delete-btn');
@@ -18405,6 +18491,82 @@ function onExpProjectChange() {
   const sel = $c('exp-proposal-item');
   if (sel) sel.value = '';
   refreshExpenseItemDropdown();
+  // Allocations also reset — they reference items in the prior project.
+  _expAllocDraft = [];
+  $c('exp-split-toggle').checked = false;
+  onExpSplitToggle();
+}
+
+// ── Expense allocations (split across items) ──
+let _expAllocDraft = []; // [{ id, proposalItemId, amount }]
+
+function onExpSplitToggle() {
+  const on = $c('exp-split-toggle').checked;
+  $c('exp-split-wrap').style.display = on ? '' : 'none';
+  $c('exp-tag-single-wrap').style.display = on ? 'none' : '';
+  if (on) {
+    if (!_expAllocDraft.length) {
+      // Seed with one row using the existing single-item tag if set, plus
+      // a second blank so it's obvious a split needs at least two items.
+      const seedItemId = $c('exp-proposal-item')?.value || '';
+      const cost = parse$($c('exp-cost').value) || 0;
+      _expAllocDraft = [
+        { id: uid(), proposalItemId: seedItemId, amount: cost },
+        { id: uid(), proposalItemId: '', amount: 0 },
+      ];
+    }
+    renderExpAllocRows();
+  }
+}
+
+function renderExpAllocRows() {
+  const pid = $c('exp-project').value;
+  const prop = pid ? S.proposals[pid] : null;
+  const items = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+    items.push({ id: it.id, label: `${sp.name || 'Space'} · ${it.name || '(unnamed)'}` });
+  }));
+  const optionsHtml = '<option value="">— Pick item —</option>' +
+    items.map(i => `<option value="${i.id}">${escH(i.label)}</option>`).join('');
+
+  const wrap = $c('exp-split-rows');
+  if (!wrap) return;
+  wrap.innerHTML = _expAllocDraft.map((a, i) => `
+    <div style="display:flex;gap:8px;align-items:center">
+      <select class="fi fsel" style="flex:1;font-size:12px;padding:5px 8px" onchange="_setAllocItem(${i}, this.value)">${optionsHtml.replace(`value="${a.proposalItemId}"`, `value="${a.proposalItemId}" selected`)}</select>
+      <input type="text" class="fi" style="width:110px;font-size:12px;padding:5px 8px;text-align:right" value="${a.amount || ''}" placeholder="$0.00" oninput="_setAllocAmount(${i}, this.value)">
+      <button class="btn btn-ghost btn-sm" onclick="_removeAllocRow(${i})" style="font-size:11px;color:#b94a3a;padding:2px 8px">✕</button>
+    </div>`).join('');
+  updateExpSplitSum();
+}
+
+function _setAllocItem(i, value) { _expAllocDraft[i].proposalItemId = value || null; updateExpSplitSum(); }
+function _setAllocAmount(i, value) { _expAllocDraft[i].amount = parse$(value); updateExpSplitSum(); }
+function _removeAllocRow(i) { _expAllocDraft.splice(i, 1); renderExpAllocRows(); }
+function addExpAllocationRow() { _expAllocDraft.push({ id: uid(), proposalItemId: '', amount: 0 }); renderExpAllocRows(); }
+function splitExpEvenly() {
+  if (!_expAllocDraft.length) return;
+  const cost = parse$($c('exp-cost').value) || 0;
+  const each = Math.round((cost / _expAllocDraft.length) * 100) / 100;
+  // Distribute remainder onto the last row so the sum matches exactly.
+  const total = each * _expAllocDraft.length;
+  const remainder = Math.round((cost - total) * 100) / 100;
+  _expAllocDraft.forEach((a, i) => { a.amount = each + (i === _expAllocDraft.length - 1 ? remainder : 0); });
+  renderExpAllocRows();
+}
+function updateExpSplitSum() {
+  const cost = parse$($c('exp-cost').value) || 0;
+  const sum = _expAllocDraft.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const diff = Math.round((cost - sum) * 100) / 100;
+  const lbl = $c('exp-split-sum');
+  if (!lbl) return;
+  if (Math.abs(diff) < 0.005) {
+    lbl.style.color = 'var(--text-mid)';
+    lbl.textContent = `Sum: ${fmt(sum)} ✓`;
+  } else {
+    lbl.style.color = '#b94a3a';
+    lbl.textContent = `Sum: ${fmt(sum)} · off by ${fmt(diff)}`;
+  }
 }
 
 function deleteExpenseFromModal() {
@@ -18443,6 +18605,21 @@ function openEditExpense(expId) {
   refreshExpenseItemDropdown();
   const itemSel = $c('exp-proposal-item');
   if (itemSel) itemSel.value = exp.proposalItemId || '';
+
+  // Hydrate the split UI from existing allocations (if any)
+  const allocs = exp.allocations || [];
+  if (allocs.length) {
+    _expAllocDraft = allocs.map(a => ({ id: a.id, proposalItemId: a.proposalItemId || '', amount: a.amount }));
+    $c('exp-split-toggle').checked = true;
+    $c('exp-split-wrap').style.display = '';
+    $c('exp-tag-single-wrap').style.display = 'none';
+    renderExpAllocRows();
+  } else {
+    _expAllocDraft = [];
+    $c('exp-split-toggle').checked = false;
+    $c('exp-split-wrap').style.display = 'none';
+    $c('exp-tag-single-wrap').style.display = '';
+  }
 
   renderExpReceiptPreview();
   renderExpenseInvoiceBanner(exp);
@@ -18513,10 +18690,40 @@ async function saveExpense() {
     return;
   }
 
+  // Build allocations from the split UI if enabled. Validate sum matches cost.
+  const splitOn = $c('exp-split-toggle')?.checked;
+  let allocations = [];
+  if (splitOn) {
+    const cost = parse$($c('exp-cost').value);
+    const validRows = _expAllocDraft.filter(a => a.proposalItemId && Number(a.amount) > 0);
+    if (validRows.length < 2) { toast('Split needs at least 2 items with amounts.'); return; }
+    const sum = validRows.reduce((s, a) => s + Number(a.amount), 0);
+    if (Math.abs(sum - cost) > 0.005) {
+      toast(`Allocations sum to ${fmt(sum)} but Net Cost is ${fmt(cost)}.`);
+      return;
+    }
+    // Preserve allocation ids from the prior save where possible (so status /
+    // invoice_line_item_id linkage isn't broken on a re-save).
+    const prevById = new Map((prev?.allocations || []).map(a => [a.id, a]));
+    allocations = validRows.map(a => {
+      const pa = prevById.get(a.id);
+      return {
+        id: a.id,
+        expenseId: expId,
+        proposalItemId: a.proposalItemId,
+        amount: Number(a.amount),
+        notes: '',
+        status: pa?.status || 'draft',
+        invoiceLineItemId: pa?.invoiceLineItemId || null,
+        resolvedAt: pa?.resolvedAt || null,
+      };
+    });
+  }
+
   const expense = {
     id: expId,
     projectId: pid,
-    proposalItemId: $c('exp-proposal-item')?.value || null,
+    proposalItemId: splitOn ? null : ($c('exp-proposal-item')?.value || null),
     name,
     cost: $c('exp-cost').value.trim(),
     date: $c('exp-date').value,
@@ -18528,6 +18735,7 @@ async function saveExpense() {
     receipt: receiptRecord,
     resolved: false,
     created: new Date().toISOString(),
+    allocations,
   };
 
   if (prev) {
