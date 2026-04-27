@@ -3035,27 +3035,6 @@ tr:hover .row-btns { opacity:1; }
       <label class="fl">Project</label>
       <select class="fi fsel" id="exp-project" onchange="onExpProjectChange()"><!-- populated by JS --></select>
     </div>
-    <div class="fg" id="exp-tag-single-wrap">
-      <label class="fl">Tag to item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — links this expense to a specific proposal item for cost-tracking)</span></label>
-      <select class="fi fsel" id="exp-proposal-item" disabled>
-        <option value="">— Pick a project first —</option>
-      </select>
-    </div>
-    <div style="display:flex;gap:16px;padding:4px 0">
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-        <input type="checkbox" id="exp-split-toggle" onchange="onExpSplitToggle()" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
-        Split across multiple items
-      </label>
-    </div>
-    <div class="fg" id="exp-split-wrap" style="display:none">
-      <label class="fl">Allocations <span id="exp-split-sum-label" style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— sum must equal Net Cost</span></label>
-      <div id="exp-split-rows" style="display:flex;flex-direction:column;gap:6px"></div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-        <button class="btn btn-ghost btn-sm" onclick="addExpAllocationRow()" style="font-size:11px">+ Add Item</button>
-        <button class="btn btn-ghost btn-sm" onclick="splitExpEvenly()" style="font-size:11px">Split Evenly</button>
-        <span id="exp-split-sum" style="margin-left:auto;font-family:var(--font-b);font-size:11px;color:var(--text-mid)"></span>
-      </div>
-    </div>
     <div class="fg">
       <label class="fl">Expense Name</label>
       <input type="text" class="fi" id="exp-name" placeholder="e.g. Table from Magazine St. Antiques">
@@ -3063,11 +3042,32 @@ tr:hover .row-btns { opacity:1; }
     <div class="frow">
       <div class="fg">
         <label class="fl">Net Cost</label>
-        <input type="text" class="fi" id="exp-cost" placeholder="$0.00">
+        <input type="text" class="fi" id="exp-cost" placeholder="$0.00" oninput="updateExpSplitSum()">
       </div>
       <div class="fg">
         <label class="fl">Date</label>
         <input type="date" class="fi" id="exp-date">
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;padding:2px 0 8px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="exp-split-toggle" onchange="onExpSplitToggle()" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        Split across multiple items
+      </label>
+      <button class="btn btn-ghost btn-sm" id="exp-split-evenly-btn" onclick="splitExpEvenly()" style="font-size:11px;display:none">Split Evenly</button>
+      <span id="exp-split-sum" style="margin-left:auto;font-family:var(--font-b);font-size:11px;color:var(--text-mid)"></span>
+    </div>
+    <div class="fg" id="exp-tag-single-wrap">
+      <label class="fl">Tag to item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — links this expense to a specific proposal item for cost-tracking)</span></label>
+      <select class="fi fsel" id="exp-proposal-item" disabled>
+        <option value="">— Pick a project first —</option>
+      </select>
+    </div>
+    <div class="fg" id="exp-split-wrap" style="display:none">
+      <label class="fl">Allocations <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— sum must equal Net Cost</span></label>
+      <div id="exp-split-rows" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="margin-top:8px">
+        <button class="btn btn-ghost btn-sm" onclick="addExpAllocationRow()" style="font-size:11px">+ Add Item</button>
       </div>
     </div>
     <div class="frow">
@@ -18442,6 +18442,8 @@ function openNewExpenseModal() {
   $c('exp-split-toggle').checked = false;
   $c('exp-split-wrap').style.display = 'none';
   $c('exp-tag-single-wrap').style.display = '';
+  if ($c('exp-split-evenly-btn')) $c('exp-split-evenly-btn').style.display = 'none';
+  if ($c('exp-split-sum'))        $c('exp-split-sum').textContent = '';
 
   renderExpenseInvoiceBanner(null);
   setExpenseFormEnabled(true);
@@ -18504,6 +18506,10 @@ function onExpSplitToggle() {
   const on = $c('exp-split-toggle').checked;
   $c('exp-split-wrap').style.display = on ? '' : 'none';
   $c('exp-tag-single-wrap').style.display = on ? 'none' : '';
+  const evBtn = $c('exp-split-evenly-btn');
+  if (evBtn) evBtn.style.display = on ? '' : 'none';
+  const sumLbl = $c('exp-split-sum');
+  if (sumLbl) sumLbl.textContent = on ? sumLbl.textContent : '';
   if (on) {
     if (!_expAllocDraft.length) {
       // Seed with one row using the existing single-item tag if set, plus
@@ -18613,12 +18619,15 @@ function openEditExpense(expId) {
     $c('exp-split-toggle').checked = true;
     $c('exp-split-wrap').style.display = '';
     $c('exp-tag-single-wrap').style.display = 'none';
+    if ($c('exp-split-evenly-btn')) $c('exp-split-evenly-btn').style.display = '';
     renderExpAllocRows();
   } else {
     _expAllocDraft = [];
     $c('exp-split-toggle').checked = false;
     $c('exp-split-wrap').style.display = 'none';
     $c('exp-tag-single-wrap').style.display = '';
+    if ($c('exp-split-evenly-btn')) $c('exp-split-evenly-btn').style.display = 'none';
+    if ($c('exp-split-sum'))        $c('exp-split-sum').textContent = '';
   }
 
   renderExpReceiptPreview();
