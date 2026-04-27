@@ -3190,6 +3190,46 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ FREIGHT RECONCILIATION MODAL ═════════════════ -->
+<!-- U-Freight Phase 5 Part 2. Single modal, three modes:
+       credit    — apply project credit as a negative invoice line
+       overage   — bill outstanding overage as a positive invoice line
+       deferred  — bill unbilled deferred actuals (with item picker)
+     Confirms create both an invoice line AND a freight_settlements row
+     so the project net stops counting that amount. -->
+<div class="overlay" id="modal-freight-recon">
+  <div class="modal" style="width:520px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-freight-recon')">✕</button>
+    <div class="modal-title" id="frecon-title">Freight Reconciliation</div>
+    <div id="frecon-summary" style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;line-height:1.5"></div>
+
+    <!-- Deferred mode: per-item picker. Hidden in credit/overage modes. -->
+    <div id="frecon-deferred-picker" style="display:none;margin-bottom:14px"></div>
+
+    <!-- Credit/overage mode: single editable amount. Hidden in deferred mode. -->
+    <div id="frecon-amount-row" class="fg" style="display:none">
+      <label class="fl">Amount</label>
+      <input type="text" class="fi" id="frecon-amount" placeholder="$0.00" oninput="renderFreightReconPreview()">
+    </div>
+
+    <div class="fg" style="background:rgba(91,45,34,0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="frecon-taxable" style="accent-color:var(--russet);width:14px;height:14px" onchange="renderFreightReconPreview()">
+        <span id="frecon-taxable-label">Apply tax to this line</span>
+      </label>
+      <div id="frecon-taxable-help" style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin-top:4px;line-height:1.4"></div>
+    </div>
+
+    <div id="frecon-preview" style="background:rgba(45,90,138,0.04);border:1px solid rgba(45,90,138,0.20);border-radius:var(--r);padding:8px 12px;margin-top:8px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.5"></div>
+
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-freight-recon')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmFreightReconciliation()">Add to invoice</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ INVITE MEMBER MODAL ═════════════════ -->
 <div class="overlay" id="modal-invite-member">
   <div class="modal" style="width:480px">
@@ -5547,7 +5587,7 @@ async function loadFromSupabase() {
     invoicesRes, expensesRes, documentsRes, timeRes,
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
     itemTypesRes, posRes, submittalsRes,
-    freightCategoriesRes, freightChargesRes, freightActualsRes,
+    freightCategoriesRes, freightChargesRes, freightActualsRes, freightSettlementsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -5566,9 +5606,10 @@ async function loadFromSupabase() {
     sb.from('freight_categories').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_charges').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_actuals').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('freight_settlements').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -5609,6 +5650,7 @@ async function loadFromSupabase() {
                         .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
   S.freightCharges    = (freightChargesRes.data    || []).map(dbFreightChargeToS);
   S.freightActuals    = (freightActualsRes.data    || []).map(dbFreightActualToS);
+  S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -5913,6 +5955,22 @@ function dbFreightActualToS(r) {
   };
 }
 
+// Records every freight credit applied / overage billed / deferred billed
+// against an invoice. Used by computeProjectFreightSummary to subtract
+// already-settled amounts so the project net doesn't double-count.
+function dbFreightSettlementToS(r) {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    invoiceId: r.invoice_id,
+    type: r.type,                     // 'credit_applied' | 'overage_billed' | 'deferred_billed'
+    amount: r.amount != null ? Number(r.amount) : 0,
+    notes: r.notes || '',
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+
 function dbVendorContactToS(c) {
   return {
     id: c.id,
@@ -6200,6 +6258,7 @@ const _sbShadow = {
   freightCategories: new Map(),
   freightCharges: new Map(),
   freightActuals: new Map(),
+  freightSettlements: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -6223,6 +6282,7 @@ function captureSbShadow() {
   _sbShadow.freightCategories = new Map((S.freightCategories || []).map(c => [c.id, snap(c)]));
   _sbShadow.freightCharges    = new Map((S.freightCharges    || []).map(c => [c.id, snap(c)]));
   _sbShadow.freightActuals    = new Map((S.freightActuals    || []).map(r => [r.id, snap(r)]));
+  _sbShadow.freightSettlements = new Map((S.freightSettlements || []).map(r => [r.id, snap(r)]));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
   _sbShadow.submittalSigners = new Map();
@@ -6362,6 +6422,17 @@ function freightActualToDB(r, studioId) {
     invoice_reference: r.invoiceReference || null,
     notes: r.notes || null,
     linked_expense_id: r.linkedExpenseId || null,
+    deleted_at: null,
+  };
+}
+function freightSettlementToDB(r, studioId) {
+  return {
+    id: r.id, studio_id: studioId,
+    project_id: r.projectId,
+    invoice_id: r.invoiceId,
+    type: r.type,
+    amount: Number(r.amount || 0),
+    notes: r.notes || null,
     deleted_at: null,
   };
 }
@@ -6754,6 +6825,8 @@ async function syncToSupabase() {
     await syncSafe('invoices',  current.invoices, _sbShadow.invoices, i => invoiceToDB(i, studioId));
     await syncSafe('invoice_line_items', current.invoiceLineItems, _sbShadow.invoiceLineItems, l => invLineItemToDB(l), { softDelete: false });
     await syncSafe('invoice_payments',   current.invoicePayments,  _sbShadow.invoicePayments,  p => invPaymentToDB(p),  { softDelete: false });
+    // freight_settlements after invoices so invoice_id FK targets exist.
+    await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     await syncSafe('documents', current.documents, _sbShadow.documents, d => documentToDB(d, studioId));
     await syncSafe('document_versions', current.documentVersions, _sbShadow.documentVersions, v => documentVersionToDB(v), { softDelete: false });
     await syncSafe('time_entries', current.timeEntries, _sbShadow.timeEntries, t => timeEntryToDB(t, studioId), { softDelete: false });
@@ -6941,6 +7014,7 @@ let S = {
   freightCategories: [],
   freightCharges: [],
   freightActuals: [],
+  freightSettlements: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -10278,6 +10352,11 @@ function renderFreightTabContent(pid) {
 // Per-project (or filter-scoped) summary. Sums per-item nets so credits
 // and overages cross-cancel both within an item and across items —
 // reconciliation is a project-level pool, not per-category bookkeeping.
+//
+// Subtracts already-settled amounts (Phase 5 Part 2) so the same credit/
+// overage doesn't get billed twice. Settlements on cancelled invoices
+// are excluded — they're treated as void at calc time, the row stays
+// for audit.
 function _computeFreightSummaryFromItems(items, pid) {
   let charged = 0, actual = 0, deferredActuals = 0;
   let projItemNetCredits = 0, projItemNetOverages = 0;
@@ -10298,15 +10377,39 @@ function _computeFreightSummaryFromItems(items, pid) {
     projItemNetCredits  += ledger.itemNetCredit  || 0;
     projItemNetOverages += ledger.itemNetOverage || 0;
   });
-  const projectNetCredit  = Math.max(0, projItemNetCredits  - projItemNetOverages);
-  const projectNetOverage = Math.max(0, projItemNetOverages - projItemNetCredits);
+
+  // Subtract settled amounts. Filter out settlements on cancelled invoices.
+  const activeSettlements = (S.freightSettlements || []).filter(s => {
+    if (s.projectId !== pid) return false;
+    const inv = (S.invoices || []).find(i => i.id === s.invoiceId);
+    return inv && inv.status !== 'cancelled';
+  });
+  let appliedCredits = 0, billedOverages = 0, billedDeferred = 0;
+  activeSettlements.forEach(s => {
+    if (s.type === 'credit_applied')  appliedCredits  += Math.abs(s.amount);
+    if (s.type === 'overage_billed')  billedOverages  += s.amount;
+    if (s.type === 'deferred_billed') billedDeferred  += s.amount;
+  });
+
+  const availableCredit    = Math.max(0, projItemNetCredits  - appliedCredits);
+  const outstandingOverage = Math.max(0, projItemNetOverages - billedOverages);
+  const projectNetCredit   = Math.max(0, availableCredit  - outstandingOverage);
+  const projectNetOverage  = Math.max(0, outstandingOverage - availableCredit);
+  const unbilledDeferred   = Math.max(0, deferredActuals  - billedDeferred);
+
   return {
-    charged, actual, deferredActuals,
+    charged, actual, deferredActuals, unbilledDeferred,
     projectNetCredit, projectNetOverage,
-    // Kept for transparency / possible sub-text display.
     grossItemCredits:  projItemNetCredits,
     grossItemOverages: projItemNetOverages,
+    appliedCredits, billedOverages, billedDeferred,
+    availableCredit, outstandingOverage,
   };
+}
+
+// Convenience wrapper: project-scoped settlement summary for the banner.
+function getProjectFreightReconState(pid) {
+  return computeProjectFreightSummary(pid);
 }
 
 function renderPDFreight(proj, pid) {
@@ -10393,7 +10496,7 @@ function renderFreightSummaryHeader(s) {
 
   // Net reconciliation cell: collapses credit + overage into one column
   // showing whichever side wins after netting across items. Sub-text
-  // shows the gross item-level totals for transparency.
+  // shows applied/billed settled amounts for transparency.
   const SPOT_ON = 0.5;
   let netLabel, netColor, netSub = '';
   if (s.projectNetOverage > SPOT_ON) {
@@ -10406,7 +10509,17 @@ function renderFreightSummaryHeader(s) {
     netLabel = `${fmt(0)} reconciled`;
     netColor = 'var(--text-light)';
   }
-  if ((s.grossItemCredits || 0) > SPOT_ON || (s.grossItemOverages || 0) > SPOT_ON) {
+  // Sub-line shows settlement progress: applied vs available, billed vs outstanding.
+  const subParts = [];
+  if ((s.appliedCredits || 0) > SPOT_ON || (s.availableCredit || 0) > SPOT_ON) {
+    subParts.push(`${fmt(s.appliedCredits || 0)} credit applied · ${fmt(s.availableCredit || 0)} available`);
+  }
+  if ((s.billedOverages || 0) > SPOT_ON || (s.outstandingOverage || 0) > SPOT_ON) {
+    subParts.push(`${fmt(s.billedOverages || 0)} overage billed · ${fmt(s.outstandingOverage || 0)} outstanding`);
+  }
+  if (subParts.length) {
+    netSub = `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px;line-height:1.4">${subParts.join('<br>')}</div>`;
+  } else if ((s.grossItemCredits || 0) > SPOT_ON || (s.grossItemOverages || 0) > SPOT_ON) {
     netSub = `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">${fmt(s.grossItemCredits || 0)} credits · ${fmt(s.grossItemOverages || 0)} overages</div>`;
   }
   const netCell = `
@@ -10864,6 +10977,241 @@ function deleteFreightActualFromModal() {
   if (typeof renderProjectDetail === 'function' && S.currentView === 'project-detail') {
     renderProjectDetail();
   }
+}
+
+// ─── Freight Reconciliation modal (U-Freight Phase 5 Part 2) ──
+// One modal, three modes — credit / overage / deferred. Each path adds
+// an invoice line item AND creates a freight_settlements row so the
+// project net stops counting the settled amount.
+
+let _freightReconMode = null;       // 'credit' | 'overage' | 'deferred'
+let _freightReconMaxAmount = 0;
+let _freightReconDeferredItems = []; // [{ itemId, name, billable }] for deferred mode
+
+function _faBuildDeferredBillables(pid) {
+  // For each item with Deferred-state primary Freight charge that has
+  // unbilled actuals, compute the billable amount = actuals × (1 + applied
+  // markup). Subtract per-item already-billed-deferred from settlements.
+  const proj = getProject(pid);
+  const prop = S.proposals[pid];
+  const primaryCatId = getPrimaryFreightCategoryId();
+  if (!prop || !primaryCatId) return [];
+
+  // Sum already-billed-deferred per project (no per-item breakdown stored).
+  const activeSettlements = (S.freightSettlements || []).filter(s => {
+    if (s.projectId !== pid || s.type !== 'deferred_billed') return false;
+    const inv = (S.invoices || []).find(i => i.id === s.invoiceId);
+    return inv && inv.status !== 'cancelled';
+  });
+  const totalAlreadyBilled = activeSettlements.reduce((sum, s) => sum + (s.amount || 0), 0);
+
+  const out = [];
+  let totalGross = 0;
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    // Only items with at least one Deferred-state freight_charge AND tagged actuals.
+    const itemCharges = (S.freightCharges || []).filter(c =>
+      ((c.parentType === 'item' && c.parentId === item.id) ||
+       (c.parentType === 'component' && (item.components || []).some(co => co.id === c.parentId)))
+      && c.state === 'deferred'
+    );
+    if (!itemCharges.length) return;
+    const actuals = (S.freightActuals || []).filter(a => a.proposalItemId === item.id);
+    if (!actuals.length) return;
+    const actualSum = actuals.reduce((s, a) => s + (parseFloat(a.amount) || 0), 0);
+    if (actualSum <= 0) return;
+    // Use the dominant deferred charge's category for markup.
+    const markupCharge = itemCharges[0];
+    const markup = _resolveFreightChargeMarkupPct(markupCharge, proj) / 100;
+    const billable = actualSum * (1 + markup);
+    out.push({
+      itemId: item.id,
+      name: `${item.name || '(unnamed)'} · ${sp.name || 'Unassigned'}`,
+      billable,
+      actualSum,
+      // Pre-fill toggle to ON if any matching charge category is taxable AND
+      // project freight tax is on.
+      defaultTaxable: !!(proj?.taxFreight && itemCharges.some(c => {
+        const cat = (S.freightCategories || []).find(x => x.id === c.categoryId);
+        return cat && cat.isTaxable;
+      })),
+    });
+    totalGross += billable;
+  }));
+
+  // Pro-rata reduce per-item by share of already-billed (rough but fair).
+  if (totalAlreadyBilled > 0 && totalGross > 0) {
+    out.forEach(o => {
+      const share = (o.billable / totalGross) * totalAlreadyBilled;
+      o.billable = Math.max(0, o.billable - share);
+    });
+  }
+  return out.filter(o => o.billable > 0.5);
+}
+
+function openApplyFreightCreditModal() {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const recon = getProjectFreightReconState(inv.projectId);
+  if (recon.projectNetCredit <= 0.5) { toast('No credit available to apply.'); return; }
+  _freightReconMode = 'credit';
+  _freightReconMaxAmount = recon.projectNetCredit;
+  $c('frecon-title').textContent = 'Apply freight credit';
+  $c('frecon-summary').innerHTML = `Project has <strong>${fmt(recon.projectNetCredit)}</strong> in available freight credit. Apply some or all to this invoice as a negative line.`;
+  $c('frecon-deferred-picker').style.display = 'none';
+  $c('frecon-amount-row').style.display = '';
+  $c('frecon-amount').value = recon.projectNetCredit.toFixed(2);
+  $c('frecon-taxable').checked = false;
+  $c('frecon-taxable-label').textContent = 'Reduce taxable subtotal by this credit';
+  $c('frecon-taxable-help').textContent = 'Toggle ON if the original freight was taxed on the prior invoice — keeps tax math symmetrical.';
+  renderFreightReconPreview();
+  $c('modal-freight-recon').classList.add('open');
+  setTimeout(() => $c('frecon-amount').focus(), 80);
+}
+
+function openBillFreightOverageModal() {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const recon = getProjectFreightReconState(inv.projectId);
+  if (recon.projectNetOverage <= 0.5) { toast('No overage outstanding.'); return; }
+  _freightReconMode = 'overage';
+  _freightReconMaxAmount = recon.projectNetOverage;
+  $c('frecon-title').textContent = 'Bill freight overage';
+  $c('frecon-summary').innerHTML = `Project has <strong>${fmt(recon.projectNetOverage)}</strong> in outstanding freight overage from prior actuals. Add some or all as a positive line on this invoice.`;
+  $c('frecon-deferred-picker').style.display = 'none';
+  $c('frecon-amount-row').style.display = '';
+  $c('frecon-amount').value = recon.projectNetOverage.toFixed(2);
+  $c('frecon-taxable').checked = false;
+  $c('frecon-taxable-label').textContent = 'Apply tax to this overage';
+  $c('frecon-taxable-help').textContent = 'Toggle ON if the original freight category was taxable — keeps tax math symmetrical.';
+  renderFreightReconPreview();
+  $c('modal-freight-recon').classList.add('open');
+  setTimeout(() => $c('frecon-amount').focus(), 80);
+}
+
+function openBillDeferredFreightModal() {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const items = _faBuildDeferredBillables(inv.projectId);
+  if (!items.length) { toast('No deferred actuals ready to bill.'); return; }
+  _freightReconMode = 'deferred';
+  _freightReconDeferredItems = items.map(i => ({ ...i, _selected: true }));
+  $c('frecon-title').textContent = 'Bill deferred freight';
+  $c('frecon-summary').innerHTML = `Pick which deferred-freight items to bill on this invoice. Each line bills the marked-up actual for that item.`;
+  $c('frecon-deferred-picker').style.display = '';
+  $c('frecon-amount-row').style.display = 'none';
+  // Pre-fill taxable toggle: ON if ANY selected item has defaultTaxable=true.
+  $c('frecon-taxable').checked = items.some(i => i.defaultTaxable);
+  $c('frecon-taxable-label').textContent = 'Apply tax to these lines';
+  $c('frecon-taxable-help').textContent = 'Pre-filled ON when the item\'s freight category is taxable AND project freight tax is on. Uncheck to bill untaxed.';
+  renderFreightReconDeferredPicker();
+  renderFreightReconPreview();
+  $c('modal-freight-recon').classList.add('open');
+}
+
+function renderFreightReconDeferredPicker() {
+  const host = $c('frecon-deferred-picker');
+  if (!host) return;
+  host.innerHTML = `
+    <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin-bottom:6px">Items with deferred actuals</div>
+    ${_freightReconDeferredItems.map((row, i) => `
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:white;border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;cursor:pointer">
+        <input type="checkbox" ${row._selected ? 'checked' : ''} onchange="onFreightReconDeferredToggle(${i}, this.checked)" style="accent-color:var(--russet);width:14px;height:14px">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(row.name)}</span>
+        <span style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">actual ${fmt(row.actualSum)}</span>
+        <span style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--pecan)">${fmt(row.billable)}</span>
+      </label>`).join('')}`;
+}
+
+function onFreightReconDeferredToggle(i, checked) {
+  if (_freightReconDeferredItems[i]) _freightReconDeferredItems[i]._selected = checked;
+  renderFreightReconPreview();
+}
+
+function renderFreightReconPreview() {
+  const preview = $c('frecon-preview');
+  if (!preview) return;
+  let lineLabel = '', lineAmount = 0;
+  if (_freightReconMode === 'credit') {
+    const v = parseFloat($c('frecon-amount').value) || 0;
+    const capped = Math.min(v, _freightReconMaxAmount);
+    lineLabel = 'Freight credit applied';
+    lineAmount = -Math.abs(capped);
+  } else if (_freightReconMode === 'overage') {
+    const v = parseFloat($c('frecon-amount').value) || 0;
+    const capped = Math.min(v, _freightReconMaxAmount);
+    lineLabel = 'Freight overage';
+    lineAmount = capped;
+  } else if (_freightReconMode === 'deferred') {
+    const sel = _freightReconDeferredItems.filter(r => r._selected);
+    lineAmount = sel.reduce((s, r) => s + r.billable, 0);
+    lineLabel = sel.length === 1 ? `Deferred freight: ${sel[0].name.split(' · ')[0]}` : `Deferred freight (${sel.length} items)`;
+  }
+  const taxable = $c('frecon-taxable')?.checked;
+  preview.innerHTML = `Will add line: <strong style="color:var(--text-dark)">${escH(lineLabel)}</strong> @ <strong style="color:${lineAmount >= 0 ? 'var(--pecan)' : '#1a6e3a'}">${fmt(lineAmount)}</strong>${taxable ? ' (taxable)' : ' (not taxed)'}.`;
+}
+
+function confirmFreightReconciliation() {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const taxable = $c('frecon-taxable')?.checked || false;
+
+  if (_freightReconMode === 'credit' || _freightReconMode === 'overage') {
+    const v = parseFloat($c('frecon-amount').value) || 0;
+    const capped = Math.min(v, _freightReconMaxAmount);
+    if (capped <= 0) { toast('Enter a positive amount.'); return; }
+    const isCredit = _freightReconMode === 'credit';
+    const lineAmount = isCredit ? -Math.abs(capped) : capped;
+    const lineName = isCredit ? 'Freight credit applied' : 'Freight overage';
+    _invLineItems.push({
+      id: uid(),
+      name: lineName,
+      qty: 1,
+      price: lineAmount,
+      taxable,
+      _freightRecon: true,
+    });
+    if (!S.freightSettlements) S.freightSettlements = [];
+    S.freightSettlements.push({
+      id: uid(),
+      projectId: inv.projectId,
+      invoiceId: inv.id,
+      type: isCredit ? 'credit_applied' : 'overage_billed',
+      amount: isCredit ? -Math.abs(capped) : capped,
+      notes: `${lineName} on invoice ${inv.number}`,
+      created: new Date().toISOString(),
+    });
+  } else if (_freightReconMode === 'deferred') {
+    const selected = _freightReconDeferredItems.filter(r => r._selected);
+    if (!selected.length) { toast('Pick at least one item to bill.'); return; }
+    const totalAmount = selected.reduce((s, r) => s + r.billable, 0);
+    const lineName = selected.length === 1
+      ? `Deferred freight: ${selected[0].name.split(' · ')[0]}`
+      : `Deferred freight (${selected.length} items)`;
+    _invLineItems.push({
+      id: uid(),
+      name: lineName,
+      qty: 1,
+      price: totalAmount,
+      taxable,
+      _freightRecon: true,
+    });
+    if (!S.freightSettlements) S.freightSettlements = [];
+    S.freightSettlements.push({
+      id: uid(),
+      projectId: inv.projectId,
+      invoiceId: inv.id,
+      type: 'deferred_billed',
+      amount: totalAmount,
+      notes: `${lineName} on invoice ${inv.number}`,
+      created: new Date().toISOString(),
+    });
+  }
+
+  save();
+  closeModal('modal-freight-recon');
+  renderInvoiceBuilder();
+  recalcInvoice();
+  toast('Reconciliation line added.');
 }
 
 function renderPDSettings(proj, pid) {
@@ -19767,6 +20115,48 @@ function renderInvoiceBuilder() {
 
   // ── Left: line items ──
   html += '<div>';
+
+  // Freight reconciliation banner — surfaces unsettled credits, overages,
+  // and unbilled deferred actuals at invoice creation time. Each line is
+  // independent; multiple may show. Hidden when nothing's outstanding.
+  if (inv.projectId) {
+    const recon = getProjectFreightReconState(inv.projectId);
+    const lines = [];
+    if (recon.projectNetCredit > 0.5) {
+      lines.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <strong style="color:#1a6e3a">Credit available: ${fmt(recon.projectNetCredit)}</strong> from prior overcollection.
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="openApplyFreightCreditModal()" style="font-size:11px;border-color:#1a6e3a;color:#1a6e3a">Apply to this invoice</button>
+        </div>`);
+    }
+    if (recon.projectNetOverage > 0.5) {
+      lines.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <strong style="color:#b33">Overage outstanding: ${fmt(recon.projectNetOverage)}</strong> from prior actuals.
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="openBillFreightOverageModal()" style="font-size:11px;border-color:#b33;color:#b33">Add as line item</button>
+        </div>`);
+    }
+    if (recon.unbilledDeferred > 0.5) {
+      lines.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <strong style="color:#2d5a8a">Deferred ready to bill: ${fmt(recon.unbilledDeferred)}</strong> in vendor actuals.
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="openBillDeferredFreightModal()" style="font-size:11px;border-color:#2d5a8a;color:#2d5a8a">Add as line item</button>
+        </div>`);
+    }
+    if (lines.length) {
+      html += `
+        <div style="background:rgba(45,90,138,0.04);border:1px solid rgba(45,90,138,0.20);border-radius:var(--rl);padding:6px 18px;margin-bottom:16px">
+          <div style="font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);padding:10px 0 4px;border-bottom:1px solid rgba(45,90,138,0.15);margin-bottom:4px">Freight reconciliation</div>
+          ${lines.join('<div style="height:1px;background:rgba(45,90,138,0.10)"></div>')}
+        </div>`;
+    }
+  }
 
   // Proposal items picker (phased only)
   if (inv.type === 'phased' && prop?.spaces?.length) {
