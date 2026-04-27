@@ -8065,7 +8065,7 @@ function renderPDProposal(proj, pid) {
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="addSpace()">+ Add Space</button>
     <button class="btn btn-dark btn-sm" onclick="window.print()">\u2193 Print / Export</button>
-    <button class="btn btn-secondary btn-sm" onclick="openEstimateWizard()">Save as Estimate</button>
+    <button class="btn btn-secondary btn-sm" onclick="openEstimateWizard()">Save Current Proposal Version</button>
     <div class="view-tabs" style="margin-left:auto;margin-right:8px">
       <button class="view-tab${_propFilter==='all'?' active':''}" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
       <button class="view-tab${_propFilter==='allowances'?' active':''}" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
@@ -13658,7 +13658,20 @@ let _modalFreight = null;     // { id, state, valueType, value, markupOverride, 
 let _modalAdjacent = [];      // [{ id, categoryId, state, valueType, value, markupOverride, notes }]
 
 function _emptyFreightDraft() {
-  return { id: null, state: '', valueType: 'amount', value: '', markupOverride: null, notes: '' };
+  return { id: null, state: _defaultChargeState(), valueType: 'amount', value: '', markupOverride: null, notes: '' };
+}
+
+function _defaultChargeState() {
+  // While a project is still in proposal / lead phase, charge state
+  // defaults to 'deferred' (won't bill until project goes active). Once
+  // the project's stage flips, defaults go back to blank so the user
+  // explicitly picks known/allowance.
+  const pid = document.getElementById('ai-pid')?.value
+              || S.currentPropProject
+              || S._detailProjectId;
+  if (!pid) return '';
+  const proj = S.projects.find(p => p.id === pid);
+  return (proj?.stage === 'proposal' || proj?.stage === 'lead') ? 'deferred' : '';
 }
 
 function getPrimaryFreightCategoryId() {
@@ -13857,7 +13870,7 @@ function renderModalAdjacent() {
 }
 
 function addAdjacentCharge() {
-  _modalAdjacent.push({ id: null, categoryId: '', state: '', valueType: 'amount', value: '', markupOverride: null, notes: '' });
+  _modalAdjacent.push({ id: null, categoryId: '', state: _defaultChargeState(), valueType: 'amount', value: '', markupOverride: null, notes: '' });
   renderModalAdjacent();
   // Auto-expand the details if it was closed
   const det = $c('ai-adjacent-details');
@@ -14221,7 +14234,7 @@ function addComponentAdjacentCharge(componentId) {
   const c = _findComponentInModal(componentId);
   if (!c) return;
   if (!c._adjacentDraft) c._adjacentDraft = [];
-  c._adjacentDraft.push({ id: null, categoryId: '', state: '', valueType: 'amount', value: '', markupOverride: null, notes: '' });
+  c._adjacentDraft.push({ id: null, categoryId: '', state: _defaultChargeState(), valueType: 'amount', value: '', markupOverride: null, notes: '' });
   renderComponentAdjacent(c);
 }
 
