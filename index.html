@@ -5668,6 +5668,15 @@ async function loadFromSupabase() {
     (_allocsByExpense[a.expenseId] = _allocsByExpense[a.expenseId] || []).push(a);
   });
   S.expenses.forEach(e => { e.allocations = _allocsByExpense[e.id] || []; });
+  // Hydrate _allocationId on invoice line items so the picker reads
+  // already-added state correctly. Durable link is the FK on allocations.
+  const _lineToAlloc = new Map();
+  S.expenses.forEach(e => (e.allocations || []).forEach(a => {
+    if (a.invoiceLineItemId) _lineToAlloc.set(a.invoiceLineItemId, a.id);
+  }));
+  (S.invoices || []).forEach(inv => (inv.lineItems || []).forEach(l => {
+    if (_lineToAlloc.has(l.id)) l._allocationId = _lineToAlloc.get(l.id);
+  }));
   S.documents      = (documentsRes.data      || []).map(dbDocumentToS);
   S.timeEntries    = (timeRes.data           || []).map(dbTimeToS);
   S.vendors        = (vendorsRes.data        || []).map(dbVendorToS);
@@ -18860,7 +18869,25 @@ function renderExpenseCard(exp) {
   // Resolves the live item even after project moves so deleted items show
   // as missing rather than dangling text.
   let tagDisplay = '<span style="color:var(--text-light);font-style:italic">— Not tagged</span>';
-  if (exp.proposalItemId) {
+  const allocs = exp.allocations || [];
+  if (allocs.length) {
+    // Split: render each allocation on its own line with item label + amount + status.
+    const rows = allocs.map(a => {
+      const item = a.proposalItemId ? _findProposalItemById(a.proposalItemId) : null;
+      let sp = null;
+      if (item) Object.values(S.proposals || {}).forEach(prop => (prop.spaces || []).forEach(s => {
+        if ((s.items || []).some(i => i.id === item.id)) sp = s;
+      }));
+      const itemLabel = item ? `${escH(item.name || '(unnamed)')} · ${escH(sp?.name || 'Unassigned')}` : '<span style="color:var(--text-light);font-style:italic">— Item missing</span>';
+      const statusPill = a.status === 'invoiced'
+        ? '<span style="font-size:8px;font-family:var(--font-b);padding:1px 6px;border-radius:8px;background:rgba(45,90,138,0.10);color:#2d5a8a;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Invoiced</span>'
+        : a.status === 'resolved'
+        ? '<span style="font-size:8px;font-family:var(--font-b);padding:1px 6px;border-radius:8px;background:rgba(26,110,58,0.10);color:#1a6e3a;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Resolved</span>'
+        : '<span style="font-size:8px;font-family:var(--font-b);padding:1px 6px;border-radius:8px;background:rgba(201,169,106,0.18);color:#9a7d3a;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Draft</span>';
+      return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0"><span style="color:var(--russet)">${itemLabel}</span> ${statusPill} <span style="margin-left:auto;color:var(--text-mid);font-family:var(--font-b);font-size:11px">${fmt(Number(a.amount) || 0)}</span></div>`;
+    }).join('');
+    tagDisplay = `<div style="margin-top:4px;display:flex;flex-direction:column;gap:2px">${rows}</div>`;
+  } else if (exp.proposalItemId) {
     let found = null;
     Object.values(S.proposals || {}).forEach(prop => {
       (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
@@ -18880,6 +18907,7 @@ function renderExpenseCard(exp) {
         <span style="font-family:var(--font-h);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(exp.name)}</span>
         <span style="font-size:10px;font-family:var(--font-b);padding:2px 10px;border-radius:10px;background:${color}15;color:${color};border:1px solid ${color}30;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${label}</span>
         ${exp.trackInPM ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet)">Tracked</span>' : ''}
+          ${(exp.allocations || []).length ? `<span style="font-size:9px;font-family:var(--font-b);color:var(--text-mid)">Split (${exp.allocations.length})</span>` : ''}
           ${exp.status === 'invoiced' ? '<span style="font-size:9px;font-family:var(--font-b);color:#2d5a8a">Invoiced</span>' : ''}
           ${exp.status === 'client_payment_received' ? '<span style="font-size:9px;font-family:var(--font-b);color:#1a6e3a">Client Payment Received</span>' : ''}
       </div>
@@ -19147,8 +19175,10 @@ function renderExpenseReports() {
 }
 
 function addExpenseToInvoice(expId, checked) {
+  // Legacy entry point (single-expense, no split). Allocation-aware
+  // callers use addExpenseRowToInvoice with an opaque rowKey.
   if (!checked) {
-    _invLineItems = _invLineItems.filter(l => l._expenseId !== expId);
+    _invLineItems = _invLineItems.filter(l => l._expenseId !== expId || l._allocationId);
     renderInvLineItems();
     recalcInvoice();
     renderInvoiceBuilder();
@@ -19156,16 +19186,45 @@ function addExpenseToInvoice(expId, checked) {
   }
   const exp = (S.expenses||[]).find(e => e.id === expId);
   if (!exp) return;
+  _addExpenseLineToInvoice(exp, null);
+}
+
+function addExpenseRowToInvoice(rowKey, checked) {
+  if (rowKey.startsWith('a:')) {
+    const allocId = rowKey.slice(2);
+    if (!checked) {
+      _invLineItems = _invLineItems.filter(l => l._allocationId !== allocId);
+      renderInvLineItems(); recalcInvoice(); renderInvoiceBuilder();
+      return;
+    }
+    const found = _findAllocationById(allocId);
+    if (!found) return;
+    _addExpenseLineToInvoice(found.expense, found.allocation);
+  } else if (rowKey.startsWith('e:')) {
+    const expId = rowKey.slice(2);
+    addExpenseToInvoice(expId, checked);
+  }
+}
+
+function _addExpenseLineToInvoice(exp, allocation) {
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   const proj = S.projects.find(p => p.id === inv?.projectId);
   const markupPct = proj?.markupPct || 25;
-  const cost = parse$(exp.cost);
+  const cost = allocation ? Number(allocation.amount) || 0 : (parse$(exp.cost) || 0);
   const isBillable = exp.expenseType === 'billable';
   const price = isBillable ? cost * (1 + markupPct/100) : cost;
+  // For split lines, surface the item name in the line so the invoice reads
+  // naturally even though they share a source expense.
+  let name = exp.name;
+  if (allocation?.proposalItemId) {
+    const it = _findProposalItemById(allocation.proposalItemId);
+    if (it?.name) name = `${exp.name} — ${it.name}`;
+  }
   _invLineItems.push({
     id: uid(),
     _expenseId: exp.id,
-    name: exp.name,
+    _allocationId: allocation?.id || null,
+    name,
     qty: 1,
     price: price,
     taxable: isBillable,
@@ -19177,8 +19236,65 @@ function addExpenseToInvoice(expId, checked) {
   renderInvoiceBuilder();
 }
 
+function _findProposalItemById(itemId) {
+  for (const prop of Object.values(S.proposals || {})) {
+    for (const sp of (prop.spaces || [])) {
+      const it = (sp.items || []).find(i => i.id === itemId);
+      if (it) return it;
+    }
+  }
+  return null;
+}
+
 function getUnresolvedExpenses(pid) {
   return (S.expenses||[]).filter(e => e.projectId === pid && !e.resolved && e.status !== 'invoiced' && (e.expenseType === 'billable' || e.expenseType === 'passthrough'));
+}
+
+// Returns the actual selectable rows for the invoice picker. Splits
+// expand into one row per allocation (each invoiceable independently);
+// non-split expenses appear as a single row.
+function getUnresolvedExpenseRows(pid) {
+  const rows = [];
+  getUnresolvedExpenses(pid).forEach(exp => {
+    const allocs = (exp.allocations || []).filter(a => a.status !== 'invoiced');
+    if (allocs.length) {
+      allocs.forEach(a => rows.push({
+        rowKey: 'a:' + a.id,
+        expense: exp,
+        allocation: a,
+        amount: Number(a.amount) || 0,
+      }));
+    } else if (!(exp.allocations || []).length) {
+      // Only show parent-as-row for expenses with NO allocations at all.
+      // (If allocations exist but all are invoiced, the expense is done.)
+      rows.push({
+        rowKey: 'e:' + exp.id,
+        expense: exp,
+        allocation: null,
+        amount: parse$(exp.cost) || 0,
+      });
+    }
+  });
+  return rows;
+}
+
+function _findAllocationById(allocId) {
+  for (const e of (S.expenses || [])) {
+    const a = (e.allocations || []).find(x => x.id === allocId);
+    if (a) return { expense: e, allocation: a };
+  }
+  return null;
+}
+
+// Once the source expense has allocations and they're all invoiced/resolved,
+// roll the parent expense status up to match.
+function _rollupExpenseStatus(exp) {
+  const allocs = exp.allocations || [];
+  if (!allocs.length) return;
+  const allInvoiced = allocs.every(a => a.status === 'invoiced' || a.status === 'resolved');
+  const allResolved = allocs.every(a => a.status === 'resolved');
+  if (allInvoiced && exp.status !== 'invoiced') exp.status = 'invoiced';
+  if (allResolved && !exp.resolved) exp.resolved = true;
 }
 
 // ─── DOCUMENTS ────────────────────────────────────────
@@ -20845,21 +20961,29 @@ function renderInvoiceBuilder() {
     html += '</div></div>';
   }
 
-  // Unresolved Expenses
-  const unresolvedExp = getUnresolvedExpenses(inv.projectId);
-  if (unresolvedExp.length) {
+  // Unresolved Expenses — flattened so split allocations are individual rows.
+  const expRows = getUnresolvedExpenseRows(inv.projectId);
+  if (expRows.length) {
     const proj = S.projects.find(p => p.id === inv.projectId);
     const markupPct = proj?.markupPct || 25;
     html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--russet);margin-bottom:10px">Unresolved Expenses</div>
-      ${unresolvedExp.map(exp => {
-        const cost = parse$(exp.cost);
-        const alreadyAdded = _invLineItems.some(l => l._expenseId === exp.id);
+      ${expRows.map(r => {
+        const exp = r.expense;
         const isBillable = exp.expenseType === 'billable';
-        const suggestedPrice = isBillable ? cost * (1 + markupPct/100) : cost;
+        const suggestedPrice = isBillable ? r.amount * (1 + markupPct/100) : r.amount;
+        const alreadyAdded = r.allocation
+          ? _invLineItems.some(l => l._allocationId === r.allocation.id)
+          : _invLineItems.some(l => l._expenseId === exp.id && !l._allocationId);
+        let label = escH(exp.name);
+        if (r.allocation) {
+          const item = r.allocation.proposalItemId ? _findProposalItemById(r.allocation.proposalItemId) : null;
+          const itemLabel = item?.name || '(unassigned)';
+          label = `${escH(exp.name)} <span style="font-size:10px;color:var(--text-light);font-style:italic">— ${escH(itemLabel)}</span>`;
+        }
         return `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs);opacity:${alreadyAdded?'0.4':'1'}" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
-          <input type="checkbox" ${alreadyAdded?'checked disabled':''} onchange="addExpenseToInvoice('${exp.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
-          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(exp.name)}</span>
+          <input type="checkbox" ${alreadyAdded?'checked disabled':''} onchange="addExpenseRowToInvoice('${r.rowKey}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${label}</span>
           <span style="font-size:9px;font-family:var(--font-b);color:${isBillable?'#b33':'#2d5a8a'}">${isBillable?'Billable':'Pass-Through'}</span>
           <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(suggestedPrice)}</span>
         </label>`;
@@ -23010,7 +23134,20 @@ function processInvoiceSentAutomations(inv) {
     if (line._expenseId) {
       const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
       if (exp) {
-        exp.status = 'invoiced';
+        // Allocation-aware: if the line was for one slice, mark just the
+        // allocation. The expense rolls up to invoiced only when ALL of
+        // its allocations are invoiced.
+        if (line._allocationId) {
+          const alloc = (exp.allocations || []).find(a => a.id === line._allocationId);
+          if (alloc && alloc.status !== 'invoiced') {
+            alloc.status = 'invoiced';
+            alloc.invoiceLineItemId = line.id;
+          }
+          _rollupExpenseStatus(exp);
+          if (exp.status !== 'invoiced') return; // some slices still open
+        } else {
+          exp.status = 'invoiced';
+        }
         exp.resolvedInvoiceId = inv.id;
         exp.resolvedInvoiceNumber = inv.number;
 
