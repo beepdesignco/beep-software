@@ -152,7 +152,11 @@ function render(d) {
       <span>Invoice No: <strong>${escH(invoice.number || '')}</strong></span>
     </div>`;
 
-  const itemsBody = invoice.line_items.map(l => {
+  // Credit reconciliation lines render as their own row in the totals
+  // block (not in the items list).
+  const itemLines = invoice.line_items.filter(l => l._reconType !== 'credit');
+  const creditLines = invoice.line_items.filter(l => l._reconType === 'credit');
+  const itemsBody = itemLines.map(l => {
     const total = (l.qty || 1) * (l.price || 0);
     return `<tr>
       <td>
@@ -164,9 +168,10 @@ function render(d) {
       <td class="amt">${fmt(total)}</td>
     </tr>`;
   }).join('');
+  const creditSum = creditLines.reduce((s, c) => s + (Number(c.qty)||1) * (Number(c.price)||0), 0);
 
   const taxAmount = Number(invoice.tax || 0);
-  const subtotal = Number(invoice.subtotal || 0) + Number(invoice.freight || 0) + Number(invoice.adjacent_charges || 0) - Number(invoice.discount || 0);
+  const subtotal = Number(invoice.subtotal || 0) + Number(invoice.freight || 0) + Number(invoice.adjacent_charges || 0) - Number(invoice.discount || 0) + creditSum;
 
   let statusBanner = '';
   if (isPaid) statusBanner = '<div class="status-banner status-paid">✓ This invoice has been paid in full. Thank you.</div>';

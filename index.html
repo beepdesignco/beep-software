@@ -6061,6 +6061,12 @@ function dbInvoiceToS(inv) {
       proposalItemId: l.proposal_item_id || null,
       proposalComponentId: l.proposal_component_id || null,
       _expenseId: l.expense_id || null,
+      // Reconciliation metadata: 'credit' | 'overage' | 'deferred' | null.
+      // Null lines render as regular items; credit lines render in the
+      // totals "Credit" row instead.
+      _reconType: l.recon_type || null,
+      _settlementId: l.settlement_id || null,
+      _freightRecon: !!l.recon_type,
     })),
     payments: (inv.invoice_payments || []).map(p => ({
       id: p.id,
@@ -6569,6 +6575,8 @@ function invLineItemToDB(l) {
     proposal_item_id: l.proposalItemId || null,
     proposal_component_id: l.proposalComponentId || null,
     expense_id: l._expenseId || null,
+    recon_type: l._reconType || null,
+    settlement_id: l._settlementId || null,
     sort_order: l._sortOrder || 0,
   };
 }
@@ -11160,6 +11168,7 @@ function confirmFreightReconciliation() {
     const capped = Math.min(v, _freightReconMaxAmount);
     if (capped <= 0) { toast('Enter a positive amount.'); return; }
     const isCredit = _freightReconMode === 'credit';
+    const settlementId = uid();
     const lineAmount = isCredit ? -Math.abs(capped) : capped;
     const lineName = isCredit ? 'Freight credit applied' : 'Freight overage';
     _invLineItems.push({
@@ -11169,10 +11178,12 @@ function confirmFreightReconciliation() {
       price: lineAmount,
       taxable,
       _freightRecon: true,
+      _reconType: isCredit ? 'credit' : 'overage',
+      _settlementId: settlementId,
     });
     if (!S.freightSettlements) S.freightSettlements = [];
     S.freightSettlements.push({
-      id: uid(),
+      id: settlementId,
       projectId: inv.projectId,
       invoiceId: inv.id,
       type: isCredit ? 'credit_applied' : 'overage_billed',
@@ -11187,6 +11198,7 @@ function confirmFreightReconciliation() {
     const lineName = selected.length === 1
       ? `Deferred freight: ${selected[0].name.split(' · ')[0]}`
       : `Deferred freight (${selected.length} items)`;
+    const settlementId = uid();
     _invLineItems.push({
       id: uid(),
       name: lineName,
@@ -11194,10 +11206,12 @@ function confirmFreightReconciliation() {
       price: totalAmount,
       taxable,
       _freightRecon: true,
+      _reconType: 'deferred',
+      _settlementId: settlementId,
     });
     if (!S.freightSettlements) S.freightSettlements = [];
     S.freightSettlements.push({
-      id: uid(),
+      id: settlementId,
       projectId: inv.projectId,
       invoiceId: inv.id,
       type: 'deferred_billed',
@@ -17924,12 +17938,18 @@ function getExpenseInvoices(expId) {
 
 function recalcStoredInvoiceTotals(inv) {
   const taxRate = (inv.taxRate || 0) / 100;
-  let subtotal = 0, taxableAmt = 0;
+  let subtotal = 0, taxableAmt = 0, creditTotal = 0, creditTaxableTotal = 0;
   (inv.lineItems||[]).forEach(l => {
     const lt = (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
-    subtotal += lt;
-    if (l.taxable) taxableAmt += lt;
+    if (l._reconType === 'credit') {
+      creditTotal += lt;
+      if (l.taxable) creditTaxableTotal += lt;
+    } else {
+      subtotal += lt;
+      if (l.taxable) taxableAmt += lt;
+    }
   });
+  taxableAmt += creditTaxableTotal;
   const freight = inv.freight || 0;
   if (inv.freightTaxable) taxableAmt += freight;
   const adjacent = inv.adjacentCharges || 0;
@@ -17940,7 +17960,7 @@ function recalcStoredInvoiceTotals(inv) {
   if (discType === 'pct') discount = (subtotal + freight + adjacent) * (discVal / 100);
   else if (discType === 'flat') discount = discVal;
   const tax = Math.max(0, (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate);
-  const afterDiscount = subtotal + freight + adjacent - discount;
+  const afterDiscount = subtotal + freight + adjacent - discount + creditTotal;
   const ccPct = inv.ccFeePct || 0;
   const ccFee = ccPct > 0 ? (afterDiscount + tax) * (ccPct / 100) : 0;
   inv.subtotal = subtotal;
@@ -19822,48 +19842,91 @@ function addInvManualLine() {
 function removeInvLine(idx) {
   const line = _invLineItems[idx];
   if (line?.proposalItemId) _invSelectedProposalItems.delete(line.proposalItemId);
+  // U-Freight Phase 5 Part 2: removing a reconciliation line drops its
+  // matching settlement so the credit/overage returns to the available
+  // pool and the banner re-shows it on the next render.
+  if (line?._freightRecon && line._settlementId) {
+    S.freightSettlements = (S.freightSettlements || []).filter(s => s.id !== line._settlementId);
+  }
   _invLineItems.splice(idx, 1);
   recalcInvFreight();
   renderInvoiceBuilder();
 }
 
 function renderInvLineItems() {
-  $c('inv-line-items').innerHTML = _invLineItems.map((l, i) => {
+  // Credit reconciliation lines render in the totals block (Credit row),
+  // not in the line items list. Skipping here keeps original index `i` so
+  // removeInvLine(idx) targets the right entry.
+  let firstShown = true;
+  const html = _invLineItems.map((l, i) => {
+    if (l._reconType === 'credit') return '';
     const isProposal = !!l.proposalItemId;
     const descExpanded = !!(l.description || l._descOpen);
+    const showHeader = firstShown;
+    firstShown = false;
+    const headerPad = showHeader ? '10' : '2';
     return `
     <div style="padding:8px 8px 4px;margin-bottom:6px;background:${isProposal?'rgba(91,45,34,0.02)':'transparent'};border-radius:var(--rs)">
       <div style="display:flex;align-items:flex-end;gap:6px">
         <div class="fg" style="max-width:24px;align-items:center">
-          ${i===0?'<label class="fl">&nbsp;</label>':''}
+          ${showHeader?'<label class="fl">&nbsp;</label>':''}
           <button onclick="toggleInvLineDesc(${i})" title="${descExpanded?'Hide description':'Add description'}" style="font-size:14px;background:none;border:none;cursor:pointer;color:${descExpanded?'var(--russet)':'var(--text-light)'};padding:4px 0;line-height:1">≡</button>
         </div>
         <div class="fg" style="flex:2">
-          ${i===0?'<label class="fl">Name</label>':''}
+          ${showHeader?'<label class="fl">Name</label>':''}
           <input type="text" class="fi" value="${escH(l.name||'')}" onchange="_invLineItems[${i}].name=this.value" style="font-size:12px;padding:5px 8px">
         </div>
         <div class="fg" style="max-width:65px">
-          ${i===0?'<label class="fl">Qty</label>':''}
+          ${showHeader?'<label class="fl">Qty</label>':''}
           <input type="number" class="fi" value="${l.qty||1}" min="0.25" step="0.25" onchange="_invLineItems[${i}].qty=parseFloat(this.value)||1;recalcInvoice()" style="font-size:12px;padding:5px 8px;text-align:center">
         </div>
         <div class="fg" style="max-width:100px">
-          ${i===0?'<label class="fl">Price</label>':''}
+          ${showHeader?'<label class="fl">Price</label>':''}
           <input type="text" class="fi" value="${l.price||''}" onchange="_invLineItems[${i}].price=parse$(this.value);recalcInvoice()" style="font-size:12px;padding:5px 8px">
         </div>
-        <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap">
+        <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${headerPad}px;white-space:nowrap">
           <input type="checkbox" ${l.taxable?'checked':''} onchange="_invLineItems[${i}].taxable=this.checked;recalcInvoice()" style="accent-color:var(--russet);width:11px;height:11px"> Tax
         </label>
-        ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${i===0?'10':'2'}px;white-space:nowrap" title="Add this line to Project Management as an open-line item">
+        ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${headerPad}px;white-space:nowrap" title="Add this line to Project Management as an open-line item">
           <input type="checkbox" ${l.trackInPM?'checked':''} onchange="toggleInvLineTrack(${i}, this.checked)" style="accent-color:var(--russet);width:11px;height:11px"> Track
         </label>` : ''}
-        <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${i===0?'10':'4'}px 2px">✕</button>
+        <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${headerPad}px 2px">✕</button>
       </div>
       ${descExpanded ? `
       <div style="padding:4px 0 2px;margin-top:4px">
         <textarea class="fi" placeholder="Description (optional, shown to client only if filled)" onchange="_invLineItems[${i}].description=this.value" style="font-size:11px;padding:5px 8px;width:100%;min-height:32px;resize:vertical">${escH(l.description||'')}</textarea>
       </div>` : ''}
     </div>`;
-  }).join('') || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No line items yet.</div>';
+  }).join('');
+  $c('inv-line-items').innerHTML = html || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No line items yet.</div>';
+}
+
+// Helper to remove a credit reconciliation line by its line id (used by
+// the X button on the Credit row in the totals block, since it doesn't
+// have an index in the line items list display).
+function removeInvCreditLineById(lineId) {
+  const idx = _invLineItems.findIndex(l => l.id === lineId);
+  if (idx < 0) return;
+  removeInvLine(idx);
+}
+
+// Renders the Credit row(s) under the Invoice Summary block. One row per
+// credit line so each can be removed individually. Hidden when no credits.
+function _renderInvCreditRow() {
+  const host = $c('inv-credit-row-host');
+  if (!host) return;
+  const credits = _invLineItems.filter(l => l._reconType === 'credit');
+  if (!credits.length) { host.innerHTML = ''; return; }
+  // Slot the credit row into the same totals grid as Subtotal/Freight/etc.
+  // Each row carries its own X button so a single click reverses one credit.
+  host.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr auto auto;gap:6px 12px;font-family:var(--font-b);font-size:13px;margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)">
+      ${credits.map(c => `
+        <span style="color:#1a6e3a">Credit <span style="font-style:italic;color:var(--text-light);font-size:11px">· ${escH(c.name)}</span></span>
+        <span style="text-align:right;color:#1a6e3a;font-weight:700">${fmt((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</span>
+        <button onclick="removeInvCreditLineById('${c.id}')" title="Remove this credit (returns to project's available pool)" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:0 2px">✕</button>
+      `).join('')}
+    </div>`;
 }
 
 function toggleInvLineDesc(idx) {
@@ -19943,14 +20006,26 @@ function recalcInvoice() {
   const proj = S.projects.find(p => p.id === pid);
   const taxRate = (proj?.taxRate || 0) / 100;
 
-  // Subtotal
+  // Subtotal — split out reconciliation credits (rendered as their own
+  // "Credit" totals row, not in the items list). Their negative price still
+  // contributes to the math via creditTotal subtraction at the end.
   let subtotal = 0;
   let taxableAmt = 0;
+  let creditTotal = 0;          // sum of credit line prices (negative)
+  let creditTaxableTotal = 0;   // taxable portion of credit (also negative)
   _invLineItems.forEach(l => {
     const lineTotal = (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
-    subtotal += lineTotal;
-    if (l.taxable) taxableAmt += lineTotal;
+    if (l._reconType === 'credit') {
+      creditTotal += lineTotal;
+      if (l.taxable) creditTaxableTotal += lineTotal;
+    } else {
+      subtotal += lineTotal;
+      if (l.taxable) taxableAmt += lineTotal;
+    }
   });
+  // Credits affect taxable amount (when toggled taxable) regardless of where
+  // they're displayed.
+  taxableAmt += creditTaxableTotal;
 
   // Freight (primary)
   const freight = parse$($c('inv-freight').value);
@@ -19972,7 +20047,8 @@ function recalcInvoice() {
 
   // Tax
   const tax = (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate;
-  const afterDiscount = subtotal + freight + adjacent - discount;
+  // Credits added at the end (they're negative).
+  const afterDiscount = subtotal + freight + adjacent - discount + creditTotal;
 
   // CC Fee
   const ccPct = parseFloat($c('inv-cc-fee').value) || 0;
@@ -19989,6 +20065,10 @@ function recalcInvoice() {
   $c('inv-tax-total').textContent = fmt(tax > 0 ? tax : 0);
   $c('inv-cc-total').textContent = ccFee > 0 ? fmt(ccFee) : '—';
   $c('inv-grand-total').textContent = fmt(total);
+
+  // Credit row — render only when there's at least one credit line.
+  // Pulls live from _invLineItems so removing a line updates immediately.
+  _renderInvCreditRow();
 }
 
 async function handleInvFileUpload(input) {
@@ -20389,6 +20469,7 @@ function renderInvoiceBuilder() {
         <span style="color:var(--text-mid)" id="inv-tax-label">Tax${proj?.taxRate?' ('+proj.taxRate+'%)':''}</span><span id="inv-tax-total" style="text-align:right">$0.00</span>
         <span style="color:var(--text-mid)">CC Fee</span><span id="inv-cc-total" style="text-align:right">—</span>
       </div>
+      <div id="inv-credit-row-host"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:2px solid var(--pecan)">
         <span style="font-family:var(--font-h);font-weight:900;font-size:14px;text-transform:uppercase;color:var(--mahogany)">Total</span>
         <span id="inv-grand-total" style="font-family:var(--font-h);font-weight:900;font-size:20px;color:var(--pecan)">$0.00</span>
@@ -20910,7 +20991,7 @@ ${line}
       </tr>
     </thead>
     <tbody>
-      ${(inv.lineItems||[]).map(l => {
+      ${(inv.lineItems||[]).filter(l => l._reconType !== 'credit').map(l => {
         const qty = Number(l.qty||1), price = Number(l.price||0), total = qty * price;
         return `<tr>
           <td style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px">${esc(l.name||'')}${l.description?`<div style="font-size:11px;color:${textMid};font-weight:400;margin-top:3px;white-space:pre-wrap">${esc(l.description)}</div>`:''}</td>
@@ -20926,6 +21007,7 @@ ${line}
   <table width="100%" cellpadding="0" cellspacing="0">
     ${inv.freight ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Freight</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.freight)}</td></tr>` : ''}
     ${inv.adjacentCharges ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Other associated charges</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.adjacentCharges)}</td></tr>` : ''}
+    ${(inv.lineItems||[]).filter(l => l._reconType === 'credit').map(c => `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Credit · ${esc(c.name||'')}</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</td></tr>`).join('')}
     ${inv.discount ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Discount</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">-${fmtInner(inv.discount)}</td></tr>` : ''}
     ${inv.tax ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Tax</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.tax)}</td></tr>` : ''}
     <tr><td style="font-family:'Oswald',sans-serif;font-size:14px;color:${mahogany};text-transform:uppercase;letter-spacing:.1em;padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">Total</td>
@@ -21446,12 +21528,21 @@ function saveInvoiceFromBuilder(status, opts = {}) {
   const proj = S.projects.find(p => p.id === inv.projectId);
   const taxRate = (proj?.taxRate || 0) / 100;
 
+  // Split credits out of subtotal — credits render as a separate "Credit"
+  // totals row (not in the items list), so inv.subtotal stays "items only".
   let subtotal = 0, taxableAmt = 0;
+  let creditTotal = 0, creditTaxableTotal = 0;
   _invLineItems.forEach(l => {
     const lt = (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
-    subtotal += lt;
-    if (l.taxable) taxableAmt += lt;
+    if (l._reconType === 'credit') {
+      creditTotal += lt;
+      if (l.taxable) creditTaxableTotal += lt;
+    } else {
+      subtotal += lt;
+      if (l.taxable) taxableAmt += lt;
+    }
   });
+  taxableAmt += creditTaxableTotal;
   const freight = parse$($c('inv-freight')?.value||'');
   if ($c('inv-freight-taxable')?.checked) taxableAmt += freight;
   // Adjacent (Other associated charges) — taxable portion is per-category,
@@ -21465,7 +21556,7 @@ function saveInvoiceFromBuilder(status, opts = {}) {
   if (discType === 'pct') discount = (subtotal + freight + adjacent) * (discVal / 100);
   else if (discType === 'flat') discount = discVal;
   const tax = Math.max(0, (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate);
-  const afterDiscount = subtotal + freight + adjacent - discount;
+  const afterDiscount = subtotal + freight + adjacent - discount + creditTotal;
   const ccPct = parseFloat($c('inv-cc-fee')?.value) || 0;
   const ccFee = ccPct > 0 ? (afterDiscount + tax) * (ccPct / 100) : 0;
   const total = afterDiscount + tax + ccFee;
@@ -22160,8 +22251,8 @@ async function exportInvoicePDF(invId) {
   }
   cursorY += metaRowH + 16;
 
-  // ── Line items table
-  const body = (inv.lineItems||[]).map(l => {
+  // ── Line items table — exclude credits (rendered separately in totals).
+  const body = (inv.lineItems||[]).filter(l => l._reconType !== 'credit').map(l => {
     const qty = parseFloat(l.qty)||1;
     const price = parseFloat(l.price)||0;
     const total = qty * price;
@@ -22204,13 +22295,22 @@ async function exportInvoicePDF(invId) {
   // ── Totals block — same cell-grid as line items; no oversized accents
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
-  const subtotalGross = (inv.subtotal||0) + (inv.freight||0) + (inv.adjacentCharges||0) - (inv.discount||0);
+  // Items-only subtotal (excludes credit reconciliation lines, which
+  // render as their own Credit rows below).
+  const itemsSubtotal = (inv.lineItems||[])
+    .filter(l => l._reconType !== 'credit')
+    .reduce((s, l) => s + (parseFloat(l.qty)||1) * (parseFloat(l.price)||0), 0);
+  const creditLines = (inv.lineItems||[]).filter(l => l._reconType === 'credit');
 
   const totalsRows = [];
-  totalsRows.push(['Subtotal', fmt(subtotalGross)]);
+  totalsRows.push(['Subtotal', fmt(itemsSubtotal)]);
   if (inv.freight) totalsRows.push(['Freight', fmt(inv.freight)]);
   if (inv.adjacentCharges) totalsRows.push(['Other associated charges', fmt(inv.adjacentCharges)]);
   if (inv.discount) totalsRows.push(['Discount', '-' + fmt(inv.discount)]);
+  creditLines.forEach(c => {
+    const total = (parseFloat(c.qty)||1) * (parseFloat(c.price)||0);
+    totalsRows.push(['Credit · ' + (c.name || ''), fmt(total)]);
+  });
   if (inv.tax) totalsRows.push([`Tax${inv.taxRate?' ('+inv.taxRate+'%)':''}`, fmt(inv.tax)]);
   if (inv.ccFee) totalsRows.push([`CC Fee${inv.ccFeePct?' ('+inv.ccFeePct+'%)':''}`, fmt(inv.ccFee)]);
   totalsRows.push(['TOTAL', fmt(inv.total||0)]);
