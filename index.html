@@ -20380,7 +20380,7 @@ function renderInvoiceBuilder() {
   html += `<div style="background:white;border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div class="frow" style="align-items:flex-end">
       <div class="fg" style="max-width:140px">
-        <label class="fl">Discount Type</label>
+        <label class="fl">Discount Type <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(pre-tax)</span></label>
         <select class="fi fsel" id="inv-disc-type" onchange="recalcInvoice()" style="font-size:12px">
           <option value="" ${!inv.discountType?'selected':''}>None</option>
           <option value="pct" ${inv.discountType==='pct'?'selected':''}>Percentage</option>
@@ -20395,6 +20395,9 @@ function renderInvoiceBuilder() {
         <label class="fl">CC Fee %</label>
         <input type="number" class="fi" id="inv-cc-fee" value="${inv.ccFeePct||0}" min="0" step="0.1" onchange="recalcInvoice()" style="font-size:12px" placeholder="e.g. 3">
       </div>
+    </div>
+    <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:6px;line-height:1.4">
+      Discount reduces the pre-tax subtotal — tax computes on the discounted amount. For post-tax adjustments (e.g., applying a freight credit from a prior invoice), use the reconciliation banner above the line items.
     </div>
   </div>`;
 
