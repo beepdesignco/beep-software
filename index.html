@@ -5594,7 +5594,7 @@ async function loadFromSupabase() {
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
     itemTypesRes, posRes, submittalsRes,
     freightCategoriesRes, freightChargesRes, freightActualsRes, freightSettlementsRes,
-    proposalVersionsRes,
+    estimatesRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -5614,10 +5614,10 @@ async function loadFromSupabase() {
     sb.from('freight_charges').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_actuals').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_settlements').select('*').eq('studio_id', studioId).is('deleted_at', null),
-    sb.from('proposal_versions').select('*').eq('studio_id', studioId).is('deleted_at', null).order('version_number'),
+    sb.from('estimates').select('*').eq('studio_id', studioId).is('deleted_at', null).order('created_at'),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, proposalVersions: proposalVersionsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -5659,13 +5659,6 @@ async function loadFromSupabase() {
   S.freightCharges    = (freightChargesRes.data    || []).map(dbFreightChargeToS);
   S.freightActuals    = (freightActualsRes.data    || []).map(dbFreightActualToS);
   S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
-  // Proposal versions — group by projectId, sort newest first within each project
-  S.proposalVersions = {};
-  (proposalVersionsRes.data || []).forEach(r => {
-    const v = dbProposalVersionToS(r);
-    (S.proposalVersions[v.projectId] = S.proposalVersions[v.projectId] || []).push(v);
-  });
-  Object.values(S.proposalVersions).forEach(arr => arr.sort((a, b) => b.versionNumber - a.versionNumber));
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -5678,6 +5671,16 @@ async function loadFromSupabase() {
   spaces.forEach(sp => {
     if (!S.proposals[sp.project_id]) S.proposals[sp.project_id] = { spaces: [] };
     S.proposals[sp.project_id].spaces.push(dbSpaceToS(sp));
+  });
+  // Estimates — fold into proposals[pid].estimates so the existing UI
+  // works unchanged. Newest first within each project.
+  (estimatesRes.data || []).forEach(r => {
+    const e = dbEstimateToS(r);
+    if (!S.proposals[e.projectId]) S.proposals[e.projectId] = { spaces: [] };
+    (S.proposals[e.projectId].estimates = S.proposals[e.projectId].estimates || []).push(e);
+  });
+  Object.values(S.proposals).forEach(prop => {
+    if (prop.estimates) prop.estimates.sort((a, b) => new Date(b.created || b.savedAt || 0) - new Date(a.created || a.savedAt || 0));
   });
 
   const studioSettings = AUTH.studio.settings || {};
@@ -5986,18 +5989,21 @@ function dbFreightSettlementToS(r) {
   };
 }
 
-function dbProposalVersionToS(r) {
+function dbEstimateToS(r) {
+  // Estimates store the entire snapshot in `snapshot` jsonb. Spread it
+  // first, then overlay the columns the DB owns (id/status/dates/etc.)
+  // so the JS view of an estimate matches what saveEstimate() builds.
+  const snap = (r.snapshot && typeof r.snapshot === 'object') ? r.snapshot : {};
   return {
+    ...snap,
     id: r.id,
     projectId: r.project_id,
-    versionNumber: r.version_number,
-    status: r.status,                 // 'draft' | 'proposed'
-    snapshot: r.snapshot_json || {},
-    proposedAt: r.proposed_at,
-    notes: r.notes || '',
+    name: r.name || snap.name || 'Untitled Estimate',
+    status: r.status || 'draft',           // 'draft' | 'proposed'
+    proposedAt: r.proposed_at || null,
+    savedAt: snap.savedAt || r.created_at,
     created: r.created_at,
     updated: r.updated_at,
-    createdByUserId: r.created_by_user_id,
   };
 }
 
@@ -6295,6 +6301,7 @@ const _sbShadow = {
   freightCharges: new Map(),
   freightActuals: new Map(),
   freightSettlements: new Map(),
+  estimates: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -6339,7 +6346,11 @@ function captureSbShadow() {
     (d.versions || []).forEach(v => _sbShadow.documentVersions.set(v.id, { ...snap(v), _documentId: d.id }));
   });
   _sbShadow.spaces.clear(); _sbShadow.items.clear(); _sbShadow.components.clear();
+  _sbShadow.estimates.clear();
   Object.entries(S.proposals || {}).forEach(([projectId, prop]) => {
+    (prop.estimates || []).forEach(est => {
+      _sbShadow.estimates.set(est.id, { ...snap(est), _projectId: projectId });
+    });
     (prop.spaces || []).forEach((sp, sIdx) => {
       _sbShadow.spaces.set(sp.id, { ...snap(sp), _projectId: projectId, _sortOrder: sIdx });
       (sp.items || []).forEach((it, iIdx) => {
@@ -6469,6 +6480,23 @@ function freightSettlementToDB(r, studioId) {
     type: r.type,
     amount: Number(r.amount || 0),
     notes: r.notes || null,
+    deleted_at: null,
+  };
+}
+function estimateToDB(e, studioId) {
+  // The full snapshot lives in `snapshot` jsonb. The structured columns
+  // (freight/hours/etc.) are kept for potential reporting but the JS
+  // doesn't read from them — `snapshot` is the source of truth.
+  const { id, projectId, name, status, proposedAt, ...rest } = e;
+  return {
+    id,
+    studio_id: studioId,
+    project_id: projectId,
+    name: name || 'Untitled Estimate',
+    status: status || 'draft',
+    proposed_at: proposedAt || null,
+    snapshot: { name, status, proposedAt, ...rest },
+    custom_lines: rest.estimationLines || rest.custom_lines || [],
     deleted_at: null,
   };
 }
@@ -6782,6 +6810,7 @@ async function syncToSupabase() {
       invoicePayments:  new Map(),
       documentVersions: new Map(),
       spaces: new Map(), items: new Map(), components: new Map(),
+      estimates: new Map(),
     };
     (S.invoices || []).forEach(inv => {
       (inv.lineItems || []).forEach((l, i) => current.invoiceLineItems.set(l.id, { ...l, _invoiceId: inv.id, _sortOrder: i }));
@@ -6791,6 +6820,9 @@ async function syncToSupabase() {
       (d.versions || []).forEach(v => current.documentVersions.set(v.id, { ...v, _documentId: d.id }));
     });
     Object.entries(S.proposals || {}).forEach(([projectId, prop]) => {
+      (prop.estimates || []).forEach(est => {
+        current.estimates.set(est.id, { ...est, projectId: est.projectId || projectId });
+      });
       (prop.spaces || []).forEach((sp, sIdx) => {
         current.spaces.set(sp.id, { ...sp, _projectId: projectId, _sortOrder: sIdx });
         (sp.items || []).forEach((it, iIdx) => {
@@ -6855,6 +6887,7 @@ async function syncToSupabase() {
     await syncSafe('proposal_spaces',     current.spaces,     _sbShadow.spaces,     s => spaceToDB(s));
     await syncSafe('proposal_items',      current.items,      _sbShadow.items,      i => itemToDB(i));
     await syncSafe('proposal_components', current.components, _sbShadow.components, c => componentToDB(c));
+    await syncSafe('estimates',           current.estimates,  _sbShadow.estimates,  e => estimateToDB(e, studioId));
     // freight_charges parent_id is polymorphic to items/components — sync after both exist.
     await syncSafe('freight_charges', new Map((S.freightCharges||[]).map(c => [c.id, c])), _sbShadow.freightCharges, c => freightChargeToDB(c, studioId));
     await syncSafe('expenses',  current.expenses, _sbShadow.expenses, e => expenseToDB(e, studioId));
@@ -7215,7 +7248,6 @@ let S = {
   freightCharges: [],
   freightActuals: [],
   freightSettlements: [],
-  proposalVersions: {},   // { [projectId]: [versionRows] }
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -8076,7 +8108,6 @@ function renderPDProposal(proj, pid) {
     html += renderTotals(prop, pid);
   }
   html += renderEstimatesSection(pid);
-  if (!S.clientView) html += renderProposalVersions(pid);
   return html;
 }
 
@@ -11772,9 +11803,9 @@ function loadProposal(pid) {
   const pvTabs = $c('prop-view-tabs');
   if (pvTabs) pvTabs.style.display = pid ? '' : 'none';
   save();
-  _refreshAfterVersionChange();
+  renderPropBody();
 }
- 
+
 function renderPropBody() {
   const body = $c('prop-body');
   const pid  = S.currentPropProject;
@@ -11823,10 +11854,6 @@ function renderPropBody() {
     </div>`;
     html += renderTotals(prop, pid);
   }
-
-  // Versions section — collapsed cards under the working proposal.
-  // Hidden in client view since this is internal audit-trail UI.
-  if (!S.clientView) html += renderProposalVersions(pid);
 
   body.innerHTML = html;
 }
@@ -12383,232 +12410,10 @@ function renderTotals(prop, pid) {
     `;
 }
 
-// ─── PROPOSAL VERSIONS (snapshots) ────────────────────────
-//
-// Working copy of S.proposals[pid] is the source of truth for PM /
-// invoicing / expenses. Versions are a separate, client-facing audit
-// trail of "what was proposed at each point". A version starts as a
-// `draft` (still editable in case you forgot something) and locks to
-// `proposed` once you mark it as proposed-to-client. Locked versions
-// are immutable (DB trigger enforces this).
+// (Proposal versioning is unified into the Estimates flow — each saved
+// estimate carries a status='draft' until you Mark as Proposed, after
+// which it locks. See markEstimateAsProposed().)
 
-function _buildProposalSnapshot(pid) {
-  const prop = S.proposals[pid] || { spaces: [] };
-  const proj = S.projects.find(p => p.id === pid);
-  const client = proj?.clientId ? S.clients.find(c => c.id === proj.clientId) : null;
-  // JSON round-trip strips functions / symbols and gives a clean deep copy
-  return JSON.parse(JSON.stringify({
-    proposal: prop,
-    project: proj || null,
-    client: client || null,
-    capturedAt: new Date().toISOString(),
-  }));
-}
-
-function _nextVersionNumber(pid) {
-  const arr = S.proposalVersions[pid] || [];
-  return arr.length ? Math.max(...arr.map(v => v.versionNumber)) + 1 : 1;
-}
-
-async function snapshotProposalVersion(pid) {
-  const prop = S.proposals[pid];
-  if (!prop || !prop.spaces?.length) { toast('Add some spaces first.'); return; }
-  const studioId = AUTH.studio?.id;
-  if (!studioId) { toast('Not signed in.'); return; }
-  const versionNumber = _nextVersionNumber(pid);
-  const row = {
-    studio_id: studioId,
-    project_id: pid,
-    version_number: versionNumber,
-    status: 'draft',
-    snapshot_json: _buildProposalSnapshot(pid),
-    created_by_user_id: AUTH.user?.id || null,
-    updated_by_user_id: AUTH.user?.id || null,
-  };
-  const { data, error } = await sb.from('proposal_versions').insert(row).select().single();
-  if (error) { toast('Snapshot failed: ' + error.message); return; }
-  const v = dbProposalVersionToS(data);
-  (S.proposalVersions[pid] = S.proposalVersions[pid] || []).unshift(v);
-  toast(`Snapshot v${versionNumber} created (draft).`);
-  _refreshAfterVersionChange();
-}
-
-async function markVersionAsProposed(versionId) {
-  const v = _findVersion(versionId);
-  if (!v) return;
-  if (v.status === 'proposed') { toast('Already proposed.'); return; }
-  const ok = confirm(`Lock v${v.versionNumber} as proposed to client?\n\nThis snapshot becomes immutable. To revise, snapshot a new version.`);
-  if (!ok) return;
-  const proposedAt = new Date().toISOString();
-  const { data, error } = await sb.from('proposal_versions')
-    .update({ status: 'proposed', proposed_at: proposedAt, updated_by_user_id: AUTH.user?.id || null })
-    .eq('id', versionId).select().single();
-  if (error) { toast('Lock failed: ' + error.message); return; }
-  v.status = data.status;
-  v.proposedAt = data.proposed_at;
-  v.updated = data.updated_at;
-  toast(`v${v.versionNumber} locked as proposed.`);
-  _refreshAfterVersionChange();
-}
-
-async function deleteProposalVersion(versionId) {
-  const v = _findVersion(versionId);
-  if (!v) return;
-  if (v.status === 'proposed') { toast('Proposed versions can\'t be deleted (audit trail).'); return; }
-  const ok = confirm(`Delete draft v${v.versionNumber}?`);
-  if (!ok) return;
-  const { error } = await sb.from('proposal_versions')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('id', versionId);
-  if (error) { toast('Delete failed: ' + error.message); return; }
-  const arr = S.proposalVersions[v.projectId] || [];
-  const i = arr.findIndex(x => x.id === versionId);
-  if (i > -1) arr.splice(i, 1);
-  _refreshAfterVersionChange();
-}
-
-function _refreshAfterVersionChange() {
-  // Re-render whichever proposal view the user is currently looking at.
-  const inDetail = document.getElementById('view-project-detail')?.classList.contains('active');
-  if (inDetail && typeof renderProjectDetail === 'function') { renderProjectDetail(); return; }
-  if (typeof renderPropBody === 'function') renderPropBody();
-}
-
-function _findVersion(versionId) {
-  for (const arr of Object.values(S.proposalVersions || {})) {
-    const v = arr.find(x => x.id === versionId);
-    if (v) return v;
-  }
-  return null;
-}
-
-function _toggleVersionExpand(versionId) {
-  const el = document.getElementById('pv-body-' + versionId);
-  const chev = document.getElementById('pv-chev-' + versionId);
-  if (!el) return;
-  const isOpen = el.style.display !== 'none';
-  el.style.display = isOpen ? 'none' : 'block';
-  if (chev) chev.textContent = isOpen ? '▸' : '▾';
-}
-
-function renderProposalVersions(pid) {
-  const versions = S.proposalVersions[pid] || [];
-  const cardsHtml = versions.map(v => {
-    const isProposed = v.status === 'proposed';
-    const dateLabel = isProposed
-      ? `Proposed ${new Date(v.proposedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-      : `Draft · ${new Date(v.created).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-    const statusPill = isProposed
-      ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(var(--text-rgb),0.10);color:var(--text-mid)">Proposed · Locked</span>`
-      : `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(201,169,106,0.18);color:#9a7d3a">Draft</span>`;
-    const t = v.snapshot?.proposal ? calcProposalTotals(v.snapshot.proposal, pid) : null;
-    const totalLabel = t ? fmt(t.total) : '';
-    const actions = isProposed
-      ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();viewProposalVersion('${v.id}')" style="font-size:11px">View</button>`
-      : `
-        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();viewProposalVersion('${v.id}')" style="font-size:11px">Preview</button>
-        <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();markVersionAsProposed('${v.id}')" style="font-size:11px">Mark as Proposed</button>
-        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteProposalVersion('${v.id}')" style="font-size:11px;color:#b94a3a">Delete</button>`;
-    return `
-      <div class="pv-card" style="background:var(--white);border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;overflow:hidden">
-        <div onclick="_toggleVersionExpand('${v.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;transition:var(--t)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
-          <span id="pv-chev-${v.id}" style="font-size:11px;color:var(--text-mid);width:10px">▸</span>
-          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em;min-width:48px">v${v.versionNumber}</span>
-          ${statusPill}
-          <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);flex:1">${dateLabel}</span>
-          ${totalLabel ? `<span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700">${totalLabel}</span>` : ''}
-          <div style="display:flex;gap:6px" onclick="event.stopPropagation()">${actions}</div>
-        </div>
-        <div id="pv-body-${v.id}" style="display:none;padding:14px 18px;border-top:1px solid var(--border);background:rgba(var(--text-rgb),0.02)">
-          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic">
-            ${(v.snapshot?.proposal?.spaces || []).length} space${(v.snapshot?.proposal?.spaces || []).length === 1 ? '' : 's'} ·
-            ${(v.snapshot?.proposal?.spaces || []).reduce((n, sp) => n + (sp.items?.length || 0), 0)} item${(v.snapshot?.proposal?.spaces || []).reduce((n, sp) => n + (sp.items?.length || 0), 0) === 1 ? '' : 's'}
-            ${v.snapshot?.client?.name ? ' · ' + escH(v.snapshot.client.name) : ''}
-          </div>
-        </div>
-      </div>`;
-  }).join('');
-
-  return `
-    <div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div>
-          <div style="font-family:var(--font-h);font-weight:700;font-size:15px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.06em">Proposal Versions</div>
-          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">Snapshot the working copy to lock in what you proposed at each point. PM and invoicing always use the working copy above.</div>
-        </div>
-        <button class="btn btn-secondary btn-sm" onclick="snapshotProposalVersion('${pid}')">+ Snapshot Current</button>
-      </div>
-      ${versions.length ? cardsHtml : '<div style="font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;padding:12px 0">No versions yet. Snapshot your first one once the proposal is ready to share.</div>'}
-    </div>`;
-}
-
-function viewProposalVersion(versionId) {
-  const v = _findVersion(versionId);
-  if (!v) return;
-  const snap = v.snapshot || {};
-  const prop = snap.proposal || { spaces: [] };
-  const proj = snap.project || {};
-  const client = snap.client || null;
-  const t = calcProposalTotals(prop, v.projectId);
-  const spacesHtml = (prop.spaces || []).map(sp => {
-    const itemRows = (sp.items || []).map(it => `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--border)">${escH(it.name || '')}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">${it.qty || 1}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">${fmt(it.price || 0)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">${fmt((it.price || 0) * (it.qty || 1))}</td>
-      </tr>`).join('');
-    return `
-      <div style="margin-bottom:18px">
-        <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">${escH(sp.name || 'Space')}</div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead>
-            <tr><th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--font-b);font-size:10px;color:var(--text-mid);text-transform:uppercase;letter-spacing:0.06em">Item</th><th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--font-b);font-size:10px;color:var(--text-mid);text-transform:uppercase;letter-spacing:0.06em">Qty</th><th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--font-b);font-size:10px;color:var(--text-mid);text-transform:uppercase;letter-spacing:0.06em">Price</th><th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--font-b);font-size:10px;color:var(--text-mid);text-transform:uppercase;letter-spacing:0.06em">Total</th></tr>
-          </thead>
-          <tbody>${itemRows || '<tr><td colspan="4" style="padding:8px;color:var(--text-light);font-style:italic;font-size:11px">(no items)</td></tr>'}</tbody>
-        </table>
-      </div>`;
-  }).join('');
-
-  const isProposed = v.status === 'proposed';
-  const dateLabel = isProposed
-    ? `Proposed to client ${new Date(v.proposedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
-    : `Draft · created ${new Date(v.created).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
-
-  const overlayId = 'pv-view-overlay';
-  let overlay = document.getElementById(overlayId);
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = overlayId;
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto';
-    document.body.appendChild(overlay);
-  }
-  overlay.innerHTML = `
-    <div style="background:var(--white);max-width:880px;width:100%;border-radius:var(--rl);box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid var(--border);background:rgba(var(--text-rgb),0.03)">
-        <div>
-          <div style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(proj.name || 'Proposal')} — v${v.versionNumber}</div>
-          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">${dateLabel}${client?.name ? ' · ' + escH(client.name) : ''}</div>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-secondary btn-sm" onclick="window.print()">↓ Print / Export</button>
-          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('${overlayId}').remove()">✕ Close</button>
-        </div>
-      </div>
-      <div style="padding:24px 28px;max-height:70vh;overflow-y:auto">
-        ${spacesHtml || '<div style="font-style:italic;color:var(--text-light)">No spaces in this snapshot.</div>'}
-        <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">
-          <table style="font-size:13px">
-            <tr><td style="padding:3px 12px 3px 0;color:var(--text-mid)">Subtotal</td><td style="padding:3px 0;text-align:right">${fmt(t.subtotal)}</td></tr>
-            ${t.freight > 0 ? `<tr><td style="padding:3px 12px 3px 0;color:var(--text-mid)">Freight</td><td style="padding:3px 0;text-align:right">${fmt(t.freight)}</td></tr>` : ''}
-            ${t.adjacentCharges > 0 ? `<tr><td style="padding:3px 12px 3px 0;color:var(--text-mid)">Other charges</td><td style="padding:3px 0;text-align:right">${fmt(t.adjacentCharges)}</td></tr>` : ''}
-            ${t.tax > 0 ? `<tr><td style="padding:3px 12px 3px 0;color:var(--text-mid)">Tax</td><td style="padding:3px 0;text-align:right">${fmt(t.tax)}</td></tr>` : ''}
-            <tr style="font-weight:700"><td style="padding:6px 12px 3px 0;border-top:1px solid var(--border)">Total</td><td style="padding:6px 0 3px;text-align:right;border-top:1px solid var(--border)">${fmt(t.total)}</td></tr>
-          </table>
-        </div>
-      </div>
-    </div>`;
-}
 
 // ─── ESTIMATES ────────────────────────────────────────────
 
@@ -12886,8 +12691,11 @@ function saveEstimate() {
   // Snapshot the proposal
   const snapshot = {
     id: uid(),
+    projectId: pid,
     name,
     date,
+    status: 'draft',
+    proposedAt: null,
     savedAt: new Date().toISOString(),
     proposalTotals: { ...t },
     estimationLines: lines,
@@ -12899,11 +12707,25 @@ function saveEstimate() {
   if (!prop.estimates) prop.estimates = [];
   if (_editingEstimateId) {
     const idx = prop.estimates.findIndex(e => e.id === _editingEstimateId);
-    if (idx > -1) { snapshot.id = _editingEstimateId; prop.estimates[idx] = snapshot; }
+    if (idx > -1) {
+      const existing = prop.estimates[idx];
+      if (existing.status === 'proposed') {
+        toast('This estimate is locked (proposed to client). Snapshot a new one to revise.');
+        _editingEstimateId = null;
+        closeModal('modal-estimate');
+        return;
+      }
+      // Preserve id + status + proposedAt + savedAt of the original draft
+      snapshot.id = _editingEstimateId;
+      snapshot.status = existing.status || 'draft';
+      snapshot.proposedAt = existing.proposedAt || null;
+      snapshot.savedAt = existing.savedAt || snapshot.savedAt;
+      prop.estimates[idx] = snapshot;
+    }
     _editingEstimateId = null;
     toast('Estimate updated: ' + name);
   } else {
-    prop.estimates.push(snapshot);
+    prop.estimates.unshift(snapshot);
     toast('Estimate saved: ' + name);
   }
   save();
@@ -12917,6 +12739,10 @@ function editEstimate(pid, estId) {
   const prop = S.proposals[pid];
   const est = prop?.estimates?.find(e => e.id === estId);
   if (!est) return;
+  if (est.status === 'proposed') {
+    toast('This estimate is locked (proposed to client). Snapshot a new one to revise.');
+    return;
+  }
   _editingEstimateId = estId;
 
   // Open the wizard
@@ -13000,9 +12826,15 @@ function editEstimate(pid, estId) {
 }
 
 function deleteEstimate(pid, estId) {
-  if (!confirm('Delete this estimate?')) return;
   const prop = S.proposals[pid];
-  if (prop?.estimates) prop.estimates = prop.estimates.filter(e => e.id !== estId);
+  const est = prop?.estimates?.find(e => e.id === estId);
+  if (!est) return;
+  if (est.status === 'proposed') {
+    toast('Proposed estimates can\'t be deleted (audit trail).');
+    return;
+  }
+  if (!confirm('Delete this estimate?')) return;
+  prop.estimates = prop.estimates.filter(e => e.id !== estId);
   save();
   renderProjectDetail();
   toast('Estimate deleted.');
@@ -13393,16 +13225,32 @@ function renderEstimatesSection(pid) {
 
   let html = `
   <div style="margin-top:30px;padding-top:20px;border-top:2px solid var(--border)">
-    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:14px">Saved Estimates</div>`;
+    <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:14px">Saved Estimates / Proposal Versions</div>`;
 
-  estimates.slice().reverse().forEach(est => {
-    const linesTotal = est.estimationLines.reduce((s,l) => s+l.amount, 0);
+  estimates.forEach(est => {
+    const linesTotal = (est.estimationLines || []).reduce((s,l) => s+l.amount, 0);
+    const isProposed = est.status === 'proposed';
+    const statusPill = isProposed
+      ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(var(--text-rgb),0.10);color:var(--text-mid)">Proposed · Locked</span>`
+      : `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(201,169,106,0.18);color:#9a7d3a">Draft</span>`;
+    const proposedLabel = isProposed && est.proposedAt
+      ? `<span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);font-style:italic">Proposed ${new Date(est.proposedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>`
+      : '';
+    const actions = isProposed
+      ? `<button class="btn btn-ghost btn-sm" onclick="printEstimate('${pid}','${est.id}')" style="font-size:10px">Print / PDF</button>`
+      : `
+        <button class="btn btn-ghost btn-sm" onclick="printEstimate('${pid}','${est.id}')" style="font-size:10px">Print / PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="editEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Edit</button>
+        <button class="btn btn-primary btn-sm" onclick="markEstimateAsProposed('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Mark as Proposed</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Delete</button>`;
     html += `
     <details style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px">
-      <summary style="padding:14px 18px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
-        <div style="display:flex;align-items:center;gap:10px">
+      <summary style="padding:14px 18px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(est.name)}</span>
-          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(est.date)}</span>
+          ${statusPill}
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(est.date || '')}</span>
+          ${proposedLabel}
         </div>
         <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${fmt(est.estimateTotal)}</span>
       </summary>
@@ -13413,20 +13261,16 @@ function renderEstimatesSection(pid) {
           <tr><td style="padding:4px 0;color:var(--text-mid)">Tax</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.tax)}</td></tr>
           <tr style="font-weight:600"><td style="padding:6px 0;border-top:1px solid var(--border)">Proposal Total</td><td style="text-align:right;padding:6px 0;border-top:1px solid var(--border)">${fmt(est.proposalTotals.total)}</td></tr>
         </table>
-        ${est.estimationLines.length ? `
+        ${(est.estimationLines || []).length ? `
         <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:12px 0 6px">Estimation Lines</div>
         <table style="width:100%;font-size:12px;font-family:var(--font-b);border-collapse:collapse">
           ${est.estimationLines.map(l => `<tr><td style="padding:3px 0;color:var(--text-dark)">${escH(l.label)}${l.taxable?' <span style="font-size:9px;color:var(--text-light)">(taxable)</span>':''}</td><td style="text-align:right;padding:3px 0;color:var(--pecan)">${fmt(l.amount)}</td></tr>`).join('')}
           <tr style="font-weight:600"><td style="padding:6px 0;border-top:1px solid var(--border)">Estimation Subtotal</td><td style="text-align:right;padding:6px 0;border-top:1px solid var(--border)">${fmt(linesTotal)}</td></tr>
           ${est.estimationTax > 0 ? `<tr><td style="padding:3px 0;color:var(--text-mid)">Estimation Tax</td><td style="text-align:right;padding:3px 0">${fmt(est.estimationTax)}</td></tr>` : ''}
         </table>` : ''}
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:10px;border-top:2px solid var(--pecan)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:10px;border-top:2px solid var(--pecan);gap:8px;flex-wrap:wrap">
           <span style="font-family:var(--font-h);font-weight:800;font-size:15px;text-transform:uppercase;color:var(--mahogany)">Estimate Total: ${fmt(est.estimateTotal)}</span>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-ghost btn-sm" onclick="printEstimate('${pid}','${est.id}')" style="font-size:10px">Print / PDF</button>
-            <button class="btn btn-secondary btn-sm" onclick="editEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Delete</button>
-          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">${actions}</div>
         </div>
       </div>
     </details>`;
@@ -13434,6 +13278,24 @@ function renderEstimatesSection(pid) {
 
   html += '</div>';
   return html;
+}
+
+function markEstimateAsProposed(pid, estId) {
+  const prop = S.proposals[pid];
+  const est = prop?.estimates?.find(e => e.id === estId);
+  if (!est) return;
+  if (est.status === 'proposed') { toast('Already proposed.'); return; }
+  const ok = confirm(`Lock "${est.name}" as proposed to client?\n\nThis estimate becomes immutable. To revise, snapshot a new one.`);
+  if (!ok) return;
+  est.status = 'proposed';
+  est.proposedAt = new Date().toISOString();
+  save();
+  toast(`"${est.name}" locked as proposed.`);
+  if (typeof renderProjectDetail === 'function' && document.getElementById('view-project-detail')?.classList.contains('active')) {
+    renderProjectDetail();
+  } else if (typeof renderPropBody === 'function') {
+    renderPropBody();
+  }
 }
 
 // ─── PROPOSAL MUTATIONS ───────────────────────────────────
@@ -14726,7 +14588,7 @@ let _propFilter = 'all'; // 'all' | 'allowances'
 function setPropFilter(filter) {
   _propFilter = filter;
   $a('[data-ptab]').forEach(b => b.classList.toggle('active', b.dataset.ptab === filter));
-  _refreshAfterVersionChange();
+  renderPropBody();
 }
 
 function toggleClientView() {
