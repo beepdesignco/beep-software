@@ -19194,6 +19194,9 @@ function addExpenseRowToInvoice(rowKey, checked) {
     const allocId = rowKey.slice(2);
     if (!checked) {
       _invLineItems = _invLineItems.filter(l => l._allocationId !== allocId);
+      // Clear the durable link so the allocation goes back to "available".
+      const found = _findAllocationById(allocId);
+      if (found) found.allocation.invoiceLineItemId = null;
       renderInvLineItems(); recalcInvoice(); renderInvoiceBuilder();
       return;
     }
@@ -19220,8 +19223,9 @@ function _addExpenseLineToInvoice(exp, allocation) {
     const it = _findProposalItemById(allocation.proposalItemId);
     if (it?.name) name = `${exp.name} — ${it.name}`;
   }
+  const lineId = uid();
   _invLineItems.push({
-    id: uid(),
+    id: lineId,
     _expenseId: exp.id,
     _allocationId: allocation?.id || null,
     name,
@@ -19231,6 +19235,10 @@ function _addExpenseLineToInvoice(exp, allocation) {
     trackInPM: !!exp.trackInPM,
     manual: true,
   });
+  // Wire the durable FK on the allocation immediately so reloads of a
+  // saved-as-draft invoice can rebuild _allocationId. Status only flips
+  // to 'invoiced' when the invoice is sent (in processInvoiceSentAutomations).
+  if (allocation) allocation.invoiceLineItemId = lineId;
   renderInvLineItems();
   recalcInvoice();
   renderInvoiceBuilder();
@@ -22298,6 +22306,25 @@ function saveInvoiceFromBuilder(status, opts = {}) {
     const revertedNumbers = [];
     removedExpLines.forEach(line => {
       const expId = line._expenseId;
+      // Allocation-aware: revert just the slice if this was an allocation line.
+      if (line._allocationId) {
+        const exp = (S.expenses||[]).find(e => e.id === expId);
+        const alloc = exp?.allocations?.find(a => a.id === line._allocationId);
+        if (alloc) {
+          alloc.status = 'draft';
+          alloc.invoiceLineItemId = null;
+        }
+        // The expense rolls back to non-invoiced if not all slices are still invoiced.
+        if (exp && exp.status === 'invoiced') {
+          const stillAllInvoiced = (exp.allocations || []).every(a => a.status === 'invoiced' || a.status === 'resolved');
+          if (!stillAllInvoiced) {
+            delete exp.status;
+            delete exp.resolvedInvoiceId;
+            delete exp.resolvedInvoiceNumber;
+          }
+        }
+        return;
+      }
       const stillOnOther = (S.invoices||[]).some(i =>
         i.id !== inv.id && i.status !== 'cancelled' &&
         (i.lineItems||[]).some(l => l._expenseId === expId)
