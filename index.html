@@ -8076,6 +8076,7 @@ function renderPDProposal(proj, pid) {
     html += renderTotals(prop, pid);
   }
   html += renderEstimatesSection(pid);
+  if (!S.clientView) html += renderProposalVersions(pid);
   return html;
 }
 
@@ -11771,7 +11772,7 @@ function loadProposal(pid) {
   const pvTabs = $c('prop-view-tabs');
   if (pvTabs) pvTabs.style.display = pid ? '' : 'none';
   save();
-  renderPropBody();
+  _refreshAfterVersionChange();
 }
  
 function renderPropBody() {
@@ -12429,7 +12430,7 @@ async function snapshotProposalVersion(pid) {
   const v = dbProposalVersionToS(data);
   (S.proposalVersions[pid] = S.proposalVersions[pid] || []).unshift(v);
   toast(`Snapshot v${versionNumber} created (draft).`);
-  renderPropBody();
+  _refreshAfterVersionChange();
 }
 
 async function markVersionAsProposed(versionId) {
@@ -12447,7 +12448,7 @@ async function markVersionAsProposed(versionId) {
   v.proposedAt = data.proposed_at;
   v.updated = data.updated_at;
   toast(`v${v.versionNumber} locked as proposed.`);
-  renderPropBody();
+  _refreshAfterVersionChange();
 }
 
 async function deleteProposalVersion(versionId) {
@@ -12463,7 +12464,14 @@ async function deleteProposalVersion(versionId) {
   const arr = S.proposalVersions[v.projectId] || [];
   const i = arr.findIndex(x => x.id === versionId);
   if (i > -1) arr.splice(i, 1);
-  renderPropBody();
+  _refreshAfterVersionChange();
+}
+
+function _refreshAfterVersionChange() {
+  // Re-render whichever proposal view the user is currently looking at.
+  const inDetail = document.getElementById('view-project-detail')?.classList.contains('active');
+  if (inDetail && typeof renderProjectDetail === 'function') { renderProjectDetail(); return; }
+  if (typeof renderPropBody === 'function') renderPropBody();
 }
 
 function _findVersion(versionId) {
@@ -14718,7 +14726,7 @@ let _propFilter = 'all'; // 'all' | 'allowances'
 function setPropFilter(filter) {
   _propFilter = filter;
   $a('[data-ptab]').forEach(b => b.classList.toggle('active', b.dataset.ptab === filter));
-  renderPropBody();
+  _refreshAfterVersionChange();
 }
 
 function toggleClientView() {
