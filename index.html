@@ -50,8 +50,8 @@ html,body { height:100%; font-family:var(--font-b); background:var(--cloud); col
  
 .sidebar {
   width:var(--sidebar-w);
-  background:var(--mahogany);
-  color:var(--cloud);
+  background:var(--sidebar-bg);
+  color:var(--sidebar-fg);
   display:flex;
   flex-direction:column;
   flex-shrink:0;
@@ -60,32 +60,32 @@ html,body { height:100%; font-family:var(--font-b); background:var(--cloud); col
 }
 .sidebar-logo {
   padding:26px 22px 20px;
-  border-bottom:1px solid rgba(243,232,214,0.1);
+  border-bottom:1px solid var(--sidebar-border);
 }
 .sidebar-logo .wordmark {
   font-family:var(--font-h);
   font-weight:900;
   font-size:30px;
   letter-spacing:0.06em;
-  color:var(--cloud);
+  color:var(--sidebar-fg);
   text-transform:uppercase;
   line-height:1;
 }
 .sidebar-logo .tagline {
   font-size:10px;
-  color:rgba(243,232,214,0.42);
+  color:var(--sidebar-fg-muted);
   letter-spacing:0.14em;
   text-transform:uppercase;
   margin-top:4px;
   font-family:var(--font-b);
 }
 .sidebar-nav { padding:14px 0; flex:1; }
- 
+
 .nav-section-label {
   font-size:9px;
   letter-spacing:0.16em;
   text-transform:uppercase;
-  color:rgba(243,232,214,0.3);
+  color:var(--sidebar-fg-faint);
   padding:12px 22px 5px;
   font-family:var(--font-b);
 }
@@ -97,19 +97,19 @@ html,body { height:100%; font-family:var(--font-b); background:var(--cloud); col
   cursor:pointer;
   transition:var(--t);
   border-left:3px solid transparent;
-  color:rgba(243,232,214,0.62);
+  color:var(--sidebar-fg-muted);
 }
-.nav-item:hover { background:rgba(243,232,214,0.06); color:var(--cloud); }
-.nav-item.active { background:rgba(150,61,39,0.22); border-left-color:var(--russet); color:var(--cloud); }
+.nav-item:hover { background:var(--sidebar-hover-bg); color:var(--sidebar-fg); }
+.nav-item.active { background:var(--sidebar-active-bg); border-left-color:var(--sidebar-accent); color:var(--sidebar-fg); }
 .nav-icon { font-size:14px; width:18px; text-align:center; flex-shrink:0; }
 .nav-label { font-family:var(--font-h); font-weight:700; font-size:13.5px; letter-spacing:0.05em; text-transform:uppercase; }
 .nav-soon { font-size:9px; margin-left:auto; letter-spacing:0.08em; opacity:0.5; font-family:var(--font-b); }
- 
+
 .sidebar-footer {
   padding:14px 22px;
-  border-top:1px solid rgba(243,232,214,0.08);
+  border-top:1px solid var(--sidebar-border);
   font-size:10px;
-  color:rgba(243,232,214,0.25);
+  color:var(--sidebar-fg-faintest);
   font-family:var(--font-b);
   line-height:1.6;
 }
@@ -1278,15 +1278,15 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-label">Contacts</span>
       </div>
     </div>
-    <div id="notif-bell" style="display:none;padding:10px 14px;border-top:1px solid rgba(243,232,214,0.08);cursor:pointer;transition:var(--t)" onclick="toggleNotificationPanel()" onmouseenter="this.style.background='rgba(243,232,214,0.03)'" onmouseleave="this.style.background='transparent'">
+    <div id="notif-bell" style="display:none;padding:10px 14px;border-top:1px solid var(--sidebar-border);cursor:pointer;transition:var(--t)" onclick="toggleNotificationPanel()" onmouseenter="this.style.background='var(--sidebar-hover-bg)'" onmouseleave="this.style.background='transparent'">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-family:var(--font-b);font-size:12px;color:rgba(243,232,214,0.7)">🔔 Notifications</div>
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--sidebar-fg-muted)">🔔 Notifications</div>
         <span id="notif-badge" style="display:none;background:#b33;color:white;font-family:var(--font-b);font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;min-width:18px;text-align:center">0</span>
       </div>
     </div>
     <div id="auth-badge" style="display:none"></div>
     <div class="sidebar-footer">
-      <div style="margin-bottom:8px;cursor:pointer;color:rgba(243,232,214,0.45);transition:var(--t)" onclick="openAppSettings()" onmouseover="this.style.color='rgba(243,232,214,0.7)'" onmouseout="this.style.color='rgba(243,232,214,0.45)'">⚙ App Settings</div>
+      <div style="margin-bottom:8px;cursor:pointer;color:var(--sidebar-fg-muted);transition:var(--t)" onclick="openAppSettings()" onmouseover="this.style.color='var(--sidebar-fg)'" onmouseout="this.style.color='var(--sidebar-fg-muted)'">⚙ App Settings</div>
       Phase 2 &nbsp;·&nbsp; v0.2<br>
       Beep Design Co.
     </div>
@@ -5528,10 +5528,10 @@ function renderAuthBadge() {
   const studioName = AUTH.studio?.name || 'Studio';
   const roleLabel = AUTH.member?.role === 'owner' ? 'Owner' : (AUTH.member?.job_title || 'Member');
   el.innerHTML = `
-    <div style="padding:10px 14px;border-top:1px solid rgba(243,232,214,0.08);font-family:var(--font-b);font-size:11px;color:rgba(243,232,214,0.55);line-height:1.5">
-      <div style="font-family:var(--font-h);font-weight:700;color:rgba(243,232,214,0.9);font-size:12px;letter-spacing:0.04em">${escH ? escH(displayName) : displayName}</div>
+    <div style="padding:10px 14px;border-top:1px solid var(--sidebar-border);font-family:var(--font-b);font-size:11px;color:var(--sidebar-fg-muted);line-height:1.5">
+      <div style="font-family:var(--font-h);font-weight:700;color:var(--sidebar-fg);font-size:12px;letter-spacing:0.04em">${escH ? escH(displayName) : displayName}</div>
       <div style="font-size:10px">${roleLabel} · ${escH ? escH(studioName) : studioName}</div>
-      <button onclick="signOut()" style="background:none;border:none;color:rgba(243,232,214,0.4);cursor:pointer;font-family:var(--font-b);font-size:10px;padding:4px 0;margin-top:2px;text-decoration:underline">Sign out</button>
+      <button onclick="signOut()" style="background:none;border:none;color:var(--sidebar-fg-muted);cursor:pointer;font-family:var(--font-b);font-size:10px;padding:4px 0;margin-top:2px;text-decoration:underline">Sign out</button>
     </div>`;
   el.style.display = '';
 }
@@ -6999,34 +6999,37 @@ const THEMES = [
   { id: 'beep_light',  name: 'Beep Light',  group: 'brand',
     background: '#F3E8D6', surface: '#FFFFFF', text: '#2A1008', accent: '#963D27', border: 'rgba(91,45,34,0.14)',
     // Beep keeps its full brown trio explicitly:
-    brand: { mahogany: '#3F151C', pecan: '#5B2D22', textMid: '#7A4535', textLight: 'rgba(91,45,34,0.45)', borderMid: 'rgba(91,45,34,0.22)', cloudDark: '#E6D5BF' } },
-  { id: 'beep_dark',   name: 'Beep Dark',   group: 'brand',
-    background: '#1F100A', surface: '#2A1810', text: '#F3E8D6', accent: '#C97A45', border: 'rgba(243,232,214,0.16)',
-    brand: { mahogany: '#F5DCC2', pecan: '#E0B58A', textMid: 'rgba(243,232,214,0.70)', textLight: 'rgba(243,232,214,0.40)', borderMid: 'rgba(243,232,214,0.28)', cloudDark: '#3A1F14' } },
+    brand: { mahogany: '#3F151C', pecan: '#5B2D22', textMid: '#7A4535', textLight: 'rgba(91,45,34,0.45)', borderMid: 'rgba(91,45,34,0.22)', cloudDark: '#E6D5BF' },
+    sidebar: { bg: '#3F151C', fg: '#F3E8D6', accent: '#963D27' } },
   // ── Light presets ──
   { id: 'atelier',     name: 'Atelier Cream', group: 'light',
-    background: '#FAF7F2', surface: '#FFFFFF', text: '#1A1A18', accent: '#2A2A26', border: '#E8E3DA' },
+    background: '#FAF7F2', surface: '#FFFFFF', text: '#1A1A18', accent: '#2A2A26', border: '#E8E3DA',
+    sidebar: { bg: '#1A1A18', fg: '#FAF7F2', accent: '#C9A96A' } },
   { id: 'linen',       name: 'Linen', group: 'light',
-    background: '#F1EEE7', surface: '#FAF9F4', text: '#2D2C26', accent: '#6B7556', border: '#DDD8CC' },
+    background: '#F1EEE7', surface: '#FAF9F4', text: '#2D2C26', accent: '#6B7556', border: '#DDD8CC',
+    sidebar: { bg: '#2D2C26', fg: '#F1EEE7', accent: '#A8B589' } },
   { id: 'paper',       name: 'Paper', group: 'light',
-    background: '#FBFBF8', surface: '#FFFFFF', text: '#0A0A0A', accent: '#C8392E', border: '#E5E5E0' },
+    background: '#FBFBF8', surface: '#FFFFFF', text: '#0A0A0A', accent: '#C8392E', border: '#E5E5E0',
+    sidebar: { bg: '#0A0A0A', fg: '#FBFBF8', accent: '#C8392E' } },
   { id: 'porcelain',   name: 'Porcelain', group: 'light',
-    background: '#F6F9FC', surface: '#FFFFFF', text: '#102032', accent: '#4A8FD4', border: '#E1E8EF' },
+    background: '#F6F9FC', surface: '#FFFFFF', text: '#102032', accent: '#4A8FD4', border: '#E1E8EF',
+    sidebar: { bg: '#102032', fg: '#F6F9FC', accent: '#4A8FD4' } },
   { id: 'aubergine',   name: 'Aubergine', group: 'light',
-    background: '#FCFAFB', surface: '#FFFFFF', text: '#2C1A2E', accent: '#6B3D5C', border: '#EDE6E8' },
+    background: '#FCFAFB', surface: '#FFFFFF', text: '#2C1A2E', accent: '#6B3D5C', border: '#EDE6E8',
+    sidebar: { bg: '#2C1A2E', fg: '#FCFAFB', accent: '#B57FA2' } },
   { id: 'sellier',     name: 'Sellier', group: 'light',
-    background: '#F4ECDB', surface: '#FCF8EE', text: '#2C1A10', accent: '#E86A1B', border: '#DDD0B0' },
-  { id: 'meadow',      name: 'Meadow', group: 'light',
-    background: '#C3A55C', surface: '#BCD382', text: '#522000', accent: '#ABF5ED',
-    // Spec: 4-color theme — border derived from text at 18%.
-    border: 'rgba(82,32,0,0.18)' },
+    background: '#F4ECDB', surface: '#FCF8EE', text: '#2C1A10', accent: '#E86A1B', border: '#DDD0B0',
+    sidebar: { bg: '#2C1A10', fg: '#F4ECDB', accent: '#E86A1B' } },
   // ── Dark presets ──
   { id: 'graphite',    name: 'Graphite', group: 'dark',
-    background: '#1A1916', surface: '#25231E', text: '#EDE8DC', accent: '#C9A96A', border: '#34322B' },
+    background: '#1A1916', surface: '#25231E', text: '#EDE8DC', accent: '#C9A96A', border: '#34322B',
+    sidebar: { bg: '#0E0D0B', fg: '#EDE8DC', accent: '#C9A96A' } },
   { id: 'slate',       name: 'Slate', group: 'dark',
-    background: '#181E25', surface: '#232B34', text: '#DDE5EC', accent: '#5BA8A0', border: '#2D3640' },
+    background: '#181E25', surface: '#232B34', text: '#DDE5EC', accent: '#5BA8A0', border: '#2D3640',
+    sidebar: { bg: '#0E1218', fg: '#DDE5EC', accent: '#5BA8A0' } },
   { id: 'ink',         name: 'Ink', group: 'dark',
-    background: '#0E0E0E', surface: '#1B1B1B', text: '#F5F4F0', accent: '#DC4F47', border: '#2A2A2A' },
+    background: '#0E0E0E', surface: '#1B1B1B', text: '#F5F4F0', accent: '#DC4F47', border: '#2A2A2A',
+    sidebar: { bg: '#000000', fg: '#F5F4F0', accent: '#DC4F47' } },
 ];
 const DEFAULT_THEME_ID = 'beep_light';
 
@@ -7080,6 +7083,19 @@ function applyTheme(themeId) {
   r.style.setProperty('--border',      t.border);
   r.style.setProperty('--border-mid',  brand.borderMid);
   r.style.setProperty('--cloud-dark',  brand.cloudDark);
+  // Sidebar — has its own bg/fg pair so it stays readable across themes
+  // regardless of the bg/fg of the main app.
+  const sb = t.sidebar || { bg: brand.mahogany, fg: t.background, accent: t.accent };
+  const fgRgb = _themeHexToRgb(sb.fg);
+  r.style.setProperty('--sidebar-bg',          sb.bg);
+  r.style.setProperty('--sidebar-fg',          sb.fg);
+  r.style.setProperty('--sidebar-fg-muted',    `rgba(${fgRgb},0.62)`);
+  r.style.setProperty('--sidebar-fg-faint',    `rgba(${fgRgb},0.30)`);
+  r.style.setProperty('--sidebar-fg-faintest', `rgba(${fgRgb},0.18)`);
+  r.style.setProperty('--sidebar-border',      `rgba(${fgRgb},0.10)`);
+  r.style.setProperty('--sidebar-hover-bg',    `rgba(${fgRgb},0.06)`);
+  r.style.setProperty('--sidebar-active-bg',   `rgba(${fgRgb},0.12)`);
+  r.style.setProperty('--sidebar-accent',      sb.accent);
   // Persist locally for instant load on next visit (pre-auth bootstrap).
   try { localStorage.setItem('beep_theme', t.id); } catch (_e) {}
   // Persist per-user to studio_members.preferences.theme so it follows
