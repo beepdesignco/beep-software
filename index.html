@@ -2983,18 +2983,13 @@ tr:hover .row-btns { opacity:1; }
         </div>
       </div>
 
-      <!-- Tariffs -->
-      <div style="background:rgba(91,45,34,0.025);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <label style="display:flex;align-items:center;gap:6px;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);cursor:pointer">
-            <input type="checkbox" id="est-tariff-on" style="accent-color:var(--russet);width:14px;height:14px" onchange="recalcEstimate()"> Tariff Estimate
-          </label>
-          <div style="display:flex;align-items:center;gap:8px">
-            <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-b);font-size:10px;color:var(--text-mid);cursor:pointer"><input type="checkbox" id="est-tariff-tax" style="accent-color:var(--russet);width:12px;height:12px" onchange="recalcEstimate()"> Taxable</label>
-            <span style="font-size:11px;font-family:var(--font-b);color:var(--text-mid)">$</span>
-            <input type="number" class="fi" id="est-tariff-amt" value="0" min="0" step="25" onchange="recalcEstimate()" style="width:100px;font-size:12px;padding:5px 8px">
-          </div>
-        </div>
+      <!-- Tariff Estimate retired (U-Freight Phase 6). Tariffs now live as
+           per-item Tariffs charges via freight_charges and surface on the
+           invoice automatically. The Estimate Builder's freight % overlay
+           is for proposal-time client quoting only. -->
+
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin:4px 0 12px;line-height:1.4">
+        Freight % is a proposal-time estimate, used for client quoting and snapshots. Actual freight bills via per-item Freight Cost Status during invoicing.
       </div>
 
       <!-- Custom Lines -->
@@ -12219,8 +12214,6 @@ function openEstimateWizard() {
   $c('est-recv-fee').value = 50;
   $c('est-storage-on').checked = false;
   $c('est-storage-amt').value = 0;
-  $c('est-tariff-on').checked = false;
-  $c('est-tariff-amt').value = 0;
   _estCustomLines = [];
   _estFreightExclude = new Set();
   _estRecvExclude = new Set();
@@ -12392,12 +12385,9 @@ function recalcEstimate() {
     if ($c('est-storage-tax').checked) estLinesTax += amt * taxRate;
   }
 
-  // Tariffs
-  if ($c('est-tariff-on').checked) {
-    const amt = parseFloat($c('est-tariff-amt').value) || 0;
-    estLinesTotal += amt;
-    if ($c('est-tariff-tax').checked) estLinesTax += amt * taxRate;
-  }
+  // Tariffs retired in U-Freight Phase 6 — handled per-item now via the
+  // Tariffs freight category, surfaced on the invoice's Other associated
+  // charges row at billing time.
 
   // Custom lines
   _estCustomLines.forEach(l => {
@@ -12454,11 +12444,6 @@ function saveEstimate() {
     const amt = parseFloat($c('est-storage-amt').value)||0;
     const taxable = $c('est-storage-tax').checked;
     if (amt > 0) { lines.push({ label:'Storage Estimate', amount:amt, taxable }); if (taxable) estLinesTax += amt * taxRate; }
-  }
-  if ($c('est-tariff-on').checked) {
-    const amt = parseFloat($c('est-tariff-amt').value)||0;
-    const taxable = $c('est-tariff-tax').checked;
-    if (amt > 0) { lines.push({ label:'Tariff Estimate', amount:amt, taxable }); if (taxable) estLinesTax += amt * taxRate; }
   }
   _estCustomLines.forEach(l => {
     if (l.name && (l.price||l.qty)) {
@@ -12520,9 +12505,6 @@ function editEstimate(pid, estId) {
   $c('est-storage-on').checked = false;
   $c('est-storage-tax').checked = false;
   $c('est-storage-amt').value = 0;
-  $c('est-tariff-on').checked = false;
-  $c('est-tariff-tax').checked = false;
-  $c('est-tariff-amt').value = 0;
   _estFreightExclude = new Set();
   _estRecvExclude = new Set();
   _estCustomLines = [];
@@ -12567,9 +12549,11 @@ function editEstimate(pid, estId) {
       $c('est-storage-tax').checked = !!l.taxable;
       $c('est-storage-amt').value = l.amount || 0;
     } else if (label === 'Tariff Estimate') {
-      $c('est-tariff-on').checked = true;
-      $c('est-tariff-tax').checked = !!l.taxable;
-      $c('est-tariff-amt').value = l.amount || 0;
+      // Legacy: tariff input was retired in U-Freight Phase 6.
+      // Re-hydrate as a custom line so the snapshot's value is preserved
+      // and visible in the editor. Going forward, tariffs are entered
+      // per-item via the Tariffs freight category.
+      _estCustomLines.push({ name: 'Tariff Estimate (legacy)', qty: 1, price: l.amount || 0, taxable: !!l.taxable });
     } else {
       // Custom line
       const qtyMatch = label.match(/×(\d+)$/);
