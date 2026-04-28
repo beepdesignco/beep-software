@@ -3607,36 +3607,59 @@ tr:hover .row-btns { opacity:1; }
         </div>
       </div>
 
-      <div class="modal-section-hd">Filters <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light);font-size:11px">— combine any. Empty filter = no restriction.</span></div>
-
-      <div class="fg">
-        <label class="fl">Item Categories</label>
-        <div id="el-filter-categories" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
-      </div>
-
-      <div class="fg">
-        <label class="fl">Rooms / Spaces</label>
-        <div id="el-filter-spaces" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
-      </div>
-
-      <div class="fg">
-        <label class="fl">Item Statuses</label>
-        <div id="el-filter-statuses" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
-      </div>
-
-      <div style="padding:6px 0 14px">
-        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-          <input type="checkbox" id="el-filter-allowance" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
-          Only items / components marked as <strong style="color:#b33;font-weight:700">Allowance</strong>
+      <div style="display:flex;gap:18px;align-items:center;margin:4px 0 14px;flex-wrap:wrap">
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">List type:</span>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="radio" name="el-list-type" value="items" checked onchange="onExportListTypeChange()" style="accent-color:var(--russet)"> Items
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="radio" name="el-list-type" value="rooms" onchange="onExportListTypeChange()" style="accent-color:var(--russet)"> Rooms / Spaces
         </label>
       </div>
 
-      <div class="modal-section-hd">Columns to include</div>
+      <div id="el-items-only-block">
+        <div class="modal-section-hd">Filters <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light);font-size:11px">— combine any. Empty filter = no restriction.</span></div>
 
-      <div id="el-columns-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:8px"></div>
+        <div class="fg">
+          <label class="fl">Item Categories</label>
+          <div id="el-filter-categories" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
+        </div>
 
-      <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:14px 0 6px">Price columns <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:10px">— pick any combination, or none</span></div>
-      <div id="el-price-columns-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px"></div>
+        <div class="fg">
+          <label class="fl">Rooms / Spaces</label>
+          <div id="el-filter-spaces" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
+        </div>
+
+        <div class="fg">
+          <label class="fl">Item Statuses</label>
+          <div id="el-filter-statuses" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
+        </div>
+
+        <div style="padding:6px 0 14px">
+          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <input type="checkbox" id="el-filter-allowance" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+            Only items / components marked as <strong style="color:#b33;font-weight:700">Allowance</strong>
+          </label>
+        </div>
+
+        <div class="modal-section-hd">Columns to include</div>
+
+        <div id="el-columns-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:8px"></div>
+
+        <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:14px 0 6px">Price columns <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:10px">— pick any combination, or none</span></div>
+        <div id="el-price-columns-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px"></div>
+      </div>
+
+      <div id="el-rooms-only-block" style="display:none">
+        <div class="modal-section-hd">Rooms / Spaces list</div>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5;margin-bottom:8px">
+          Exports all rooms in the project, with each room's internal note. Useful for a quick at-a-glance space inventory or a paint / direction handoff.
+        </div>
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:6px 0">
+          <input type="checkbox" id="el-rooms-include-empty" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer" checked>
+          Include rooms that have no items
+        </label>
+      </div>
 
       <div class="modal-section-hd">Notes <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light);font-size:11px">— optional</span></div>
 
@@ -6407,6 +6430,7 @@ function dbSpaceToS(sp) {
   return {
     id: sp.id,
     name: sp.name,
+    note: sp.note || '',
     items: (sp.proposal_items || []).slice()
       .filter(it => !it.deleted_at)
       .sort((a,b) => (a.sort_order||0) - (b.sort_order||0))
@@ -6951,7 +6975,7 @@ function timeEntryToDB(t, studioId) {
   };
 }
 function spaceToDB(sp) {
-  return { id: sp.id, project_id: sp._projectId, name: sp.name || '', sort_order: sp._sortOrder || 0, deleted_at: null };
+  return { id: sp.id, project_id: sp._projectId, name: sp.name || '', note: sp.note || null, sort_order: sp._sortOrder || 0, deleted_at: null };
 }
 function itemToDB(it) {
   return {
@@ -12541,6 +12565,18 @@ function renderSpace(sp, pid) {
   if (!items.length && _propFilter === 'allowances') return '';
   let rows = items.map(item => renderItemRow(item, sp.id, pid)).join('');
 
+  // Room note: shown below the items table. If empty + not focused, the
+  // textarea is small with a subtle "+ Add room note" placeholder; if it
+  // has content, sized to fit.
+  const noteVal = sp.note || '';
+  const noteBlock = S.clientView ? '' : `
+    <div style="margin-top:8px;padding:8px 12px;background:rgba(var(--text-rgb),0.025);border:1px dashed var(--border);border-radius:var(--r)">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);margin-bottom:4px">Room Note <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:10px">— internal only</span></div>
+      <textarea class="fi" style="resize:vertical;min-height:32px;font-size:12px;background:transparent;border:none;padding:2px 0;width:100%;font-family:var(--font-b)"
+        placeholder="+ Add room note (musings about this space — paint, dimensions, ideas)"
+        onchange="mutSpace('${pid}','${sp.id}','note',this.value)">${escH(noteVal)}</textarea>
+    </div>`;
+
   return `
     <div class="space-section" id="sp-${sp.id}">
       <div class="space-header">
@@ -12570,14 +12606,16 @@ function renderSpace(sp, pid) {
               ondragover="onAddRowDragOver(event,'${pid}','${sp.id}')"
               ondragleave="onItemRowDragLeave(event)"
               ondrop="onAddRowDrop(event,'${pid}','${sp.id}')">
-            <td colspan="9">
-              <button class="add-item-btn" onclick="openAddItemModal('${pid}','${sp.id}')">+ Add item</button>
+            <td colspan="9" style="padding:10px 10px !important">
+              <button class="btn btn-secondary btn-sm" onclick="openAddItemModal('${pid}','${sp.id}')" style="font-size:11px">+ Add Item</button>
             </td>
           </tr>
         </tbody>
       </table>
+      ${noteBlock}
     </div>`;
 }
+
 
 function itemTypeBadge(type) {
   const t = ITEM_TYPES.find(it => it.id === type);
@@ -20121,12 +20159,21 @@ function _emptyExportListDraft() {
     docId: null,
     projectId: '',
     name: '',
+    listType: 'items',         // 'items' | 'rooms'
+    includeEmptyRooms: true,   // rooms-mode only
     filters: { itemTypeIds: [], spaceIds: [], allowanceOnly: false, statuses: [] },
     columns: { ...EL_DEFAULT_COLUMNS },
     notes: '',
     notesPosition: 'front',
     orientation: 'landscape',
   };
+}
+
+function onExportListTypeChange() {
+  const sel = (document.querySelector('input[name=el-list-type]:checked') || {}).value || 'items';
+  _exportListDraft.listType = sel;
+  $c('el-items-only-block').style.display = sel === 'items' ? '' : 'none';
+  $c('el-rooms-only-block').style.display = sel === 'rooms' ? '' : 'none';
 }
 
 function openExportListModal(pidLock) {
@@ -20137,6 +20184,10 @@ function openExportListModal(pidLock) {
   $c('el-name').value = '';
   $c('el-notes').value = '';
   $c('el-filter-allowance').checked = false;
+  if ($c('el-rooms-include-empty')) $c('el-rooms-include-empty').checked = true;
+  document.querySelectorAll('input[name=el-list-type]').forEach(r => { r.checked = r.value === 'items'; });
+  $c('el-items-only-block').style.display = '';
+  $c('el-rooms-only-block').style.display = 'none';
   document.querySelectorAll('input[name=el-notes-pos]').forEach(r => { r.checked = r.value === 'front'; });
   document.querySelectorAll('input[name=el-orientation]').forEach(r => { r.checked = r.value === 'landscape'; });
 
@@ -20164,6 +20215,8 @@ function openExportListEditor(docId) {
     docId: doc.id,
     projectId: doc.projectId,
     name: doc.title || '',
+    listType: doc.exportConfig?.listType || 'items',
+    includeEmptyRooms: doc.exportConfig?.includeEmptyRooms !== false,
     filters: doc.exportConfig?.filters || { itemTypeIds: [], spaceIds: [], allowanceOnly: false, statuses: [] },
     columns: doc.exportConfig?.columns || { ...EL_DEFAULT_COLUMNS },
     notes: doc.exportConfig?.notes || '',
@@ -20175,6 +20228,10 @@ function openExportListEditor(docId) {
   $c('el-name').value = _exportListDraft.name;
   $c('el-notes').value = _exportListDraft.notes;
   $c('el-filter-allowance').checked = !!_exportListDraft.filters.allowanceOnly;
+  if ($c('el-rooms-include-empty')) $c('el-rooms-include-empty').checked = !!_exportListDraft.includeEmptyRooms;
+  document.querySelectorAll('input[name=el-list-type]').forEach(r => { r.checked = r.value === _exportListDraft.listType; });
+  $c('el-items-only-block').style.display = _exportListDraft.listType === 'items' ? '' : 'none';
+  $c('el-rooms-only-block').style.display = _exportListDraft.listType === 'rooms' ? '' : 'none';
   document.querySelectorAll('input[name=el-notes-pos]').forEach(r => { r.checked = r.value === _exportListDraft.notesPosition; });
   document.querySelectorAll('input[name=el-orientation]').forEach(r => { r.checked = r.value === _exportListDraft.orientation; });
   $c('el-project-wrap').style.display = 'none'; // project locked in edit mode
@@ -20245,6 +20302,8 @@ function _readExportListFromModal() {
   d.name = $c('el-name').value.trim();
   d.notes = $c('el-notes').value.trim();
   d.filters.allowanceOnly = $c('el-filter-allowance').checked;
+  d.listType = (document.querySelector('input[name=el-list-type]:checked') || {}).value || 'items';
+  d.includeEmptyRooms = !!($c('el-rooms-include-empty') && $c('el-rooms-include-empty').checked);
   d.notesPosition = (document.querySelector('input[name=el-notes-pos]:checked') || {}).value || 'front';
   d.orientation = (document.querySelector('input[name=el-orientation]:checked') || {}).value || 'landscape';
   return d;
@@ -20254,8 +20313,10 @@ function saveAndExportList() {
   const d = _readExportListFromModal();
   if (!d.name) { toast('Give the list a name.'); $c('el-name').focus(); return; }
   if (!d.projectId) { toast('Pick a project.'); return; }
-  const anyCol = Object.values(d.columns).some(Boolean);
-  if (!anyCol) { toast('Pick at least one column.'); return; }
+  if (d.listType === 'items') {
+    const anyCol = Object.values(d.columns).some(Boolean);
+    if (!anyCol) { toast('Pick at least one column.'); return; }
+  }
 
   if (!S.documents) S.documents = [];
   let doc;
@@ -20264,7 +20325,7 @@ function saveAndExportList() {
     if (!doc) { toast('List not found.'); return; }
     doc.title = d.name;
     doc.projectId = d.projectId;
-    doc.exportConfig = { filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation };
+    doc.exportConfig = { listType: d.listType, includeEmptyRooms: d.includeEmptyRooms, filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation };
     doc.updated = new Date().toISOString();
     doc.revision = (doc.revision || 1) + 1;
   } else {
@@ -20280,7 +20341,7 @@ function saveAndExportList() {
       revisionHistory: [],
       items: [],
       rooms: [],
-      exportConfig: { filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
+      exportConfig: { listType: d.listType, includeEmptyRooms: d.includeEmptyRooms, filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
     };
     S.documents.push(doc);
     d.docId = doc.id;
@@ -20295,14 +20356,16 @@ function saveAndExportList() {
 function previewExportList() {
   const d = _readExportListFromModal();
   if (!d.projectId) { toast('Pick a project first.'); return; }
-  const anyCol = Object.values(d.columns).some(Boolean);
-  if (!anyCol) { toast('Pick at least one column to preview.'); return; }
+  if (d.listType === 'items') {
+    const anyCol = Object.values(d.columns).some(Boolean);
+    if (!anyCol) { toast('Pick at least one column to preview.'); return; }
+  }
   // Synthetic doc for preview — not saved.
   const doc = {
     id: 'preview',
     projectId: d.projectId,
     title: d.name || 'Untitled List',
-    exportConfig: { filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
+    exportConfig: { listType: d.listType, includeEmptyRooms: d.includeEmptyRooms, filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
   };
   renderExportListPDF(doc, { preview: true });
 }
@@ -20514,14 +20577,113 @@ function _exportItemTracking(item) {
   return lines.join('\n');
 }
 
+async function _renderExportRoomsPDF(doc, cfg, orientation, opts = {}) {
+  const { jsPDF } = window.jspdf;
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const prop = S.proposals[doc.projectId];
+  const allSpaces = (prop?.spaces || []).filter(sp => sp.name && sp.name.trim());
+  const rooms = cfg.includeEmptyRooms === false
+    ? allSpaces.filter(sp => (sp.items || []).length > 0)
+    : allSpaces;
+  if (!rooms.length) { toast('No rooms to export.'); return; }
+
+  const pdf = new jsPDF({ unit: 'pt', format: 'letter', orientation });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 36;
+  const MAHOGANY = [63, 21, 28];
+  const PECAN = [159, 102, 64];
+  const TEXT_DARK = [40, 32, 28];
+  const TEXT_MID = [110, 100, 90];
+  const TEXT_LIGHT = [160, 150, 140];
+  const BORDER = [220, 210, 198];
+
+  // Header — same shape as the items renderer.
+  let cursorY = margin;
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(...MAHOGANY);
+  pdf.text('BEEP', margin, cursorY + 10);
+  pdf.setFont('courier', 'normal'); pdf.setFontSize(8); pdf.setTextColor(...TEXT_LIGHT);
+  pdf.text('HQ', margin + 36, cursorY + 10);
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.setTextColor(...MAHOGANY);
+  pdf.text(doc.title || 'Untitled List', pageW / 2, cursorY + 14, { align: 'center' });
+  pdf.setFont('courier', 'normal'); pdf.setFontSize(9); pdf.setTextColor(...TEXT_MID);
+  pdf.text(new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), pageW - margin, cursorY + 10, { align: 'right' });
+  cursorY += 28;
+  pdf.setFontSize(10); pdf.setTextColor(...TEXT_MID);
+  pdf.text(proj?.name || '', pageW / 2, cursorY, { align: 'center' });
+  cursorY += 8;
+  pdf.setDrawColor(...PECAN); pdf.setLineWidth(0.8);
+  pdf.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 12;
+
+  if (cfg.notes && cfg.notesPosition === 'front') {
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(10); pdf.setTextColor(...TEXT_DARK);
+    const split = pdf.splitTextToSize(cfg.notes, pageW - margin * 2);
+    pdf.text(split, margin, cursorY + 4);
+    cursorY += 4 + split.length * 11 + 8;
+  }
+
+  pdf.autoTable({
+    startY: cursorY,
+    head: [['Room', 'Note']],
+    body: rooms.map(sp => [sp.name || '', sp.note || '']),
+    styles: {
+      font: 'helvetica', fontSize: 10, cellPadding: 8,
+      textColor: TEXT_DARK, lineColor: BORDER, lineWidth: 0.4,
+      overflow: 'linebreak',
+      halign: 'left', valign: 'top',
+      minCellHeight: 28,
+    },
+    headStyles: {
+      fillColor: MAHOGANY, textColor: [255,255,255],
+      fontStyle: 'bold', fontSize: 10,
+      halign: 'left', valign: 'middle',
+      minCellHeight: 22, cellPadding: 6,
+    },
+    alternateRowStyles: { fillColor: [250, 247, 242] },
+    columnStyles: { 0: { cellWidth: orientation === 'landscape' ? 200 : 140, fontStyle: 'bold' } },
+    margin: { left: margin, right: margin, top: margin + 36, bottom: margin + 26 },
+  });
+
+  cursorY = pdf.lastAutoTable.finalY + 14;
+  if (cfg.notes && cfg.notesPosition === 'end') {
+    if (cursorY > pageH - margin - 60) { pdf.addPage(); cursorY = margin + 14; }
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(10); pdf.setTextColor(...TEXT_DARK);
+    const split = pdf.splitTextToSize(cfg.notes, pageW - margin * 2);
+    pdf.text(split, margin, cursorY);
+  }
+
+  const totalPages = pdf.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    pdf.setPage(i);
+    pdf.setFont('courier', 'oblique'); pdf.setFontSize(8); pdf.setTextColor(...TEXT_LIGHT);
+    pdf.text(doc.title || '', margin, pageH - margin / 2);
+    pdf.setFont('courier', 'normal');
+    pdf.text(`${i} / ${totalPages}`, pageW / 2, pageH - margin / 2, { align: 'center' });
+    pdf.text('Beep Design Co.', pageW - margin, pageH - margin / 2, { align: 'right' });
+  }
+
+  if (opts.preview) {
+    const blob = pdf.output('blob');
+    window.open(URL.createObjectURL(blob), '_blank');
+  } else {
+    pdf.save(`${(doc.title || 'rooms').replace(/[^a-z0-9]+/gi, '_')}.pdf`);
+  }
+}
+
 async function renderExportListPDF(doc, opts = {}) {
   if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded. Check your connection and retry.'); return; }
   const { jsPDF } = window.jspdf;
   const cfg = doc.exportConfig || {};
+  const orientation = cfg.orientation || 'landscape';
+
+  if (cfg.listType === 'rooms') {
+    return _renderExportRoomsPDF(doc, cfg, orientation, opts);
+  }
+
   const proj = S.projects.find(p => p.id === doc.projectId);
   const prop = S.proposals[doc.projectId];
   const items = _collectExportItems(prop, cfg.filters || {});
-  const orientation = cfg.orientation || 'landscape';
 
   if (!items.length) { toast('No items match those filters.'); return; }
 
