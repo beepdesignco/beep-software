@@ -6467,6 +6467,7 @@ function dbCompToS(c) {
     id: c.id,
     name: c.name || '',
     componentType: c.component_type || '',
+    itemTypeId: c.item_type_id || null,
     contact: c.contact || '',
     vendorId: c.vendor_id || null,
     vendorContactId: c.vendor_contact_id || null,
@@ -6979,7 +6980,9 @@ function itemToDB(it) {
 function componentToDB(c) {
   return {
     id: c.id, item_id: c._itemId, name: c.name || null,
-    component_type: c.componentType || null, contact: c.contact || null,
+    component_type: c.componentType || null,
+    item_type_id: c.itemTypeId || null,
+    contact: c.contact || null,
     vendor_id:         c.vendorId        || null,
     vendor_contact_id: c.vendorContactId || null,
     brand_id:          c.brandId         || null,
@@ -14230,6 +14233,11 @@ function renderModalComponents() {
     const typeOpts = COMPONENT_TYPES.map(t =>
       `<option value="${t.id}" ${c.componentType === t.id ? 'selected' : ''}>${t.label}</option>`
     ).join('');
+    const itemTypeOpts = (S.itemTypes || [])
+      .slice()
+      .sort((a, b) => (a.sortOrder - b.sortOrder) || (a.name || '').localeCompare(b.name || ''))
+      .map(t => `<option value="${t.id}" ${c.itemTypeId === t.id ? 'selected' : ''}>${escH(t.name)}</option>`)
+      .join('');
     return `
     <div class="person-entry" style="margin-bottom:6px" data-cidx="${i}" data-cid="${c.id}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -14240,9 +14248,14 @@ function renderModalComponents() {
         <div class="fg"><label class="fl">Name</label>
           <input type="text" class="fi comp-name" value="${escH(c.name)}" placeholder="e.g. Face Fabric">
         </div>
-        <div class="fg"><label class="fl">Type</label>
+        <div class="fg"><label class="fl">Component Type</label>
           <select class="fi fsel comp-type" onchange="onCompTypeChange(${i}, this.value)">
             <option value="">—</option>${typeOpts}
+          </select>
+        </div>
+        <div class="fg"><label class="fl">Item Type <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(for list filtering / export)</span></label>
+          <select class="fi fsel comp-item-type">
+            <option value="">— Inherit from item —</option>${itemTypeOpts}
           </select>
         </div>
       </div>
@@ -14388,6 +14401,7 @@ function readModalComponentsFromDOM() {
     if (_modalComponents[i]) {
       _modalComponents[i].name = el.querySelector('.comp-name')?.value.trim() || '';
       _modalComponents[i].componentType = el.querySelector('.comp-type')?.value || '';
+      _modalComponents[i].itemTypeId = el.querySelector('.comp-item-type')?.value || null;
       // .comp-contact text input replaced by vendor/contact/brand pickers;
       // those mutate _modalComponents[i] directly via onChange callbacks,
       // so legacy `c.contact` is preserved in place — never read from DOM.
@@ -20275,25 +20289,105 @@ function _collectExportItems(prop, filters) {
   if (!prop) return [];
   const out = [];
   (prop.spaces || []).forEach(sp => {
+    if (filters.spaceIds?.length && !filters.spaceIds.includes(sp.id)) return;
     (sp.items || []).forEach(item => {
-      if (filters.spaceIds?.length && !filters.spaceIds.includes(sp.id)) return;
-      if (filters.itemTypeIds?.length && !filters.itemTypeIds.includes(item.itemTypeId)) return;
+      // Status filter applies at the item level; constructed items pass
+      // their status down to components for visibility.
       if (filters.statuses?.length && !filters.statuses.includes(item.status)) return;
-      if (filters.allowanceOnly) {
-        const itemIsAllowance = !!item.allowance;
-        const compIsAllowance = (item.components || []).some(c => c.allowance);
-        if (!itemIsAllowance && !compIsAllowance) return;
+
+      if (item.type === 'constructed' && (item.components || []).length) {
+        // Each component becomes its own export row. Component item-type
+        // (or fall back to the parent's) drives category filtering.
+        (item.components || []).forEach(c => {
+          const effectiveItemTypeId = c.itemTypeId || item.itemTypeId || null;
+          if (filters.itemTypeIds?.length && !filters.itemTypeIds.includes(effectiveItemTypeId)) return;
+          if (filters.allowanceOnly && !c.allowance && !item.allowance) return;
+          out.push({
+            // Component is the row's identity, but inherit display fields
+            // not on components (status, room, files for image, etc.) from
+            // the parent item so the row stays useful even on a
+            // component-only flatten.
+            ..._mergeComponentForExport(c, item),
+            _spaceName: sp.name || 'Unassigned',
+            _parentName: item.name || '',
+            _isComponent: true,
+            _effectiveItemTypeId: effectiveItemTypeId,
+          });
+        });
+        return;
       }
-      out.push({ ...item, _spaceName: sp.name || 'Unassigned' });
+
+      // Non-constructed items: one row.
+      if (filters.itemTypeIds?.length && !filters.itemTypeIds.includes(item.itemTypeId)) return;
+      if (filters.allowanceOnly && !item.allowance) return;
+      out.push({
+        ...item,
+        _spaceName: sp.name || 'Unassigned',
+        _parentName: '',
+        _isComponent: false,
+        _effectiveItemTypeId: item.itemTypeId || null,
+      });
     });
   });
-  // Sort: space, then name.
-  out.sort((a, b) => (a._spaceName || '').localeCompare(b._spaceName || '') || (a.name || '').localeCompare(b.name || ''));
+  // Sort: space, then parent (so a constructed item's components stay
+  // grouped), then name.
+  out.sort((a, b) =>
+    (a._spaceName || '').localeCompare(b._spaceName || '') ||
+    (a._parentName || '').localeCompare(b._parentName || '') ||
+    (a.name || '').localeCompare(b.name || '')
+  );
   return out;
+}
+
+// Build a row-shaped object for an exported component. Fields lacking
+// at component level (status, files for image, notes) inherit from the
+// parent. Component-owned fields (vendor/brand/contact, dimensions,
+// weight, techInfo, costs) win.
+function _mergeComponentForExport(c, parentItem) {
+  return {
+    id: c.id,
+    name: c.name || '',
+    itemCode: c.itemCode || parentItem.itemCode || '',
+    status: parentItem.status,                 // PM status is item-level
+    room: parentItem.room || '',
+    files: c.files?.length ? c.files : (parentItem.files || []),
+    mainImageId: c.mainImageId || parentItem.mainImageId || null,
+    notes: c.note || parentItem.notes || '',   // component note > item proposal note
+    dimensions: c.dimensions || '',
+    weight: c.weight || '',
+    techInfo: c.techInfo || '',
+    links: c.links?.length ? c.links : (parentItem.links || []),
+    trackingNumbers: c.trackingNumbers || [],
+    vendorId: c.vendorId || null,
+    vendorContactId: c.vendorContactId || null,
+    brandId: c.brandId || null,
+    netCost: c.netCost,
+    costActual: c.costActual,
+    qty: c.qty,
+    qtyUnit: c.qtyUnit,
+    allowance: !!c.allowance,
+    billCostOnly: !!c.billCostOnly,
+    adjustMarkup: c.adjustMarkup,
+    type: 'component',
+    components: [],
+    _origComponent: c,
+    _parentItem: parentItem,
+  };
 }
 
 function _exportItemPrice(item, kind, proj) {
   const markup = ((proj?.markupPct ?? 25)) / 100;
+  // Component-row exports use the component's own netCost / costActual.
+  if (item.type === 'component') {
+    const qty = parseFloat(item.qty) || 1;
+    const net = parse$(item.netCost) * qty;
+    const actual = (parse$(item.costActual) || parse$(item.netCost)) * qty;
+    if (kind === 'priceNet') return net;
+    if (kind === 'priceActual') return actual;
+    if (kind === 'priceClient') return item.billCostOnly ? net : net * (1 + markup);
+    if (kind === 'priceAllowance') return item.allowance ? (item.billCostOnly ? net : net * (1 + markup)) : null;
+    return null;
+  }
   if (item.type === 'constructed') {
     const total = (item.components || []).reduce((s, c) => s + parse$(c.netCost) * (parseFloat(c.qty) || 1), 0);
     const actualTotal = (item.components || []).reduce((s, c) => s + (parse$(c.costActual) || parse$(c.netCost)) * (parseFloat(c.qty) || 1), 0);
@@ -20316,6 +20410,10 @@ function _exportItemPrice(item, kind, proj) {
 }
 
 function _exportItemVendors(item) {
+  // Component rows: just the component's own vendor.
+  if (item.type === 'component') {
+    return item.vendorId ? ((S.vendors || []).find(v => v.id === item.vendorId)?.name || '') : '';
+  }
   const ids = new Set();
   if (item.vendorId) ids.add(item.vendorId);
   (item.components || []).forEach(c => { if (c.vendorId) ids.add(c.vendorId); });
@@ -20323,6 +20421,9 @@ function _exportItemVendors(item) {
   return names.join(', ');
 }
 function _exportItemBrands(item) {
+  if (item.type === 'component') {
+    return item.brandId ? ((S.brands || []).find(b => b.id === item.brandId)?.name || '') : '';
+  }
   const ids = new Set();
   if (item.brandId) ids.add(item.brandId);
   (item.components || []).forEach(c => { if (c.brandId) ids.add(c.brandId); });
@@ -20332,7 +20433,9 @@ function _exportItemBrands(item) {
 function _exportItemTracking(item) {
   const lines = [];
   (item.trackingNumbers || []).forEach(t => { if (t.number) lines.push(`${t.number}${t.carrier ? ' (' + t.carrier + ')' : ''}`); });
-  (item.components || []).forEach(c => (c.trackingNumbers || []).forEach(t => { if (t.number) lines.push(`${t.number}${t.carrier ? ' (' + t.carrier + ')' : ''}`); }));
+  if (item.type !== 'component') {
+    (item.components || []).forEach(c => (c.trackingNumbers || []).forEach(t => { if (t.number) lines.push(`${t.number}${t.carrier ? ' (' + t.carrier + ')' : ''}`); }));
+  }
   return lines.join('\n');
 }
 
@@ -20399,7 +20502,14 @@ async function renderExportListPDF(doc, opts = {}) {
   const body = items.map(item => colKeys.map(k => {
     if (k === 'image' || k === 'links') return ''; // drawn in didDrawCell
     if (k === 'itemCode') return item.itemCode || '';
-    if (k === 'name') return item.name || '';
+    if (k === 'name') {
+      // Components export with their parent constructed item's name in
+      // parens beneath, so the row reads "Antique brass pull\n(Kitchen island)".
+      if (item._isComponent && item._parentName) {
+        return (item.name || '') + '\n(' + item._parentName + ')';
+      }
+      return item.name || '';
+    }
     if (k === 'space') return item._spaceName || '';
     if (k === 'vendor') return _exportItemVendors(item);
     if (k === 'brand') return _exportItemBrands(item);
