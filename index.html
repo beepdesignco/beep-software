@@ -6973,8 +6973,17 @@ async function syncToSupabase() {
       (inv.lineItems || []).forEach((l, i) => current.invoiceLineItems.set(l.id, { ...l, _invoiceId: inv.id, _sortOrder: i }));
       (inv.payments  || []).forEach(p   => current.invoicePayments.set(p.id, { ...p, _invoiceId: inv.id }));
     });
+    // Defensive: any allocation whose invoice_line_item_id points at a
+    // line that's no longer in the working set (line was removed via
+    // line-X button, etc.) gets the FK cleared so sync doesn't violate
+    // expense_allocations_invoice_line_item_id_fkey.
+    const _liveLineIds = new Set(current.invoiceLineItems.keys());
     (S.expenses || []).forEach(e => {
       (e.allocations || []).forEach(a => {
+        if (a.invoiceLineItemId && !_liveLineIds.has(a.invoiceLineItemId)) {
+          a.invoiceLineItemId = null;
+          if (a.status === 'invoiced') a.status = 'draft';
+        }
         current.expenseAllocations.set(a.id, { ...a, expenseId: a.expenseId || e.id });
       });
     });
