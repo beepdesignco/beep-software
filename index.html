@@ -9730,7 +9730,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
           </div>` : ''}
         </div>
 
-        <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border)">
+        <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           ${renderFilesSection(pid, spId, itemId, '', item.files)}
           ${item.type === 'constructed' && (item.components||[]).some(c => (c.files||[]).length) ? `
           <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
