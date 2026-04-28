@@ -3588,6 +3588,94 @@ tr:hover .row-btns { opacity:1; }
 </div>
 
 <!-- ═════════════════ NEW DOCUMENT MODAL ═════════════════ -->
+<!-- ═════════════════ EXPORT LIST MODAL ═════════════════ -->
+<div class="overlay" id="modal-export-list">
+  <div class="modal" style="width:720px;max-height:90vh;display:flex;flex-direction:column">
+    <button class="modal-x" onclick="closeModal('modal-export-list')">✕</button>
+    <div class="modal-title" id="el-modal-title">Export New List</div>
+    <input type="hidden" id="el-doc-id">
+
+    <div style="overflow-y:auto;padding-right:4px;flex:1">
+      <div class="frow">
+        <div class="fg" style="flex:2">
+          <label class="fl">List name <span style="color:#b33">*</span></label>
+          <input type="text" class="fi" id="el-name" placeholder="e.g. Living Room Allowances · Shopping List">
+        </div>
+        <div class="fg" id="el-project-wrap" style="flex:1">
+          <label class="fl">Project</label>
+          <select class="fi fsel" id="el-project" onchange="onExportListProjectChange()"></select>
+        </div>
+      </div>
+
+      <div class="modal-section-hd">Filters <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light);font-size:11px">— combine any. Empty filter = no restriction.</span></div>
+
+      <div class="fg">
+        <label class="fl">Item Categories</label>
+        <div id="el-filter-categories" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
+      </div>
+
+      <div class="fg">
+        <label class="fl">Rooms / Spaces</label>
+        <div id="el-filter-spaces" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
+      </div>
+
+      <div class="fg">
+        <label class="fl">Item Statuses</label>
+        <div id="el-filter-statuses" style="display:flex;flex-wrap:wrap;gap:5px;min-height:32px"></div>
+      </div>
+
+      <div style="padding:6px 0 14px">
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="checkbox" id="el-filter-allowance" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+          Only items / components marked as <strong style="color:#b33;font-weight:700">Allowance</strong>
+        </label>
+      </div>
+
+      <div class="modal-section-hd">Columns to include</div>
+
+      <div id="el-columns-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:8px"></div>
+
+      <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:14px 0 6px">Price columns <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:10px">— pick any combination, or none</span></div>
+      <div id="el-price-columns-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px"></div>
+
+      <div class="modal-section-hd">Notes <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light);font-size:11px">— optional</span></div>
+
+      <div class="fg">
+        <textarea class="fi" id="el-notes" style="resize:vertical;min-height:54px;font-size:12px" placeholder="Anything you want printed alongside the list — context, instructions, reminders…"></textarea>
+      </div>
+
+      <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">Notes appear:</span>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="radio" name="el-notes-pos" value="front" checked style="accent-color:var(--russet)"> At the front
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="radio" name="el-notes-pos" value="end" style="accent-color:var(--russet)"> At the end
+        </label>
+      </div>
+
+      <div class="modal-section-hd">Layout</div>
+
+      <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">Orientation:</span>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="radio" name="el-orientation" value="landscape" checked style="accent-color:var(--russet)"> Landscape
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="radio" name="el-orientation" value="portrait" style="accent-color:var(--russet)"> Portrait
+        </label>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="el-delete-btn" style="display:none;margin-right:auto" onclick="deleteExportList()">Delete</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-export-list')">Cancel</button>
+      <button class="btn btn-secondary" onclick="previewExportList()">Print Preview</button>
+      <button class="btn btn-primary" onclick="saveAndExportList()">Save &amp; Export</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="modal-new-doc">
   <div class="modal" style="width:440px">
     <button class="modal-x" onclick="closeModal('modal-new-doc')">✕</button>
@@ -10113,9 +10201,11 @@ function renderPDDocuments(proj, pid) {
 
   // Folder management
   html += `
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
     <input type="text" class="fi" id="doc-new-folder-input" placeholder="New folder name…" style="width:200px;font-size:12px;padding:6px 10px" onkeydown="if(event.key==='Enter'){createDocFolder('${pid}');event.preventDefault()}">
     <button class="btn btn-secondary btn-sm" onclick="createDocFolder('${pid}')">+ Create Folder</button>
+    <div style="flex:1"></div>
+    <button class="btn btn-secondary btn-sm" onclick="openExportListModal('${pid}')">+ Export New List</button>
   </div>`;
 
   // Generated Documents (from Documents section)
@@ -19892,6 +19982,7 @@ const DOC_TEMPLATES = [
   { id:'tile_schedule', label:'Tile Schedule' },
   { id:'hardware_worksheet', label:'Hardware Worksheet' },
   { id:'purchase_order', label:'Purchase Order / Work Order' },
+  { id:'export_list', label:'Export List' },
 ];
 
 let _currentDocId = null;
@@ -19902,6 +19993,544 @@ function openNewDocModal() {
   $c('nd-template').innerHTML = DOC_TEMPLATES.map(t => `<option value="${t.id}">${escH(t.label)}</option>`).join('');
   $c('nd-title').value = '';
   $c('modal-new-doc').classList.add('open');
+}
+
+// ─── EXPORT LIST BUILDER ──────────────────────────────────────
+//
+// "Lists" are flat exports of proposal items, filtered + columnized to
+// taste, rendered as a printable PDF and persisted as a Document row
+// (templateId = 'export_list'). Re-opening the document re-opens this
+// modal pre-populated with the saved config so the user can revise and
+// re-export.
+
+const EL_STANDARD_COLUMNS = [
+  { key: 'image',         label: 'Image (main)' },
+  { key: 'itemCode',      label: 'Item code' },
+  { key: 'name',          label: 'Item name' },
+  { key: 'space',         label: 'Space / Room' },
+  { key: 'vendor',        label: 'Vendor (business)' },
+  { key: 'brand',         label: 'Brand' },
+  { key: 'status',        label: 'Item status' },
+  { key: 'tracking',      label: 'Tracking # / carrier' },
+  { key: 'proposalNote',  label: 'Proposal note' },
+  { key: 'dimensions',    label: 'Dimensions' },
+  { key: 'weight',        label: 'Weight' },
+  { key: 'techInfo',      label: 'Additional tech info' },
+];
+const EL_PRICE_COLUMNS = [
+  { key: 'priceNet',         label: 'Net cost' },
+  { key: 'priceActual',      label: 'Actual cost' },
+  { key: 'priceClient',      label: 'Client price' },
+  { key: 'priceAllowance',   label: 'Allowance amount' },
+];
+const EL_DEFAULT_COLUMNS = { name: true, space: true, priceClient: true };
+
+let _exportListDraft = null; // { docId, projectId, name, filters, columns, notes, notesPosition, orientation }
+
+function _emptyExportListDraft() {
+  return {
+    docId: null,
+    projectId: '',
+    name: '',
+    filters: { itemTypeIds: [], spaceIds: [], allowanceOnly: false, statuses: [] },
+    columns: { ...EL_DEFAULT_COLUMNS },
+    notes: '',
+    notesPosition: 'front',
+    orientation: 'landscape',
+  };
+}
+
+function openExportListModal(pidLock) {
+  _exportListDraft = _emptyExportListDraft();
+  _exportListDraft.projectId = pidLock || (S._detailProjectId || '');
+  $c('el-modal-title').textContent = 'Export New List';
+  $c('el-doc-id').value = '';
+  $c('el-name').value = '';
+  $c('el-notes').value = '';
+  $c('el-filter-allowance').checked = false;
+  document.querySelectorAll('input[name=el-notes-pos]').forEach(r => { r.checked = r.value === 'front'; });
+  document.querySelectorAll('input[name=el-orientation]').forEach(r => { r.checked = r.value === 'landscape'; });
+
+  // Project dropdown — visible when not locked. Locked = project context
+  // came from a per-project Documents tab, so we hide the picker.
+  const projWrap = $c('el-project-wrap');
+  if (pidLock) {
+    projWrap.style.display = 'none';
+  } else {
+    projWrap.style.display = '';
+    $c('el-project').innerHTML = '<option value="">— Select project —</option>' +
+      S.projects.map(p => `<option value="${p.id}" ${p.id===_exportListDraft.projectId?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+  $c('el-delete-btn').style.display = 'none';
+  renderExportListChips();
+  renderExportListColumns();
+  $c('modal-export-list').classList.add('open');
+  setTimeout(() => $c('el-name').focus(), 60);
+}
+
+function openExportListEditor(docId) {
+  const doc = (S.documents || []).find(d => d.id === docId);
+  if (!doc || doc.templateId !== 'export_list') return;
+  _exportListDraft = {
+    docId: doc.id,
+    projectId: doc.projectId,
+    name: doc.title || '',
+    filters: doc.exportConfig?.filters || { itemTypeIds: [], spaceIds: [], allowanceOnly: false, statuses: [] },
+    columns: doc.exportConfig?.columns || { ...EL_DEFAULT_COLUMNS },
+    notes: doc.exportConfig?.notes || '',
+    notesPosition: doc.exportConfig?.notesPosition || 'front',
+    orientation: doc.exportConfig?.orientation || 'landscape',
+  };
+  $c('el-modal-title').textContent = 'Edit List';
+  $c('el-doc-id').value = doc.id;
+  $c('el-name').value = _exportListDraft.name;
+  $c('el-notes').value = _exportListDraft.notes;
+  $c('el-filter-allowance').checked = !!_exportListDraft.filters.allowanceOnly;
+  document.querySelectorAll('input[name=el-notes-pos]').forEach(r => { r.checked = r.value === _exportListDraft.notesPosition; });
+  document.querySelectorAll('input[name=el-orientation]').forEach(r => { r.checked = r.value === _exportListDraft.orientation; });
+  $c('el-project-wrap').style.display = 'none'; // project locked in edit mode
+  $c('el-delete-btn').style.display = '';
+  renderExportListChips();
+  renderExportListColumns();
+  $c('modal-export-list').classList.add('open');
+}
+
+function onExportListProjectChange() {
+  _exportListDraft.projectId = $c('el-project').value;
+  // Reset per-project filters since spaces/items are project-scoped.
+  _exportListDraft.filters.spaceIds = [];
+  renderExportListChips();
+}
+
+function renderExportListChips() {
+  const d = _exportListDraft;
+
+  // Categories
+  const cats = (S.itemTypes || []).slice().sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  $c('el-filter-categories').innerHTML = cats.length ? cats.map(c => {
+    const on = d.filters.itemTypeIds.includes(c.id);
+    return `<button onclick="toggleExportListChip('itemTypeIds','${c.id}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid ${on?(c.color||'var(--russet)'):'var(--border)'};background:${on?(c.color||'var(--russet)')+'18':'var(--white)'};color:${on?(c.color||'var(--russet)'):'var(--text-mid)'}">${escH(c.name)}</button>`;
+  }).join('') : '<span style="font-size:11px;color:var(--text-light);font-style:italic">No item types defined. Manage in App Settings → Categories.</span>';
+
+  // Spaces
+  const prop = S.proposals[d.projectId];
+  const spaces = (prop?.spaces || []).filter(s => s.name).slice().sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  $c('el-filter-spaces').innerHTML = spaces.length ? spaces.map(s => {
+    const on = d.filters.spaceIds.includes(s.id);
+    return `<button onclick="toggleExportListChip('spaceIds','${s.id}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid ${on?'var(--russet)':'var(--border)'};background:${on?'rgba(150,61,39,0.10)':'var(--white)'};color:${on?'var(--russet)':'var(--text-mid)'}">${escH(s.name)}</button>`;
+  }).join('') : '<span style="font-size:11px;color:var(--text-light);font-style:italic">Pick a project first to see its spaces.</span>';
+
+  // Statuses (pipeline)
+  const statuses = STATUSES;
+  $c('el-filter-statuses').innerHTML = statuses.map(s => {
+    const on = d.filters.statuses.includes(s.v);
+    const c = (S.statusColors || DEFAULT_STATUS_COLORS)[s.v] || '#888';
+    return `<button onclick="toggleExportListChip('statuses','${s.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid ${on?c:'var(--border)'};background:${on?c+'18':'var(--white)'};color:${on?c:'var(--text-mid)'}">${escH(s.l)}</button>`;
+  }).join('');
+}
+
+function toggleExportListChip(group, value) {
+  const arr = _exportListDraft.filters[group];
+  const i = arr.indexOf(value);
+  if (i > -1) arr.splice(i, 1); else arr.push(value);
+  renderExportListChips();
+}
+
+function renderExportListColumns() {
+  const d = _exportListDraft;
+  const colHtml = (cols) => cols.map(c => `
+    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:3px 0">
+      <input type="checkbox" ${d.columns[c.key]?'checked':''} onchange="_setExportListColumn('${c.key}', this.checked)" style="accent-color:var(--russet);width:13px;height:13px">
+      ${escH(c.label)}
+    </label>`).join('');
+  $c('el-columns-grid').innerHTML = colHtml(EL_STANDARD_COLUMNS);
+  $c('el-price-columns-grid').innerHTML = colHtml(EL_PRICE_COLUMNS);
+}
+
+function _setExportListColumn(key, on) {
+  _exportListDraft.columns[key] = !!on;
+}
+
+function _readExportListFromModal() {
+  const d = _exportListDraft;
+  d.name = $c('el-name').value.trim();
+  d.notes = $c('el-notes').value.trim();
+  d.filters.allowanceOnly = $c('el-filter-allowance').checked;
+  d.notesPosition = (document.querySelector('input[name=el-notes-pos]:checked') || {}).value || 'front';
+  d.orientation = (document.querySelector('input[name=el-orientation]:checked') || {}).value || 'landscape';
+  return d;
+}
+
+function saveAndExportList() {
+  const d = _readExportListFromModal();
+  if (!d.name) { toast('Give the list a name.'); $c('el-name').focus(); return; }
+  if (!d.projectId) { toast('Pick a project.'); return; }
+  const anyCol = Object.values(d.columns).some(Boolean);
+  if (!anyCol) { toast('Pick at least one column.'); return; }
+
+  if (!S.documents) S.documents = [];
+  let doc;
+  if (d.docId) {
+    doc = S.documents.find(x => x.id === d.docId);
+    if (!doc) { toast('List not found.'); return; }
+    doc.title = d.name;
+    doc.projectId = d.projectId;
+    doc.exportConfig = { filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation };
+    doc.updated = new Date().toISOString();
+    doc.revision = (doc.revision || 1) + 1;
+  } else {
+    doc = {
+      id: uid(),
+      projectId: d.projectId,
+      templateId: 'export_list',
+      title: d.name,
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      version: 'A',
+      revision: 1,
+      revisionHistory: [],
+      items: [],
+      rooms: [],
+      exportConfig: { filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
+    };
+    S.documents.push(doc);
+    d.docId = doc.id;
+  }
+  save();
+  closeModal('modal-export-list');
+  toast(`"${d.name}" saved.`);
+  // Render the PDF — Push 2b will swap this stub for the real renderer.
+  renderExportListPDF(doc);
+}
+
+function previewExportList() {
+  const d = _readExportListFromModal();
+  if (!d.projectId) { toast('Pick a project first.'); return; }
+  const anyCol = Object.values(d.columns).some(Boolean);
+  if (!anyCol) { toast('Pick at least one column to preview.'); return; }
+  // Synthetic doc for preview — not saved.
+  const doc = {
+    id: 'preview',
+    projectId: d.projectId,
+    title: d.name || 'Untitled List',
+    exportConfig: { filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
+  };
+  renderExportListPDF(doc, { preview: true });
+}
+
+function deleteExportList() {
+  const id = $c('el-doc-id').value;
+  if (!id) return;
+  if (!confirm('Delete this list?')) return;
+  S.documents = (S.documents || []).filter(d => d.id !== id);
+  save();
+  closeModal('modal-export-list');
+  if (typeof renderDocuments === 'function') renderDocuments();
+  if (S.currentView === 'project-detail' && typeof renderProjectDetail === 'function') renderProjectDetail();
+  toast('List deleted.');
+}
+
+// ─── EXPORT LIST PDF RENDERER ────────────────────────────────
+//
+// Letter-size, landscape or portrait. White background (lists print on
+// white paper). BEEP wordmark in mahogany top-left, title centered, then
+// project + date subline. Notes block (front or end). Branded autoTable.
+// Footer on every page: list name (italic) · page X / Y · "Beep Design
+// Co." right-aligned.
+
+async function _resolveFileAsDataUrl(f) {
+  if (!f) return null;
+  if (f.data) return { data: f.data, type: f.type || '', name: f.name || '' };
+  if (f.storagePath && typeof getFileSignedUrl === 'function') {
+    try {
+      const url = await getFileSignedUrl(f.storagePath);
+      const resp = await fetch(url);
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
+      return { data, type: blob.type || f.type || '', name: f.name || '' };
+    } catch (e) { console.warn('[export pdf] image fetch failed:', e); }
+  }
+  return null;
+}
+
+function _exportImageFormat(type) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('jpeg') || t.includes('jpg')) return 'JPEG';
+  if (t.includes('webp')) return 'WEBP';
+  return 'PNG';
+}
+
+function _collectExportItems(prop, filters) {
+  if (!prop) return [];
+  const out = [];
+  (prop.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      if (filters.spaceIds?.length && !filters.spaceIds.includes(sp.id)) return;
+      if (filters.itemTypeIds?.length && !filters.itemTypeIds.includes(item.itemTypeId)) return;
+      if (filters.statuses?.length && !filters.statuses.includes(item.status)) return;
+      if (filters.allowanceOnly) {
+        const itemIsAllowance = !!item.allowance;
+        const compIsAllowance = (item.components || []).some(c => c.allowance);
+        if (!itemIsAllowance && !compIsAllowance) return;
+      }
+      out.push({ ...item, _spaceName: sp.name || 'Unassigned' });
+    });
+  });
+  // Sort: space, then name.
+  out.sort((a, b) => (a._spaceName || '').localeCompare(b._spaceName || '') || (a.name || '').localeCompare(b.name || ''));
+  return out;
+}
+
+function _exportItemPrice(item, kind, proj) {
+  const markup = ((proj?.markupPct ?? 25)) / 100;
+  if (item.type === 'constructed') {
+    const total = (item.components || []).reduce((s, c) => s + parse$(c.netCost) * (parseFloat(c.qty) || 1), 0);
+    const actualTotal = (item.components || []).reduce((s, c) => s + (parse$(c.costActual) || parse$(c.netCost)) * (parseFloat(c.qty) || 1), 0);
+    const qty = parseFloat(item.qty) || 1;
+    const net = total * qty;
+    if (kind === 'priceNet') return net;
+    if (kind === 'priceActual') return actualTotal * qty;
+    if (kind === 'priceClient') return item.billCostOnly ? net : net * (1 + markup);
+    if (kind === 'priceAllowance') return item.allowance ? (item.billCostOnly ? net : net * (1 + markup)) : null;
+    return null;
+  }
+  const qty = parseFloat(item.qty) || 1;
+  const net = parse$(item.netPrice) * qty;
+  const actual = (parse$(item.costActual) || parse$(item.netPrice)) * qty;
+  if (kind === 'priceNet') return net;
+  if (kind === 'priceActual') return actual;
+  if (kind === 'priceClient') return item.billCostOnly ? net : net * (1 + markup);
+  if (kind === 'priceAllowance') return item.allowance ? (item.billCostOnly ? net : net * (1 + markup)) : null;
+  return null;
+}
+
+function _exportItemVendors(item) {
+  const ids = new Set();
+  if (item.vendorId) ids.add(item.vendorId);
+  (item.components || []).forEach(c => { if (c.vendorId) ids.add(c.vendorId); });
+  const names = Array.from(ids).map(id => (S.vendors || []).find(v => v.id === id)?.name).filter(Boolean);
+  return names.join(', ');
+}
+function _exportItemBrands(item) {
+  const ids = new Set();
+  if (item.brandId) ids.add(item.brandId);
+  (item.components || []).forEach(c => { if (c.brandId) ids.add(c.brandId); });
+  const names = Array.from(ids).map(id => (S.brands || []).find(b => b.id === id)?.name).filter(Boolean);
+  return names.join(', ');
+}
+function _exportItemTracking(item) {
+  const lines = [];
+  (item.trackingNumbers || []).forEach(t => { if (t.number) lines.push(`${t.number}${t.carrier ? ' (' + t.carrier + ')' : ''}`); });
+  (item.components || []).forEach(c => (c.trackingNumbers || []).forEach(t => { if (t.number) lines.push(`${t.number}${t.carrier ? ' (' + t.carrier + ')' : ''}`); }));
+  return lines.join('\n');
+}
+
+async function renderExportListPDF(doc, opts = {}) {
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded. Check your connection and retry.'); return; }
+  const { jsPDF } = window.jspdf;
+  const cfg = doc.exportConfig || {};
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const prop = S.proposals[doc.projectId];
+  const items = _collectExportItems(prop, cfg.filters || {});
+  const orientation = cfg.orientation || 'landscape';
+
+  if (!items.length) { toast('No items match those filters.'); return; }
+
+  // Pre-fetch main images if image column is requested.
+  const imageMap = {};
+  if (cfg.columns?.image) {
+    for (const it of items) {
+      const main = getItemMainImage(it);
+      if (main) {
+        const resolved = await _resolveFileAsDataUrl(main);
+        if (resolved) imageMap[it.id] = resolved;
+      }
+    }
+  }
+
+  const pdf = new jsPDF({ unit: 'pt', format: 'letter', orientation });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 36;
+  const MAHOGANY = [63, 21, 28];
+  const PECAN = [159, 102, 64];
+  const TEXT_DARK = [40, 32, 28];
+  const TEXT_MID = [110, 100, 90];
+  const TEXT_LIGHT = [160, 150, 140];
+  const BORDER = [220, 210, 198];
+
+  // Build column definitions in display order, only those checked.
+  const colKeys = [];
+  EL_STANDARD_COLUMNS.forEach(c => { if (cfg.columns?.[c.key]) colKeys.push(c.key); });
+  EL_PRICE_COLUMNS.forEach(c => { if (cfg.columns?.[c.key]) colKeys.push(c.key); });
+  const colMeta = {
+    image:        { label: '', width: orientation === 'landscape' ? 80 : 50, halign: 'center' },
+    itemCode:     { label: 'Code', halign: 'left' },
+    name:         { label: 'Item', halign: 'left' },
+    space:        { label: 'Space', halign: 'left' },
+    vendor:       { label: 'Vendor', halign: 'left' },
+    brand:        { label: 'Brand', halign: 'left' },
+    status:       { label: 'Status', halign: 'left' },
+    tracking:     { label: 'Tracking', halign: 'left' },
+    proposalNote: { label: 'Proposal Note', halign: 'left' },
+    dimensions:   { label: 'Size', halign: 'left' },
+    weight:       { label: 'Weight', halign: 'left' },
+    techInfo:     { label: 'Tech Info', halign: 'left' },
+    priceNet:     { label: 'Net',       halign: 'right' },
+    priceActual:  { label: 'Actual',    halign: 'right' },
+    priceClient:  { label: 'Client',    halign: 'right' },
+    priceAllowance:{label: 'Allowance', halign: 'right' },
+  };
+  const head = [colKeys.map(k => colMeta[k].label)];
+
+  // Build rows.
+  const body = items.map(item => colKeys.map(k => {
+    if (k === 'image') return ''; // drawn in didDrawCell
+    if (k === 'itemCode') return item.itemCode || '';
+    if (k === 'name') return item.name || '';
+    if (k === 'space') return item._spaceName || '';
+    if (k === 'vendor') return _exportItemVendors(item);
+    if (k === 'brand') return _exportItemBrands(item);
+    if (k === 'status') return (STATUSES.find(s => s.v === item.status) || {}).l || '';
+    if (k === 'tracking') return _exportItemTracking(item);
+    if (k === 'proposalNote') return item.notes || '';
+    if (k === 'dimensions') return item.dimensions || '';
+    if (k === 'weight') return item.weight || '';
+    if (k === 'techInfo') return item.techInfo || '';
+    if (k.startsWith('price')) {
+      const v = _exportItemPrice(item, k, proj);
+      return (v == null) ? '' : fmt(v);
+    }
+    return '';
+  }));
+
+  const columnStyles = {};
+  colKeys.forEach((k, i) => {
+    columnStyles[i] = { halign: colMeta[k].halign };
+    if (colMeta[k].width) columnStyles[i].cellWidth = colMeta[k].width;
+  });
+
+  // ── Header (first page only)
+  const drawHeader = () => {
+    let y = margin;
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(13);
+    pdf.setTextColor(...MAHOGANY);
+    pdf.text('BEEP', margin, y + 10);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    pdf.setTextColor(...TEXT_LIGHT);
+    pdf.text('HQ', margin + 36, y + 10);
+
+    // Title centered
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(18);
+    pdf.setTextColor(...MAHOGANY);
+    pdf.text(doc.title || 'Untitled List', pageW / 2, y + 14, { align: 'center' });
+
+    // Date right
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(9);
+    pdf.setTextColor(...TEXT_MID);
+    const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    pdf.text(dateStr, pageW - margin, y + 10, { align: 'right' });
+
+    // Project subline + accent rule
+    y += 28;
+    pdf.setFontSize(10);
+    pdf.setTextColor(...TEXT_MID);
+    pdf.text(proj?.name || '', pageW / 2, y, { align: 'center' });
+    y += 8;
+    pdf.setDrawColor(...PECAN);
+    pdf.setLineWidth(0.8);
+    pdf.line(margin, y, pageW - margin, y);
+    return y + 12;
+  };
+
+  let cursorY = drawHeader();
+
+  // Notes at front
+  if (cfg.notes && cfg.notesPosition === 'front') {
+    pdf.setFont('helvetica', 'italic');
+    pdf.setFontSize(10);
+    pdf.setTextColor(...TEXT_DARK);
+    const split = pdf.splitTextToSize(cfg.notes, pageW - margin * 2);
+    pdf.text(split, margin, cursorY + 4);
+    cursorY += 4 + split.length * 11 + 8;
+  }
+
+  // Table
+  const imageRowHeight = orientation === 'landscape' ? 70 : 46;
+  pdf.autoTable({
+    startY: cursorY,
+    head, body,
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 4, textColor: TEXT_DARK, lineColor: BORDER, lineWidth: 0.4, overflow: 'linebreak', minCellHeight: cfg.columns?.image ? imageRowHeight : 14 },
+    headStyles: { fillColor: MAHOGANY, textColor: [255,255,255], fontStyle: 'bold', fontSize: 9, halign: 'left' },
+    alternateRowStyles: { fillColor: [250, 247, 242] },
+    columnStyles,
+    margin: { left: margin, right: margin, top: margin + 36, bottom: margin + 26 },
+    didDrawCell: (data) => {
+      if (data.section !== 'body') return;
+      const col = colKeys[data.column.index];
+      if (col !== 'image') return;
+      const it = items[data.row.index];
+      const img = imageMap[it?.id];
+      const cell = data.cell;
+      const pad = 3;
+      const targetH = cell.height - pad * 2;
+      const targetW = cell.width - pad * 2;
+      if (!img) {
+        pdf.setFont('helvetica', 'italic');
+        pdf.setFontSize(7);
+        pdf.setTextColor(...TEXT_LIGHT);
+        pdf.text('No image', cell.x + cell.width / 2, cell.y + cell.height / 2 + 2, { align: 'center' });
+        return;
+      }
+      try {
+        pdf.addImage(img.data, _exportImageFormat(img.type), cell.x + pad, cell.y + pad, targetW, targetH, undefined, 'FAST');
+      } catch (e) {
+        console.warn('[export pdf] image draw failed for item', it?.name, e);
+      }
+    },
+  });
+
+  cursorY = pdf.lastAutoTable.finalY + 14;
+
+  // Notes at end
+  if (cfg.notes && cfg.notesPosition === 'end') {
+    if (cursorY > pageH - margin - 60) {
+      pdf.addPage();
+      cursorY = margin + 14;
+    }
+    pdf.setFont('helvetica', 'italic');
+    pdf.setFontSize(10);
+    pdf.setTextColor(...TEXT_DARK);
+    const split = pdf.splitTextToSize(cfg.notes, pageW - margin * 2);
+    pdf.text(split, margin, cursorY);
+  }
+
+  // Footer on every page: list name (italic) + page X / Y · Beep Design Co.
+  const totalPages = pdf.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    pdf.setPage(i);
+    pdf.setFont('helvetica', 'italic');
+    pdf.setFontSize(8);
+    pdf.setTextColor(...TEXT_LIGHT);
+    pdf.text(doc.title || '', margin, pageH - margin / 2);
+    pdf.text(`${i} / ${totalPages}`, pageW / 2, pageH - margin / 2, { align: 'center' });
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('Beep Design Co.', pageW - margin, pageH - margin / 2, { align: 'right' });
+  }
+
+  if (opts.preview) {
+    const blob = pdf.output('blob');
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } else {
+    const safeName = (doc.title || 'list').replace(/[^a-z0-9]+/gi, '_');
+    pdf.save(`${safeName}.pdf`);
+  }
 }
 
 function autoDocTitle() {
@@ -19945,6 +20574,12 @@ function createNewDoc() {
 }
 
 function openDocEditor(docId) {
+  // Lists open the list builder instead of the schedule-style editor.
+  const doc = (S.documents || []).find(d => d.id === docId);
+  if (doc?.templateId === 'export_list') {
+    openExportListEditor(docId);
+    return;
+  }
   _currentDocId = docId;
   showView('doc-editor');
   renderDocEditor();
@@ -20708,6 +21343,7 @@ function renderDocsTab() {
         <select class="fi" id="doc-filter-template" onchange="renderDocuments()" style="font-size:12px;padding:6px 10px">
           <option value="">All Types</option>
         </select>
+        <button class="btn btn-secondary" onclick="openExportListModal()">+ Export New List</button>
         <button class="btn btn-primary" onclick="openNewDocModal()">+ New Document</button>`;
     }
     renderDocuments();
