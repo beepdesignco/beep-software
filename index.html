@@ -14105,7 +14105,20 @@ function deleteSpace(pid, spId) {
 
 function mutSpace(pid, spId, key, val) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
-  if (sp) { sp[key] = val; save(); }
+  if (!sp) return;
+  // Renaming a space cascades to items whose `room` was tracking the
+  // old name (or was empty — common for items added before the space
+  // got its final name). Items the user manually pointed at a
+  // different room name keep that override.
+  if (key === 'name') {
+    const oldName = sp.name || '';
+    const newName = val || '';
+    (sp.items || []).forEach(it => {
+      if (!it.room || it.room === oldName) it.room = newName;
+    });
+  }
+  sp[key] = val;
+  save();
 }
 
 function deleteItem(pid, spId, iid) {
@@ -19465,8 +19478,29 @@ async function saveExpense() {
     S.expenses.push(expense);
   }
 
-  // If tracked in PM and billable, add to project proposal as billable item
-  if (expense.trackInPM && expense.expenseType === 'billable' && pid) {
+  // Auto-item lifecycle (track-in-PM):
+  //   • trackInPM toggled OFF (or expense type changed away from billable)
+  //     while an auto-item exists → remove it, unless that item already
+  //     landed on an invoice (then it's the user's commitment, not ours
+  //     to clean up).
+  //   • trackInPM ON & billable & no auto-item yet → create one.
+  // Auto-items are flagged via item._expenseId === expense.id and live
+  // in the "Expenses" space (default).
+  const shouldTrack = !!(expense.trackInPM && expense.expenseType === 'billable' && pid);
+  const propAll = pid ? S.proposals[pid] : null;
+  if (propAll && !shouldTrack) {
+    propAll.spaces.forEach(sp => {
+      sp.items = (sp.items || []).filter(it => {
+        if (it._expenseId !== expense.id) return true;
+        // Keep the item if it's referenced by an invoice line (already committed).
+        const onInvoice = (S.invoices || []).some(inv =>
+          inv.status !== 'cancelled' && (inv.lineItems || []).some(l => l.proposalItemId === it.id || l._expenseId === expense.id)
+        );
+        return onInvoice;
+      });
+    });
+  }
+  if (shouldTrack) {
     const prop = S.proposals[pid];
     if (prop) {
       const alreadyAdded = prop.spaces.some(sp => (sp.items||[]).some(i => i._expenseId === expense.id));
@@ -19550,6 +19584,22 @@ function deleteExpense(expId) {
   drafts.forEach(({inv}) => {
     inv.lineItems = (inv.lineItems||[]).filter(l => l._expenseId !== expId);
     recalcStoredInvoiceTotals(inv);
+  });
+
+  // Drop the auto-created PM item (if any) tied to this expense — same
+  // safeguard as in saveExpense: skip removal if the auto-item somehow
+  // ended up on a non-cancelled invoice (shouldn't happen since we
+  // already blocked deletion above, but defensive).
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.spaces || []).forEach(sp => {
+      sp.items = (sp.items || []).filter(it => {
+        if (it._expenseId !== expId) return true;
+        const onInvoice = (S.invoices || []).some(inv =>
+          inv.status !== 'cancelled' && (inv.lineItems || []).some(l => l.proposalItemId === it.id || l._expenseId === expId)
+        );
+        return onInvoice;
+      });
+    });
   });
 
   S.expenses = (S.expenses||[]).filter(e => e.id !== expId);
