@@ -22682,6 +22682,11 @@ function deleteCurrentInvoice() {
   }
 
   revertTimeEntriesForInvoice(inv);
+  // Drop freight settlements tied to this invoice so credits/overages
+  // return to the project's available pool — without this they hang
+  // around as orphaned rows that the activeSettlements filter has to
+  // exclude on every read.
+  S.freightSettlements = (S.freightSettlements || []).filter(s => s.invoiceId !== inv.id);
   S.invoices = S.invoices.filter(i => i.id !== inv.id);
   save();
   showView('invoices');
@@ -22694,6 +22699,7 @@ function deleteDraft() {
   if (!confirm('Delete this draft? Any tracked open line items that have not been saved will also be deleted.')) return;
 
   revertTimeEntriesForInvoice(inv);
+  S.freightSettlements = (S.freightSettlements || []).filter(s => s.invoiceId !== inv.id);
   S.invoices = S.invoices.filter(i => i.id !== inv.id);
   save();
   showView('invoices');
