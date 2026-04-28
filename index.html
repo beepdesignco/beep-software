@@ -20648,6 +20648,9 @@ async function _renderExportRoomsPDF(doc, cfg, orientation, opts = {}) {
   cursorY = pdf.lastAutoTable.finalY + 14;
   if (cfg.notes && cfg.notesPosition === 'end') {
     if (cursorY > pageH - margin - 60) { pdf.addPage(); cursorY = margin + 14; }
+    pdf.setDrawColor(...PECAN); pdf.setLineWidth(0.5);
+    pdf.line(margin, cursorY - 6, pageW - margin, cursorY - 6);
+    cursorY += 4;
     pdf.setFont('helvetica', 'italic'); pdf.setFontSize(10); pdf.setTextColor(...TEXT_DARK);
     const split = pdf.splitTextToSize(cfg.notes, pageW - margin * 2);
     pdf.text(split, margin, cursorY);
@@ -20910,12 +20913,16 @@ async function renderExportListPDF(doc, opts = {}) {
 
   cursorY = pdf.lastAutoTable.finalY + 14;
 
-  // Notes at end
+  // Notes at end — pecan rule above for visual separation from the table.
   if (cfg.notes && cfg.notesPosition === 'end') {
     if (cursorY > pageH - margin - 60) {
       pdf.addPage();
       cursorY = margin + 14;
     }
+    pdf.setDrawColor(...PECAN);
+    pdf.setLineWidth(0.5);
+    pdf.line(margin, cursorY - 6, pageW - margin, cursorY - 6);
+    cursorY += 4;
     pdf.setFont('helvetica', 'italic');
     pdf.setFontSize(10);
     pdf.setTextColor(...TEXT_DARK);
