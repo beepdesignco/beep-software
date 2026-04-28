@@ -20012,6 +20012,7 @@ const EL_STANDARD_COLUMNS = [
   { key: 'brand',         label: 'Brand' },
   { key: 'status',        label: 'Item status' },
   { key: 'tracking',      label: 'Tracking # / carrier' },
+  { key: 'links',         label: 'Links' },
   { key: 'proposalNote',  label: 'Proposal note' },
   { key: 'dimensions',    label: 'Dimensions' },
   { key: 'weight',        label: 'Weight' },
@@ -20240,18 +20241,27 @@ function deleteExportList() {
 
 async function _resolveFileAsDataUrl(f) {
   if (!f) return null;
-  if (f.data) return { data: f.data, type: f.type || '', name: f.name || '' };
-  if (f.storagePath && typeof getFileSignedUrl === 'function') {
+  let data = null, type = f.type || '', name = f.name || '';
+  if (f.data) { data = f.data; }
+  else if (f.storagePath && typeof getFileSignedUrl === 'function') {
     try {
       const url = await getFileSignedUrl(f.storagePath);
       const resp = await fetch(url);
       if (!resp.ok) return null;
       const blob = await resp.blob();
-      const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
-      return { data, type: blob.type || f.type || '', name: f.name || '' };
-    } catch (e) { console.warn('[export pdf] image fetch failed:', e); }
+      type = blob.type || type;
+      data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
+    } catch (e) { console.warn('[export pdf] image fetch failed:', e); return null; }
   }
-  return null;
+  if (!data) return null;
+  // Read natural dims so the renderer can keep aspect ratio.
+  const dims = await new Promise(res => {
+    const im = new Image();
+    im.onload = () => res({ w: im.naturalWidth || im.width, h: im.naturalHeight || im.height });
+    im.onerror = () => res(null);
+    im.src = data;
+  });
+  return { data, type, name, w: dims?.w || 0, h: dims?.h || 0 };
 }
 
 function _exportImageFormat(type) {
@@ -20365,28 +20375,29 @@ async function renderExportListPDF(doc, opts = {}) {
   EL_STANDARD_COLUMNS.forEach(c => { if (cfg.columns?.[c.key]) colKeys.push(c.key); });
   EL_PRICE_COLUMNS.forEach(c => { if (cfg.columns?.[c.key]) colKeys.push(c.key); });
   const colMeta = {
-    image:        { label: '', width: orientation === 'landscape' ? 80 : 50, halign: 'center' },
-    itemCode:     { label: 'Code', halign: 'left' },
-    name:         { label: 'Item', halign: 'left' },
-    space:        { label: 'Space', halign: 'left' },
-    vendor:       { label: 'Vendor', halign: 'left' },
-    brand:        { label: 'Brand', halign: 'left' },
-    status:       { label: 'Status', halign: 'left' },
-    tracking:     { label: 'Tracking', halign: 'left' },
-    proposalNote: { label: 'Proposal Note', halign: 'left' },
-    dimensions:   { label: 'Size', halign: 'left' },
-    weight:       { label: 'Weight', halign: 'left' },
-    techInfo:     { label: 'Tech Info', halign: 'left' },
-    priceNet:     { label: 'Net',       halign: 'right' },
-    priceActual:  { label: 'Actual',    halign: 'right' },
-    priceClient:  { label: 'Client',    halign: 'right' },
-    priceAllowance:{label: 'Allowance', halign: 'right' },
+    image:        { label: 'Image',        width: orientation === 'landscape' ? 110 : 70 },
+    itemCode:     { label: 'Code' },
+    name:         { label: 'Item' },
+    space:        { label: 'Space' },
+    vendor:       { label: 'Vendor' },
+    brand:        { label: 'Brand' },
+    status:       { label: 'Status' },
+    tracking:     { label: 'Tracking' },
+    links:        { label: 'Links' },
+    proposalNote: { label: 'Proposal Note' },
+    dimensions:   { label: 'Size' },
+    weight:       { label: 'Weight' },
+    techInfo:     { label: 'Tech Info' },
+    priceNet:     { label: 'Net' },
+    priceActual:  { label: 'Actual' },
+    priceClient:  { label: 'Client' },
+    priceAllowance:{label: 'Allowance' },
   };
   const head = [colKeys.map(k => colMeta[k].label)];
 
   // Build rows.
   const body = items.map(item => colKeys.map(k => {
-    if (k === 'image') return ''; // drawn in didDrawCell
+    if (k === 'image' || k === 'links') return ''; // drawn in didDrawCell
     if (k === 'itemCode') return item.itemCode || '';
     if (k === 'name') return item.name || '';
     if (k === 'space') return item._spaceName || '';
@@ -20407,18 +20418,19 @@ async function renderExportListPDF(doc, opts = {}) {
 
   const columnStyles = {};
   colKeys.forEach((k, i) => {
-    columnStyles[i] = { halign: colMeta[k].halign };
+    columnStyles[i] = {};
     if (colMeta[k].width) columnStyles[i].cellWidth = colMeta[k].width;
   });
 
-  // ── Header (first page only)
+  // ── Header (first page only) — Courier on subtext (HQ, project, date)
+  // for brand consistency; mahogany BEEP wordmark + title in helvetica bold.
   const drawHeader = () => {
     let y = margin;
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(13);
     pdf.setTextColor(...MAHOGANY);
     pdf.text('BEEP', margin, y + 10);
-    pdf.setFont('helvetica', 'normal');
+    pdf.setFont('courier', 'normal');
     pdf.setFontSize(8);
     pdf.setTextColor(...TEXT_LIGHT);
     pdf.text('HQ', margin + 36, y + 10);
@@ -20429,14 +20441,14 @@ async function renderExportListPDF(doc, opts = {}) {
     pdf.setTextColor(...MAHOGANY);
     pdf.text(doc.title || 'Untitled List', pageW / 2, y + 14, { align: 'center' });
 
-    // Date right
-    pdf.setFont('helvetica', 'normal');
+    // Date right (courier)
+    pdf.setFont('courier', 'normal');
     pdf.setFontSize(9);
     pdf.setTextColor(...TEXT_MID);
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
     pdf.text(dateStr, pageW - margin, y + 10, { align: 'right' });
 
-    // Project subline + accent rule
+    // Project subline (courier) + accent rule
     y += 28;
     pdf.setFontSize(10);
     pdf.setTextColor(...TEXT_MID);
@@ -20460,37 +20472,91 @@ async function renderExportListPDF(doc, opts = {}) {
     cursorY += 4 + split.length * 11 + 8;
   }
 
-  // Table
-  const imageRowHeight = orientation === 'landscape' ? 70 : 46;
+  // Table — header row a touch shorter (~20pt), all cells centered both
+  // axes, body wraps. Image and Links columns are custom-rendered in
+  // didDrawCell so the autoTable text layer stays empty for those keys.
+  const imageRowHeight = orientation === 'landscape' ? 90 : 60;
   pdf.autoTable({
     startY: cursorY,
     head, body,
-    styles: { font: 'helvetica', fontSize: 9, cellPadding: 4, textColor: TEXT_DARK, lineColor: BORDER, lineWidth: 0.4, overflow: 'linebreak', minCellHeight: cfg.columns?.image ? imageRowHeight : 14 },
-    headStyles: { fillColor: MAHOGANY, textColor: [255,255,255], fontStyle: 'bold', fontSize: 9, halign: 'left' },
+    styles: {
+      font: 'helvetica', fontSize: 9, cellPadding: 4,
+      textColor: TEXT_DARK, lineColor: BORDER, lineWidth: 0.4,
+      overflow: 'linebreak',
+      halign: 'center', valign: 'middle',
+      minCellHeight: cfg.columns?.image ? imageRowHeight : 18,
+    },
+    headStyles: {
+      fillColor: MAHOGANY, textColor: [255,255,255],
+      fontStyle: 'bold', fontSize: 9,
+      halign: 'center', valign: 'middle',
+      minCellHeight: 20, cellPadding: 4,
+    },
     alternateRowStyles: { fillColor: [250, 247, 242] },
     columnStyles,
     margin: { left: margin, right: margin, top: margin + 36, bottom: margin + 26 },
     didDrawCell: (data) => {
       if (data.section !== 'body') return;
       const col = colKeys[data.column.index];
-      if (col !== 'image') return;
       const it = items[data.row.index];
-      const img = imageMap[it?.id];
       const cell = data.cell;
-      const pad = 3;
-      const targetH = cell.height - pad * 2;
-      const targetW = cell.width - pad * 2;
-      if (!img) {
-        pdf.setFont('helvetica', 'italic');
-        pdf.setFontSize(7);
-        pdf.setTextColor(...TEXT_LIGHT);
-        pdf.text('No image', cell.x + cell.width / 2, cell.y + cell.height / 2 + 2, { align: 'center' });
+      const pad = 4;
+
+      if (col === 'image') {
+        const img = imageMap[it?.id];
+        const cellW = cell.width - pad * 2;
+        const cellH = cell.height - pad * 2;
+        if (!img) {
+          pdf.setFont('helvetica', 'italic');
+          pdf.setFontSize(7);
+          pdf.setTextColor(...TEXT_LIGHT);
+          pdf.text('No image', cell.x + cell.width / 2, cell.y + cell.height / 2 + 2, { align: 'center' });
+          return;
+        }
+        try {
+          // Maintain aspect ratio: scale to fit, then center inside the cell
+          // so portraits don't get stretched into landscape, etc.
+          const natW = img.w || cellW;
+          const natH = img.h || cellH;
+          const scale = Math.min(cellW / natW, cellH / natH);
+          const drawW = natW * scale;
+          const drawH = natH * scale;
+          const x = cell.x + (cell.width - drawW) / 2;
+          const y = cell.y + (cell.height - drawH) / 2;
+          pdf.addImage(img.data, _exportImageFormat(img.type), x, y, drawW, drawH, undefined, 'FAST');
+        } catch (e) {
+          console.warn('[export pdf] image draw failed for item', it?.name, e);
+        }
         return;
       }
-      try {
-        pdf.addImage(img.data, _exportImageFormat(img.type), cell.x + pad, cell.y + pad, targetW, targetH, undefined, 'FAST');
-      } catch (e) {
-        console.warn('[export pdf] image draw failed for item', it?.name, e);
+
+      if (col === 'links') {
+        const links = (it?.links || []).filter(Boolean);
+        if (!links.length) return;
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        pdf.setTextColor(33, 100, 165); // link blue
+        const cellInnerW = cell.width - pad * 2;
+        // Truncate long urls visually but link to full url.
+        const formatted = links.map(u => {
+          const display = u.length > 38 ? u.slice(0, 35) + '…' : u;
+          return { display, full: u };
+        });
+        const lineH = 10;
+        const totalH = formatted.length * lineH;
+        let y = cell.y + (cell.height - totalH) / 2 + 8;
+        formatted.forEach(({ display, full }) => {
+          const w = pdf.getTextWidth(display);
+          const x = cell.x + (cell.width - w) / 2;
+          pdf.textWithLink(display, x, y, { url: full });
+          // Underline manually since textWithLink doesn't.
+          pdf.setDrawColor(33, 100, 165);
+          pdf.setLineWidth(0.3);
+          pdf.line(x, y + 1, x + w, y + 1);
+          y += lineH;
+        });
+        pdf.setTextColor(...TEXT_DARK);
+        return;
       }
     },
   });
@@ -20510,16 +20576,17 @@ async function renderExportListPDF(doc, opts = {}) {
     pdf.text(split, margin, cursorY);
   }
 
-  // Footer on every page: list name (italic) + page X / Y · Beep Design Co.
+  // Footer on every page (courier for brand consistency): list name in
+  // italic on the left, page X / Y centered, "Beep Design Co." right.
   const totalPages = pdf.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     pdf.setPage(i);
-    pdf.setFont('helvetica', 'italic');
+    pdf.setFont('courier', 'oblique');
     pdf.setFontSize(8);
     pdf.setTextColor(...TEXT_LIGHT);
     pdf.text(doc.title || '', margin, pageH - margin / 2);
+    pdf.setFont('courier', 'normal');
     pdf.text(`${i} / ${totalPages}`, pageW / 2, pageH - margin / 2, { align: 'center' });
-    pdf.setFont('helvetica', 'normal');
     pdf.text('Beep Design Co.', pageW - margin, pageH - margin / 2, { align: 'right' });
   }
 
