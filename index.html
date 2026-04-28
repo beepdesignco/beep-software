@@ -3128,6 +3128,36 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ BATCH STATUS UPDATE MODAL ═════════════════ -->
+<div class="overlay" id="modal-batch-status">
+  <div class="modal" style="width:640px;max-height:88vh;display:flex;flex-direction:column">
+    <button class="modal-x" onclick="closeModal('modal-batch-status')">✕</button>
+    <div class="modal-title">Batch Update Statuses</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);font-style:italic;margin-bottom:14px;line-height:1.5">
+      Pick a target status, then check the items you want to flip. Defaults to all selected.
+    </div>
+    <div class="fg">
+      <label class="fl">Target Status</label>
+      <select class="fi fsel" id="bs-target-status">
+        <option value="design_development">Design Development</option>
+        <option value="proposed">Proposed</option>
+        <option value="approved">Approved</option>
+        <option value="pending_status">Pending Status</option>
+      </select>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px">
+      <button class="btn btn-ghost btn-sm" onclick="bsToggleAll(true)" style="font-size:11px">Select All</button>
+      <button class="btn btn-ghost btn-sm" onclick="bsToggleAll(false)" style="font-size:11px">Deselect All</button>
+      <span id="bs-selected-count" style="margin-left:auto;font-family:var(--font-b);font-size:11px;color:var(--text-mid)"></span>
+    </div>
+    <div id="bs-items-list" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r);padding:8px;background:rgba(var(--text-rgb),0.02);min-height:160px;max-height:50vh"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-batch-status')">Cancel</button>
+      <button class="btn btn-primary" onclick="applyBatchStatusUpdate()">Apply</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ FREIGHT ACTUAL MODAL ═════════════════ -->
 <!-- U-Freight Phase 4 Part 1. Vendor freight bill logged against a
      specific item (or component). Optional toggle creates a linked
@@ -7031,6 +7061,7 @@ const STAGES = [
 ];
  
 const STATUSES = [
+  { v:'design_development', l:'Design Development' },
   { v:'proposed',           l:'Proposed' },
   { v:'approved',           l:'Approved' },
   { v:'billable',           l:'Billable' },
@@ -7066,6 +7097,7 @@ function getShippingStatusColor(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)|
 function getShippingStatusLabel(v) { return (SHIPPING_STATUSES.find(s=>s.v===v)||{}).l || 'Needs Payment'; }
 
 const DEFAULT_STATUS_COLORS = {
+  design_development: '#9a7d3a',
   proposed:           '#8a8a8a',
   approved:           '#2d7a4a',
   billable:           '#b33333',
@@ -8157,6 +8189,7 @@ function renderPDProposal(proj, pid) {
     <button class="btn btn-secondary btn-sm" onclick="addSpace()">+ Add Space</button>
     <button class="btn btn-dark btn-sm" onclick="window.print()">\u2193 Print / Export</button>
     <button class="btn btn-secondary btn-sm" onclick="openEstimateWizard()">Save Current Proposal Version</button>
+    <button class="btn btn-secondary btn-sm" onclick="openBatchStatusModal('${pid}')">Batch Update Statuses</button>
     <div class="view-tabs" style="margin-left:auto;margin-right:8px">
       <button class="view-tab${_propFilter==='all'?' active':''}" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
       <button class="view-tab${_propFilter==='allowances'?' active':''}" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
@@ -13320,19 +13353,24 @@ function renderEstimatesSection(pid) {
 
   estimates.forEach(est => {
     const linesTotal = (est.estimationLines || []).reduce((s,l) => s+l.amount, 0);
+    const isApproved = est.status === 'approved';
     const isProposed = est.status === 'proposed';
-    const statusPill = isProposed
+    const isLocked = isProposed || isApproved;
+    const statusPill = isApproved
+      ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(45,122,74,0.16);color:#2d7a4a">Approved · Locked</span>`
+      : isProposed
       ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(var(--text-rgb),0.10);color:var(--text-mid)">Proposed · Locked</span>`
       : `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(201,169,106,0.18);color:#9a7d3a">Draft</span>`;
-    const proposedLabel = isProposed && est.proposedAt
-      ? `<span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);font-style:italic">Proposed ${new Date(est.proposedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>`
+    const proposedLabel = isLocked && est.proposedAt
+      ? `<span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);font-style:italic">${isApproved ? 'Approved' : 'Proposed'} ${new Date(est.proposedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>`
       : '';
-    const actions = isProposed
+    const actions = isLocked
       ? `<button class="btn btn-ghost btn-sm" onclick="printEstimate('${pid}','${est.id}')" style="font-size:10px">Print / PDF</button>`
       : `
         <button class="btn btn-ghost btn-sm" onclick="printEstimate('${pid}','${est.id}')" style="font-size:10px">Print / PDF</button>
         <button class="btn btn-secondary btn-sm" onclick="editEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Edit</button>
         <button class="btn btn-primary btn-sm" onclick="markEstimateAsProposed('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Mark as Proposed</button>
+        <button class="btn btn-primary btn-sm" onclick="markEstimateAsApproved('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px;background:#2d7a4a">Mark as Approved</button>
         <button class="btn btn-danger btn-sm" onclick="deleteEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Delete</button>`;
     html += `
     <details style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px">
@@ -13371,17 +13409,120 @@ function renderEstimatesSection(pid) {
   return html;
 }
 
-function markEstimateAsProposed(pid, estId) {
+function markEstimateAsProposed(pid, estId) { _lockEstimateWithStatus(pid, estId, 'proposed'); }
+function markEstimateAsApproved(pid, estId) { _lockEstimateWithStatus(pid, estId, 'approved'); }
+
+// ── Batch status update on the working proposal ──
+let _batchStatusPid = null;
+let _batchStatusSelected = new Set(); // item ids checked
+
+function openBatchStatusModal(pid) {
+  _batchStatusPid = pid;
+  const prop = S.proposals[pid];
+  if (!prop || !(prop.spaces || []).length) { toast('Add some items first.'); return; }
+  // Pre-select all eligible items.
+  _batchStatusSelected = new Set();
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => _batchStatusSelected.add(it.id)));
+  $c('bs-target-status').value = 'proposed';
+  renderBatchStatusItems();
+  $c('modal-batch-status').classList.add('open');
+}
+
+function renderBatchStatusItems() {
+  const pid = _batchStatusPid;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  const wrap = $c('bs-items-list');
+  if (!wrap) return;
+
+  const html = (prop.spaces || []).map(sp => {
+    const items = (sp.items || []);
+    if (!items.length) return '';
+    const itemRows = items.map(it => {
+      const checked = _batchStatusSelected.has(it.id);
+      const status = it.status || 'design_development';
+      const statusObj = STATUSES.find(s => s.v === status);
+      const statusLabel = statusObj?.l || status;
+      const statusColor = (S.statusColors || DEFAULT_STATUS_COLORS)[status] || '#888';
+      return `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.04)'" onmouseleave="this.style.background='transparent'">
+        <input type="checkbox" ${checked?'checked':''} onchange="bsToggleItem('${it.id}', this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(it.name || '(unnamed)')}</span>
+        <span style="font-size:9px;font-family:var(--font-b);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding:2px 7px;border-radius:8px;background:${statusColor}1a;color:${statusColor}">${escH(statusLabel)}</span>
+      </label>`;
+    }).join('');
+    return `<div style="margin-bottom:8px">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);padding:4px 4px 6px">${escH(sp.name || 'Space')}</div>
+      ${itemRows}
+    </div>`;
+  }).join('');
+
+  wrap.innerHTML = html || '<div style="font-style:italic;color:var(--text-light);font-size:12px;padding:10px">No items in this proposal.</div>';
+  _bsUpdateCount();
+}
+
+function bsToggleItem(itemId, checked) {
+  if (checked) _batchStatusSelected.add(itemId);
+  else _batchStatusSelected.delete(itemId);
+  _bsUpdateCount();
+}
+
+function bsToggleAll(checked) {
+  const prop = S.proposals[_batchStatusPid];
+  if (!prop) return;
+  if (checked) {
+    (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => _batchStatusSelected.add(it.id)));
+  } else {
+    _batchStatusSelected.clear();
+  }
+  renderBatchStatusItems();
+}
+
+function _bsUpdateCount() {
+  const lbl = $c('bs-selected-count');
+  if (lbl) lbl.textContent = `${_batchStatusSelected.size} selected`;
+}
+
+function applyBatchStatusUpdate() {
+  const pid = _batchStatusPid;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  const target = $c('bs-target-status').value;
+  if (!target) { toast('Pick a target status.'); return; }
+  if (!_batchStatusSelected.size) { toast('Select at least one item.'); return; }
+  let count = 0;
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+    if (_batchStatusSelected.has(it.id) && it.status !== target) {
+      it.status = target;
+      count++;
+    }
+  }));
+  save();
+  closeModal('modal-batch-status');
+  const targetLabel = STATUSES.find(s => s.v === target)?.l || target;
+  toast(`${count} item${count === 1 ? '' : 's'} updated to ${targetLabel}.`);
+  if (typeof renderProjectDetail === 'function' && document.getElementById('view-project-detail')?.classList.contains('active')) {
+    renderProjectDetail();
+  } else if (typeof renderPropBody === 'function') {
+    renderPropBody();
+  }
+}
+
+function _lockEstimateWithStatus(pid, estId, targetStatus) {
   const prop = S.proposals[pid];
   const est = prop?.estimates?.find(e => e.id === estId);
   if (!est) return;
-  if (est.status === 'proposed') { toast('Already proposed.'); return; }
-  const ok = confirm(`Lock "${est.name}" as proposed to client?\n\nThis estimate becomes immutable. To revise, snapshot a new one.`);
+  if (est.status === targetStatus) { toast(`Already ${targetStatus}.`); return; }
+  if (est.status === 'proposed' || est.status === 'approved') {
+    toast('This version is already locked. Snapshot a new one to revise.');
+    return;
+  }
+  const verb = targetStatus === 'approved' ? 'approved' : 'proposed to client';
+  const ok = confirm(`Lock "${est.name}" as ${verb}?\n\nThis estimate becomes immutable. To revise, snapshot a new one.`);
   if (!ok) return;
-  est.status = 'proposed';
+  est.status = targetStatus;
   est.proposedAt = new Date().toISOString();
   save();
-  toast(`"${est.name}" locked as proposed.`);
+  toast(`"${est.name}" locked as ${targetStatus}.`);
   if (typeof renderProjectDetail === 'function' && document.getElementById('view-project-detail')?.classList.contains('active')) {
     renderProjectDetail();
   } else if (typeof renderPropBody === 'function') {
@@ -14602,7 +14743,7 @@ function saveItem() {
     name,
     itemCode: $c('ai-itemcode').value.trim(),
     room: $c('ai-room').value,
-    status: 'proposed',
+    status: 'design_development',
     notes: $c('ai-notes').value.trim(),
     _open: false,
     allowance: $c('ai-allowance').checked,
