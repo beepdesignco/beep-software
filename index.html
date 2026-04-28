@@ -3174,7 +3174,7 @@ tr:hover .row-btns { opacity:1; }
       <div id="fa-project-name" style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);padding:6px 0;font-weight:600">—</div>
     </div>
 
-    <div class="fg">
+    <div class="fg" id="fa-item-single-wrap">
       <label class="fl">Item <span style="color:#b33">*</span></label>
       <select class="fi fsel" id="fa-item" onchange="onFAItemChange()">
         <option value="">— Pick item —</option>
@@ -3198,11 +3198,30 @@ tr:hover .row-btns { opacity:1; }
     <div class="frow">
       <div class="fg">
         <label class="fl">Net Actual Amount <span style="color:#b33">*</span></label>
-        <input type="text" class="fi" id="fa-amount" placeholder="$0.00">
+        <input type="text" class="fi" id="fa-amount" placeholder="$0.00" oninput="updateFASplitSum()">
       </div>
       <div class="fg">
         <label class="fl">Date <span style="color:#b33">*</span></label>
         <input type="date" class="fi" id="fa-date">
+      </div>
+    </div>
+
+    <div style="margin:6px 0 14px">
+      <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="fa-split-toggle" onchange="onFASplitToggle()" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        Split across multiple items
+      </label>
+    </div>
+
+    <div class="fg" id="fa-split-wrap" style="display:none">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+        <label class="fl" style="margin:0">Allocations</label>
+        <span id="fa-split-sum" style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)"></span>
+      </div>
+      <div id="fa-split-rows" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="addFAAllocationRow()" style="font-size:11px">+ Add Item</button>
+        <button class="btn btn-secondary btn-sm" onclick="splitFAEvenly()" style="font-size:11px">Split Evenly</button>
       </div>
     </div>
 
@@ -5641,7 +5660,7 @@ async function loadFromSupabase() {
     vendorsRes, vendorContactsRes, brandsRes, vendorBrandsRes,
     itemTypesRes, posRes, submittalsRes,
     freightCategoriesRes, freightChargesRes, freightActualsRes, freightSettlementsRes,
-    estimatesRes, expenseAllocationsRes,
+    estimatesRes, expenseAllocationsRes, freightActualAllocationsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -5663,9 +5682,10 @@ async function loadFromSupabase() {
     sb.from('freight_settlements').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('estimates').select('*').eq('studio_id', studioId).is('deleted_at', null).order('created_at'),
     sb.from('expense_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('freight_actual_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -5698,6 +5718,13 @@ async function loadFromSupabase() {
     (_allocsByExpense[a.expenseId] = _allocsByExpense[a.expenseId] || []).push(a);
   });
   S.expenses.forEach(e => { e.allocations = _allocsByExpense[e.id] || []; });
+  // Same fold for freight_actual_allocations.
+  const _faAllocsByActual = {};
+  (freightActualAllocationsRes.data || []).forEach(r => {
+    const a = dbFreightActualAllocationToS(r);
+    (_faAllocsByActual[a.freightActualId] = _faAllocsByActual[a.freightActualId] || []).push(a);
+  });
+  (S.freightActuals || []).forEach(fa => { fa.allocations = _faAllocsByActual[fa.id] || []; });
   // Hydrate _allocationId on invoice line items so the picker reads
   // already-added state correctly. Durable link is the FK on allocations.
   const _lineToAlloc = new Map();
@@ -6055,6 +6082,18 @@ function dbFreightSettlementToS(r) {
   };
 }
 
+function dbFreightActualAllocationToS(r) {
+  return {
+    id: r.id,
+    freightActualId: r.freight_actual_id,
+    proposalItemId: r.proposal_item_id || null,
+    amount: r.amount != null ? Number(r.amount) : 0,
+    notes: r.notes || '',
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+
 function dbExpenseAllocationToS(r) {
   return {
     id: r.id,
@@ -6384,6 +6423,7 @@ const _sbShadow = {
   freightSettlements: new Map(),
   estimates: new Map(),
   expenseAllocations: new Map(),
+  freightActualAllocations: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -6411,6 +6451,9 @@ function captureSbShadow() {
   _sbShadow.expenseAllocations = new Map();
   (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
     _sbShadow.expenseAllocations.set(a.id, { ...snap(a), _expenseId: e.id })));
+  _sbShadow.freightActualAllocations = new Map();
+  (S.freightActuals || []).forEach(fa => (fa.allocations || []).forEach(a =>
+    _sbShadow.freightActualAllocations.set(a.id, { ...snap(a), _freightActualId: fa.id })));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
   _sbShadow.submittalSigners = new Map();
@@ -6568,6 +6611,18 @@ function freightSettlementToDB(r, studioId) {
     deleted_at: null,
   };
 }
+function freightActualAllocationToDB(a, studioId) {
+  return {
+    id: a.id,
+    studio_id: studioId,
+    freight_actual_id: a.freightActualId,
+    proposal_item_id: a.proposalItemId || null,
+    amount: Number(a.amount || 0),
+    notes: a.notes || null,
+    deleted_at: null,
+  };
+}
+
 function expenseAllocationToDB(a, studioId) {
   return {
     id: a.id,
@@ -6912,6 +6967,7 @@ async function syncToSupabase() {
       spaces: new Map(), items: new Map(), components: new Map(),
       estimates: new Map(),
       expenseAllocations: new Map(),
+      freightActualAllocations: new Map(),
     };
     (S.invoices || []).forEach(inv => {
       (inv.lineItems || []).forEach((l, i) => current.invoiceLineItems.set(l.id, { ...l, _invoiceId: inv.id, _sortOrder: i }));
@@ -6920,6 +6976,11 @@ async function syncToSupabase() {
     (S.expenses || []).forEach(e => {
       (e.allocations || []).forEach(a => {
         current.expenseAllocations.set(a.id, { ...a, expenseId: a.expenseId || e.id });
+      });
+    });
+    (S.freightActuals || []).forEach(fa => {
+      (fa.allocations || []).forEach(a => {
+        current.freightActualAllocations.set(a.id, { ...a, freightActualId: a.freightActualId || fa.id });
       });
     });
     (S.documents || []).forEach(d => {
@@ -7004,6 +7065,8 @@ async function syncToSupabase() {
     await syncSafe('invoice_payments',   current.invoicePayments,  _sbShadow.invoicePayments,  p => invPaymentToDB(p),  { softDelete: false });
     // expense_allocations after expenses + invoice_line_items so both FK targets exist.
     await syncSafe('expense_allocations', current.expenseAllocations, _sbShadow.expenseAllocations, a => expenseAllocationToDB(a, studioId));
+    // freight_actual_allocations after freight_actuals.
+    await syncSafe('freight_actual_allocations', current.freightActualAllocations, _sbShadow.freightActualAllocations, a => freightActualAllocationToDB(a, studioId));
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     await syncSafe('documents', current.documents, _sbShadow.documents, d => documentToDB(d, studioId));
@@ -10590,8 +10653,35 @@ function _faChargesForItem(item) {
   );
 }
 
+// Returns the freight_actual rows that hit this item, with `.amount`
+// set to the per-item slice (allocation amount for split bills, full
+// amount for unsplit). Original total stays available via `._totalAmount`.
 function _faActualsForItem(itemId) {
-  return (S.freightActuals || []).filter(a => a.proposalItemId === itemId);
+  const out = [];
+  (S.freightActuals || []).forEach(a => {
+    const allocs = a.allocations || [];
+    if (allocs.length) {
+      const matched = allocs.filter(x => x.proposalItemId === itemId);
+      if (matched.length) {
+        const sliced = matched.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+        out.push({ ...a, amount: sliced, _totalAmount: parseFloat(a.amount) || 0, _allocated: true });
+      }
+    } else if (a.proposalItemId === itemId) {
+      out.push({ ...a, _totalAmount: parseFloat(a.amount) || 0, _allocated: false });
+    }
+  });
+  return out;
+}
+
+// Convenience: summed dollar slice this item gets from a single freight
+// actual row. Returns 0 if no slice.
+function _faAmountForItem(actual, itemId) {
+  const allocs = actual.allocations || [];
+  if (allocs.length) {
+    return allocs.filter(x => x.proposalItemId === itemId)
+                 .reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  }
+  return actual.proposalItemId === itemId ? (parseFloat(actual.amount) || 0) : 0;
 }
 
 // Compute one item's per-category roll-up + an item-level chip.
@@ -10819,7 +10909,7 @@ function _computeFreightSummaryFromItems(items, pid) {
       charged += getItemAdjacentChargesFromComponents(item, pid);
     }
     (S.freightActuals || []).forEach(a => {
-      if (a.proposalItemId === item.id) actual += parseFloat(a.amount) || 0;
+      actual += _faAmountForItem(a, item.id);
     });
     const ledger = computeItemFreightLedger(item, pid);
     ledger.rows.forEach(r => {
@@ -11034,8 +11124,9 @@ function _faVarianceCell(row) {
 // clickable to open the freight-actual editor. Used both in the project
 // Freight ledger card and in the PM item detail panel's Freight section.
 function _faActualsListForItem(itemId) {
-  const actuals = (S.freightActuals || [])
-    .filter(a => a.proposalItemId === itemId)
+  // Allocation-aware. For split bills, the row's amount becomes the
+  // per-item slice (full original total available via _totalAmount).
+  const actuals = _faActualsForItem(itemId)
     .slice()
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   if (!actuals.length) {
@@ -11192,6 +11283,12 @@ function openNewFreightActual(pid, opts) {
 
   renderItemVendorPicker('fa-vendor-picker', null, () => {});
 
+  // Reset split UI to single-item mode
+  _faAllocDraft = [];
+  $c('fa-split-toggle').checked = false;
+  $c('fa-split-wrap').style.display = 'none';
+  $c('fa-item-single-wrap').style.display = '';
+
   $c('fa-delete-btn').style.display = 'none';
   $c('modal-freight-actual').classList.add('open');
   setTimeout(() => $c('fa-amount').focus(), 80);
@@ -11224,8 +11321,92 @@ function openEditFreightActual(id) {
 
   renderItemVendorPicker('fa-vendor-picker', fa.vendorId || null, () => {});
 
+  // Hydrate split UI from existing allocations.
+  const allocs = fa.allocations || [];
+  if (allocs.length) {
+    _faAllocDraft = allocs.map(a => ({ id: a.id, proposalItemId: a.proposalItemId || '', amount: a.amount }));
+    $c('fa-split-toggle').checked = true;
+    $c('fa-split-wrap').style.display = '';
+    $c('fa-item-single-wrap').style.display = 'none';
+    renderFAAllocRows();
+  } else {
+    _faAllocDraft = [];
+    $c('fa-split-toggle').checked = false;
+    $c('fa-split-wrap').style.display = 'none';
+    $c('fa-item-single-wrap').style.display = '';
+  }
+
   $c('fa-delete-btn').style.display = '';
   $c('modal-freight-actual').classList.add('open');
+}
+
+// ── Freight actual allocations (split across items) ──
+let _faAllocDraft = []; // [{ id, proposalItemId, amount }]
+
+function onFASplitToggle() {
+  const on = $c('fa-split-toggle').checked;
+  $c('fa-split-wrap').style.display = on ? '' : 'none';
+  $c('fa-item-single-wrap').style.display = on ? 'none' : '';
+  if (on) {
+    if (!_faAllocDraft.length) {
+      const seedItemId = $c('fa-item')?.value || '';
+      const amt = parseFloat($c('fa-amount').value) || 0;
+      _faAllocDraft = [
+        { id: uid(), proposalItemId: seedItemId, amount: amt },
+        { id: uid(), proposalItemId: '', amount: 0 },
+      ];
+    }
+    renderFAAllocRows();
+  }
+}
+
+function renderFAAllocRows() {
+  const pid = $c('fa-project-id').value;
+  const prop = pid ? S.proposals[pid] : null;
+  const items = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+    items.push({ id: it.id, label: `${sp.name || 'Space'} · ${it.name || '(unnamed)'}` });
+  }));
+  const optionsHtml = '<option value="">— Pick item —</option>' +
+    items.map(i => `<option value="${i.id}">${escH(i.label)}</option>`).join('');
+
+  const wrap = $c('fa-split-rows');
+  if (!wrap) return;
+  wrap.innerHTML = _faAllocDraft.map((a, i) => `
+    <div style="display:flex;gap:8px;align-items:center">
+      <select class="fi fsel" style="flex:1;font-size:12px;padding:5px 8px" onchange="_setFAAllocItem(${i}, this.value)">${optionsHtml.replace(`value="${a.proposalItemId}"`, `value="${a.proposalItemId}" selected`)}</select>
+      <input type="text" class="fi" style="width:110px;font-size:12px;padding:5px 8px;text-align:right" value="${a.amount || ''}" placeholder="$0.00" oninput="_setFAAllocAmount(${i}, this.value)">
+      <button class="btn btn-ghost btn-sm" onclick="_removeFAAllocRow(${i})" style="font-size:11px;color:#b94a3a;padding:2px 8px">✕</button>
+    </div>`).join('');
+  updateFASplitSum();
+}
+
+function _setFAAllocItem(i, value) { _faAllocDraft[i].proposalItemId = value || null; updateFASplitSum(); }
+function _setFAAllocAmount(i, value) { _faAllocDraft[i].amount = parseFloat(value) || 0; updateFASplitSum(); }
+function _removeFAAllocRow(i) { _faAllocDraft.splice(i, 1); renderFAAllocRows(); }
+function addFAAllocationRow() { _faAllocDraft.push({ id: uid(), proposalItemId: '', amount: 0 }); renderFAAllocRows(); }
+function splitFAEvenly() {
+  if (!_faAllocDraft.length) return;
+  const amt = parseFloat($c('fa-amount').value) || 0;
+  const each = Math.round((amt / _faAllocDraft.length) * 100) / 100;
+  const total = each * _faAllocDraft.length;
+  const remainder = Math.round((amt - total) * 100) / 100;
+  _faAllocDraft.forEach((a, i) => { a.amount = each + (i === _faAllocDraft.length - 1 ? remainder : 0); });
+  renderFAAllocRows();
+}
+function updateFASplitSum() {
+  const amt = parseFloat($c('fa-amount').value) || 0;
+  const sum = _faAllocDraft.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const diff = Math.round((amt - sum) * 100) / 100;
+  const lbl = $c('fa-split-sum');
+  if (!lbl) return;
+  if (Math.abs(diff) < 0.005) {
+    lbl.style.color = 'var(--text-mid)';
+    lbl.textContent = `Sum: ${fmt(sum)} ✓`;
+  } else {
+    lbl.style.color = '#b94a3a';
+    lbl.textContent = `Sum: ${fmt(sum)} · off by ${fmt(diff)}`;
+  }
 }
 
 function onFAItemChange() {
@@ -11294,10 +11475,30 @@ function _findItemById(itemId) {
 async function saveFreightActual() {
   const id = $c('fa-id').value;
   const pid = $c('fa-project-id').value;
-  const itemId = $c('fa-item').value;
-  if (!itemId) { toast('Pick an item.'); $c('fa-item').focus(); return; }
+  const splitOn = $c('fa-split-toggle')?.checked;
+  const itemId = splitOn ? null : $c('fa-item').value;
+  if (!splitOn && !itemId) { toast('Pick an item.'); $c('fa-item').focus(); return; }
   const amount = parseFloat($c('fa-amount').value);
   if (!(amount >= 0) || isNaN(amount)) { toast('Enter a valid amount.'); $c('fa-amount').focus(); return; }
+
+  // Validate split allocations: at least 2 items, sum matches amount.
+  let allocations = [];
+  if (splitOn) {
+    const validRows = _faAllocDraft.filter(a => a.proposalItemId && Number(a.amount) > 0);
+    if (validRows.length < 2) { toast('Split needs at least 2 items with amounts.'); return; }
+    const sum = validRows.reduce((s, a) => s + Number(a.amount), 0);
+    if (Math.abs(sum - amount) > 0.005) {
+      toast(`Allocations sum to ${fmt(sum)} but amount is ${fmt(amount)}.`);
+      return;
+    }
+    allocations = validRows.map(a => ({
+      id: a.id,
+      freightActualId: id || null,
+      proposalItemId: a.proposalItemId,
+      amount: Number(a.amount),
+      notes: '',
+    }));
+  }
   const date = $c('fa-date').value;
   if (!date) { toast('Date is required.'); $c('fa-date').focus(); return; }
 
@@ -11316,9 +11517,21 @@ async function saveFreightActual() {
 
   if (recordExpense) {
     // Resolve item name + category name for the linked expense's display.
-    const itemObj = _findItemById(itemId);
-    const itemName = itemObj?.name || 'item';
+    // For split bills, the expense gets mirrored allocations instead of
+    // a single proposalItemId, so it still feeds per-item P&L correctly.
+    const itemObj = !splitOn ? _findItemById(itemId) : null;
+    const itemName = itemObj?.name || (splitOn ? 'split bill' : 'item');
     const catName = catId ? ((S.freightCategories || []).find(c => c.id === catId)?.name || '') : '';
+    const expenseAllocs = splitOn ? allocations.map(a => ({
+      id: uid(),
+      expenseId: linkedExpenseId || null,  // patched after expense id is set
+      proposalItemId: a.proposalItemId,
+      amount: a.amount,
+      notes: '',
+      status: 'draft',
+      invoiceLineItemId: null,
+      resolvedAt: null,
+    })) : [];
     if (linkedExpenseId) {
       // Update existing linked expense — sync amount, date, category, item.
       // Per spec: do NOT change expenseType or other unrelated fields.
@@ -11327,8 +11540,13 @@ async function saveFreightActual() {
         exp.cost = String(amount);
         exp.date = date;
         exp.category = catName;
-        exp.proposalItemId = itemId;
+        exp.proposalItemId = splitOn ? null : itemId;
         exp.projectId = pid;
+        if (splitOn) {
+          exp.allocations = expenseAllocs.map(a => ({ ...a, expenseId: linkedExpenseId }));
+        } else {
+          exp.allocations = [];
+        }
       } else {
         // Linked expense was deleted out from under us — recreate.
         linkedExpenseId = null;
@@ -11339,7 +11557,7 @@ async function saveFreightActual() {
       S.expenses.push({
         id: linkedExpenseId,
         projectId: pid,
-        proposalItemId: itemId,
+        proposalItemId: splitOn ? null : itemId,
         name: 'Freight: ' + itemName,
         cost: String(amount),
         date,
@@ -11350,6 +11568,7 @@ async function saveFreightActual() {
         trackInPM: false,
         receipt: null,
         resolved: false,
+        allocations: expenseAllocs.map(a => ({ ...a, expenseId: linkedExpenseId })),
         created: new Date().toISOString(),
       });
     }
@@ -11360,11 +11579,19 @@ async function saveFreightActual() {
     linkedExpenseId = null;
   }
 
+  // For split bills, component-level FK doesn't apply (the slice goes to
+  // a specific item, not a component within an item).
+  const finalCompId = splitOn ? null : compId;
+  // For split bills, store the allocation array on the in-memory record;
+  // sync writes them as expense_allocations table rows.
+  const finalAllocs = splitOn ? allocations.map(a => ({ ...a, freightActualId: existing?.id || (id || a.freightActualId) })) : [];
+
+  let saveTargetId = existing?.id;
   if (existing) {
     Object.assign(existing, {
       projectId: pid,
       proposalItemId: itemId,
-      proposalComponentId: compId,
+      proposalComponentId: finalCompId,
       freightCategoryId: catId,
       amount: String(amount),
       date,
@@ -11372,13 +11599,17 @@ async function saveFreightActual() {
       invoiceReference: invRef,
       notes,
       linkedExpenseId,
+      allocations: finalAllocs.map(a => ({ ...a, freightActualId: existing.id })),
     });
+    saveTargetId = existing.id;
   } else {
+    const newId = uid();
+    saveTargetId = newId;
     S.freightActuals.push({
-      id: uid(),
+      id: newId,
       projectId: pid,
       proposalItemId: itemId,
-      proposalComponentId: compId,
+      proposalComponentId: finalCompId,
       freightCategoryId: catId,
       amount: String(amount),
       date,
@@ -11386,6 +11617,7 @@ async function saveFreightActual() {
       invoiceReference: invRef,
       notes,
       linkedExpenseId,
+      allocations: finalAllocs.map(a => ({ ...a, freightActualId: newId })),
       created: new Date().toISOString(),
     });
   }
@@ -11466,7 +11698,7 @@ function _faBuildDeferredBillables(pid) {
       && c.state === 'deferred'
     );
     if (!itemCharges.length) return;
-    const actuals = (S.freightActuals || []).filter(a => a.proposalItemId === item.id);
+    const actuals = _faActualsForItem(item.id);
     if (!actuals.length) return;
     const actualSum = actuals.reduce((s, a) => s + (parseFloat(a.amount) || 0), 0);
     if (actualSum <= 0) return;
