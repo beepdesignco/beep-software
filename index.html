@@ -8485,6 +8485,32 @@ function renderItemVendorCard(item, pid, spId, itemId) {
   </div>`;
 }
 
+// Set the item's main image to the given file id. Toggles off if you
+// click the star on the already-main image. One main image per item;
+// list exports + detail views read item.mainImageId.
+function setMainImage(pid, spId, itemId, fileId) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  item.mainImageId = item.mainImageId === fileId ? null : fileId;
+  save();
+  renderProjectDetail();
+}
+
+// Returns the effective main image file for an item: explicit
+// mainImageId if set, else the first image file, else null. Callers
+// render "No image available" when null.
+function getItemMainImage(item) {
+  if (!item || !(item.files || []).length) return null;
+  const isImg = (f) => /^image\//.test(f.type || '') || /\.(png|jpe?g|webp|gif)$/i.test(f.name || '');
+  const images = (item.files || []).filter(isImg);
+  if (!images.length) return null;
+  if (item.mainImageId) {
+    const m = images.find(f => f.id === item.mainImageId);
+    if (m) return m;
+  }
+  return images[0];
+}
+
 function savePMField(pid, spId, itemId, key, val) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
@@ -8878,11 +8904,22 @@ function renderTrackingSection(pid, spId, itemId, compId, trackingNumbers) {
 }
 
 function renderFilesSection(pid, spId, itemId, compId, files) {
+  // Image files can be starred as the item's "main image" — used by list
+  // exports, future detail views, etc. One main per item; non-image files
+  // (PDFs, dwgs) don't show a star.
+  const item = compId ? null : _getItem(pid, spId, itemId);
+  const mainImageId = item?.mainImageId || null;
+  const isImage = (f) => /^image\//.test(f.type || '') || /\.(png|jpe?g|webp|gif)$/i.test(f.name || '');
+
   const fileList = (files||[]).map(f => {
     const icon = f.type === 'application/pdf' ? '📄' : '🖼';
     const sizeStr = f.size < 1024 ? f.size+'B' : (f.size/1024).toFixed(0)+'KB';
+    const showStar = !compId && isImage(f);
+    const isMain = showStar && mainImageId === f.id;
+    const starBtn = showStar ? `<button onclick="event.stopPropagation();setMainImage('${pid}','${spId}','${itemId}','${f.id}')" title="${isMain?'Main image':'Set as main image'}" style="background:none;border:none;cursor:pointer;font-size:13px;line-height:1;padding:0;color:${isMain?'#c9a949':'var(--text-light)'}">${isMain?'★':'☆'}</button>` : '';
     return `
     <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b);cursor:pointer" onclick="viewFile(${escH(JSON.stringify(f)).replace(/"/g,'&quot;')})">
+      ${starBtn}
       <span>${icon}</span>
       <span style="color:var(--russet);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.name)}</span>
       <span style="color:var(--text-light)">${sizeStr}</span>
@@ -9845,6 +9882,22 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
               ).join('')}
             </div>
           </div>` : ''}
+        </div>
+
+        <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Details &amp; Dimensions</div>
+          <div class="fg" style="margin-bottom:8px">
+            <label class="fl" style="font-size:9px">Size</label>
+            <textarea class="fi" style="resize:vertical;min-height:42px;font-size:12px" placeholder="As detailed as you want — e.g. 84&quot;W x 36&quot;D x 30&quot;H, seat 18&quot;" onchange="savePMField('${pid}','${spId}','${itemId}','dimensions',this.value)">${escH(item.dimensions||'')}</textarea>
+          </div>
+          <div class="fg" style="margin-bottom:8px">
+            <label class="fl" style="font-size:9px">Weight</label>
+            <input type="text" class="fi" style="font-size:12px" placeholder="e.g. 95 lbs" value="${escH(item.weight||'')}" onchange="savePMField('${pid}','${spId}','${itemId}','weight',this.value)">
+          </div>
+          <div class="fg">
+            <label class="fl" style="font-size:9px">Additional Technical Info</label>
+            <textarea class="fi" style="resize:vertical;min-height:42px;font-size:12px" placeholder="e.g. number of bulbs, bulb type, voltage, finish details" onchange="savePMField('${pid}','${spId}','${itemId}','techInfo',this.value)">${escH(item.techInfo||'')}</textarea>
+          </div>
         </div>
 
         ${renderItemVendorCard(item, pid, spId, itemId)}
