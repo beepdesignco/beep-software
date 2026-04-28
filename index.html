@@ -8308,6 +8308,87 @@ function autoEngageFlags(pid, spId, itemId, status) {
   }
 }
 
+// Aggregates vendor / contact / brand info across the item itself plus
+// every component (constructed). Renders one card per unique vendor with
+// the brand and contact rolled up under it. "Edit" opens the proposal
+// item modal so the user can pick / change vendors. Auto-syncs on save.
+function renderItemVendorCard(item, pid, spId, itemId) {
+  const sources = [];
+  if (item.vendorId || item.brandId || item.vendorContactId) {
+    sources.push({ scope: item.name || 'Item', vendorId: item.vendorId, brandId: item.brandId, contactId: item.vendorContactId });
+  }
+  (item.components || []).forEach(c => {
+    if (c.vendorId || c.brandId || c.vendorContactId) {
+      sources.push({ scope: c.name || 'Component', vendorId: c.vendorId, brandId: c.brandId, contactId: c.vendorContactId });
+    }
+  });
+
+  // Group by vendor id (anchor of the card). Within a vendor, list each
+  // brand/contact pairing with the scopes (item + which components) it covers.
+  const byVendor = new Map();
+  sources.forEach(s => {
+    const key = s.vendorId || '__no_vendor__';
+    if (!byVendor.has(key)) byVendor.set(key, []);
+    byVendor.get(key).push(s);
+  });
+
+  const headerStyle = 'font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px';
+  const editBtn = `<button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')" style="font-size:10px;padding:4px 10px">Edit Vendors</button>`;
+
+  if (!byVendor.size) {
+    return `<div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+        <div style="${headerStyle}">Vendor</div>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:10px">No vendor / contact / brand picked yet.</div>
+      <button class="btn btn-secondary btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')" style="font-size:11px">+ Add Vendor(s)</button>
+    </div>`;
+  }
+
+  const blocks = [];
+  byVendor.forEach((rows, vendorKey) => {
+    const vendor = vendorKey !== '__no_vendor__' ? (S.vendors || []).find(v => v.id === vendorKey) : null;
+    const vendorName = vendor?.name || '— No vendor —';
+    // Unique brand+contact combos within this vendor, plus their scopes
+    const comboMap = new Map();
+    rows.forEach(s => {
+      const k = (s.brandId || '') + '||' + (s.contactId || '');
+      if (!comboMap.has(k)) comboMap.set(k, { brandId: s.brandId, contactId: s.contactId, scopes: [] });
+      comboMap.get(k).scopes.push(s.scope);
+    });
+    const comboHtml = Array.from(comboMap.values()).map(c => {
+      const brand = c.brandId ? (S.brands || []).find(b => b.id === c.brandId) : null;
+      const contact = c.contactId ? (S.vendorContacts || []).find(x => x.id === c.contactId) : null;
+      const scopeLabel = c.scopes.join(', ');
+      const brandRow = brand ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)"><strong style="color:var(--text-dark);font-weight:600">Brand:</strong> ${escH(brand.name)}</div>` : '';
+      const contactRows = contact ? `
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:2px"><strong style="color:var(--text-dark);font-weight:600">Contact:</strong> ${escH(contact.name || '')}${contact.title ? ` · ${escH(contact.title)}` : ''}</div>
+        ${contact.email ? `<div style="font-family:var(--font-b);font-size:11px;margin-top:2px"><a href="mailto:${escH(contact.email)}" style="color:var(--russet);text-decoration:none">${escH(contact.email)}</a></div>` : ''}
+        ${contact.phone ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:2px">${escH(contact.phone)}</div>` : ''}
+      ` : '';
+      return `<div style="padding:8px 0;border-top:1px solid var(--border)">
+        <div style="font-family:var(--font-b);font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);margin-bottom:4px">${escH(scopeLabel)}</div>
+        ${brandRow}
+        ${contactRows}
+        ${!brand && !contact ? '<div style="font-size:11px;color:var(--text-light);font-style:italic">Vendor only — no brand or contact picked.</div>' : ''}
+      </div>`;
+    }).join('');
+
+    blocks.push(`<div style="margin-bottom:10px">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em;padding-bottom:6px">${escH(vendorName)}</div>
+      ${comboHtml}
+    </div>`);
+  });
+
+  return `<div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px">
+      <div style="${headerStyle};margin:0">Vendor${byVendor.size > 1 ? 's' : ''}</div>
+      ${editBtn}
+    </div>
+    ${blocks.join('')}
+  </div>`;
+}
+
 function savePMField(pid, spId, itemId, key, val) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
@@ -9622,11 +9703,11 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         </div>
       </div>
 
-      <!-- Right: Description, Links, Files -->
+      <!-- Right: Proposal Note, Links, Files, Vendor -->
       <div>
-        <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
-          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Description</div>
-          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px" placeholder="Detailed description, specs, sizing…" onchange="savePMField('${pid}','${spId}','${itemId}','description',this.value)">${escH(item.description||'')}</textarea>
+        <div style="background:rgba(201,169,106,0.08);border-radius:var(--rl);padding:16px 18px;border:1px solid rgba(201,169,106,0.30);margin-bottom:14px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8a6a2a;margin-bottom:8px">Proposal Note <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— internal; same field as the proposal modal</span></div>
+          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px;background:var(--white)" placeholder="Rough size, design direction, references, &quot;look for cheaper options&quot;…" onchange="savePMField('${pid}','${spId}','${itemId}','notes',this.value)">${escH(item.notes||'')}</textarea>
         </div>
 
         <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
@@ -9669,18 +9750,13 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
             </div>
           </div>` : ''}
         </div>
+
+        ${renderItemVendorCard(item, pid, spId, itemId)}
       </div>
     </div>
 
     <!-- Components (constructed orders) -->
     ${compSection}
-
-    ${item.notes ? `
-    <!-- Proposal Note (the item's design note from the proposal modal) -->
-    <div style="background:rgba(201,169,106,0.10);border:1px solid rgba(201,169,106,0.35);border-radius:var(--rl);padding:14px 18px;margin-bottom:14px">
-      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8a6a2a;margin-bottom:6px">Proposal Note</div>
-      <div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);white-space:pre-wrap;line-height:1.5">${escH(item.notes)}</div>
-    </div>` : ''}
 
     <!-- Notes & Activity (all notes from item + components, unified feed) -->
     <div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)">
