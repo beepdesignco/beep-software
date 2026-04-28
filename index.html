@@ -6453,6 +6453,8 @@ function dbItemToS(it) {
     updatedAt: it.updated_at || null,
     files: it.files || [],
     links: it.links || [],
+    mainImageId: it.main_image_id || null,
+    mainLinkUrl: it.main_link_url || null,
     trackingNumbers: it.tracking_numbers || [],
     activityLog: it.activity_log || [],
     components: (it.proposal_components || []).slice()
@@ -6973,6 +6975,8 @@ function itemToDB(it) {
     po_id:             it.poId            || null,
     assignee_user_id:  it.assigneeUserId  || null,
     files: it.files || [], links: it.links || [],
+    main_image_id: it.mainImageId || null,
+    main_link_url: it.mainLinkUrl || null,
     tracking_numbers: it.trackingNumbers || [], activity_log: it.activityLog || [],
     sort_order: it._sortOrder || 0, deleted_at: null,
   };
@@ -8587,6 +8591,18 @@ function setMainImage(pid, spId, itemId, fileId) {
   renderProjectDetail();
 }
 
+// Toggle a starred ("main") link by index. Toggles off if the user
+// clicks the star on the already-main link.
+function setMainLink(pid, spId, itemId, idx) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const url = (item.links || [])[idx];
+  if (!url) return;
+  item.mainLinkUrl = item.mainLinkUrl === url ? null : url;
+  save();
+  renderProjectDetail();
+}
+
 // Returns the effective main image file for an item: explicit
 // mainImageId if set, else the first image file, else null. Callers
 // render "No image available" when null.
@@ -9818,11 +9834,19 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
   }
 
   // ── Item-level links ──
-  const linksHtml = (item.links||[]).map((l,i) => `
+  // Star next to each link toggles item.mainLinkUrl. When set, list
+  // exports show only the starred link as "Link" hyperlinked.
+  const mainLinkUrl = item.mainLinkUrl || null;
+  const linksHtml = (item.links||[]).map((l,i) => {
+    const isMain = mainLinkUrl === l;
+    const starBtn = `<button onclick="event.stopPropagation();setMainLink('${pid}','${spId}','${itemId}',${i})" title="${isMain?'Main link':'Set as main link'}" style="background:none;border:none;cursor:pointer;font-size:13px;line-height:1;padding:0;color:${isMain?'#c9a949':'var(--text-light)'}">${isMain?'★':'☆'}</button>`;
+    return `
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-      <a href="${escH(l)}" target="_blank" style="font-family:var(--font-b);font-size:12px;color:var(--russet);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px" onclick="event.stopPropagation()">${escH(l)}</a>
+      ${starBtn}
+      <a href="${escH(l)}" target="_blank" style="font-family:var(--font-b);font-size:12px;color:var(--russet);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:380px" onclick="event.stopPropagation()">${escH(l)}</a>
       <button onclick="removeItemLink('${pid}','${spId}','${itemId}','',${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   // ── All activity notes (item + components), sorted by timestamp ──
   const allNotes = (item.activityLog||[]).slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -20357,6 +20381,7 @@ function _mergeComponentForExport(c, parentItem) {
     weight: c.weight || '',
     techInfo: c.techInfo || '',
     links: c.links?.length ? c.links : (parentItem.links || []),
+    mainLinkUrl: c.links?.length ? null : (parentItem.mainLinkUrl || null),
     trackingNumbers: c.trackingNumbers || [],
     vendorId: c.vendorId || null,
     vendorContactId: c.vendorContactId || null,
@@ -20641,25 +20666,25 @@ async function renderExportListPDF(doc, opts = {}) {
       }
 
       if (col === 'links') {
-        const links = (it?.links || []).filter(Boolean);
-        if (!links.length) return;
+        const allLinks = (it?.links || []).filter(Boolean);
+        if (!allLinks.length) return;
+        // Starred-only mode: when item.mainLinkUrl is set, show ONE
+        // "Link" hyperlinked to the starred URL. Otherwise stack all
+        // links as "Link {1}", "Link {2}", etc.
+        const main = it?.mainLinkUrl || null;
+        const formatted = (main && allLinks.includes(main))
+          ? [{ display: 'Link', full: main }]
+          : allLinks.map((u, i) => ({ display: `Link {${i + 1}}`, full: u }));
         pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(8);
-        pdf.setTextColor(33, 100, 165); // link blue
-        const cellInnerW = cell.width - pad * 2;
-        // Truncate long urls visually but link to full url.
-        const formatted = links.map(u => {
-          const display = u.length > 38 ? u.slice(0, 35) + '…' : u;
-          return { display, full: u };
-        });
-        const lineH = 10;
+        pdf.setFontSize(9);
+        pdf.setTextColor(33, 100, 165);
+        const lineH = 11;
         const totalH = formatted.length * lineH;
         let y = cell.y + (cell.height - totalH) / 2 + 8;
         formatted.forEach(({ display, full }) => {
           const w = pdf.getTextWidth(display);
           const x = cell.x + (cell.width - w) / 2;
           pdf.textWithLink(display, x, y, { url: full });
-          // Underline manually since textWithLink doesn't.
           pdf.setDrawColor(33, 100, 165);
           pdf.setLineWidth(0.3);
           pdf.line(x, y + 1, x + w, y + 1);
