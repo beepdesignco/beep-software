@@ -9706,7 +9706,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       <!-- Right: Proposal Note, Links, Files, Vendor -->
       <div>
         <div style="background:rgba(201,169,106,0.08);border-radius:var(--rl);padding:16px 18px;border:1px solid rgba(201,169,106,0.30);margin-bottom:14px">
-          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8a6a2a;margin-bottom:8px">Proposal Note <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— internal; same field as the proposal modal</span></div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8a6a2a;margin-bottom:8px">Proposal Note</div>
           <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px;background:var(--white)" placeholder="Rough size, design direction, references, &quot;look for cheaper options&quot;…" onchange="savePMField('${pid}','${spId}','${itemId}','notes',this.value)">${escH(item.notes||'')}</textarea>
         </div>
 
