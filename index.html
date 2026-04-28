@@ -3281,6 +3281,16 @@ tr:hover .row-btns { opacity:1; }
       <input type="text" class="fi" id="frecon-amount" placeholder="$0.00" oninput="renderFreightReconPreview()">
     </div>
 
+    <!-- Markup toggle: shown in overage + deferred modes. ON = bill at marked-up
+         dollars (project default markup); OFF = bill at raw vendor cost. -->
+    <div class="fg" id="frecon-markup-row" style="display:none;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="frecon-apply-markup" checked style="accent-color:var(--russet);width:14px;height:14px" onchange="onFreightReconMarkupToggle()">
+        <span id="frecon-markup-label">Apply project markup</span>
+      </label>
+      <div id="frecon-markup-help" style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin-top:4px;line-height:1.4"></div>
+    </div>
+
     <div class="fg" style="background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
         <input type="checkbox" id="frecon-taxable" style="accent-color:var(--russet);width:14px;height:14px" onchange="renderFreightReconPreview()">
@@ -11746,6 +11756,7 @@ function openApplyFreightCreditModal() {
   const recon = getProjectFreightReconState(inv.projectId);
   if (recon.projectNetCredit <= 0.5) { toast('No credit available to apply.'); return; }
   _freightReconMode = 'credit';
+  if ($c('frecon-markup-row')) $c('frecon-markup-row').style.display = 'none';
   _freightReconMaxAmount = recon.projectNetCredit;
   $c('frecon-title').textContent = 'Apply freight credit';
   $c('frecon-summary').innerHTML = `Project has <strong>${fmt(recon.projectNetCredit)}</strong> in available freight credit. Apply some or all to this invoice as a negative line.`;
@@ -11767,11 +11778,21 @@ function openBillFreightOverageModal() {
   if (recon.projectNetOverage <= 0.5) { toast('No overage outstanding.'); return; }
   _freightReconMode = 'overage';
   _freightReconMaxAmount = recon.projectNetOverage;
+  // Stash both marked-up and at-cost views so the toggle can swap.
+  const proj = (S.projects || []).find(p => p.id === inv.projectId);
+  const markupPct = (proj?.markupPct != null ? Number(proj.markupPct) : 25) / 100;
+  _freightReconMarkupPct = markupPct;
+  _freightReconMarkedUpAmount = recon.projectNetOverage;
+  _freightReconRawAmount = markupPct > 0 ? recon.projectNetOverage / (1 + markupPct) : recon.projectNetOverage;
   $c('frecon-title').textContent = 'Bill freight overage';
   $c('frecon-summary').innerHTML = `Project has <strong>${fmt(recon.projectNetOverage)}</strong> in outstanding freight overage from prior actuals. Add some or all as a positive line on this invoice.`;
   $c('frecon-deferred-picker').style.display = 'none';
   $c('frecon-amount-row').style.display = '';
   $c('frecon-amount').value = recon.projectNetOverage.toFixed(2);
+  $c('frecon-markup-row').style.display = '';
+  $c('frecon-apply-markup').checked = true;
+  $c('frecon-markup-label').textContent = `Apply project markup (${(markupPct * 100).toFixed(0)}%)`;
+  $c('frecon-markup-help').textContent = 'Off = bill the raw vendor cost difference. On = bill the marked-up overage (default).';
   $c('frecon-taxable').checked = false;
   $c('frecon-taxable-label').textContent = 'Apply tax to this overage';
   $c('frecon-taxable-help').textContent = 'Toggle ON if the original freight category was taxable — keeps tax math symmetrical.';
@@ -11786,6 +11807,7 @@ function openBillDeferredFreightModal() {
   const items = _faBuildDeferredBillables(inv.projectId);
   if (!items.length) { toast('No deferred actuals ready to bill.'); return; }
   _freightReconMode = 'deferred';
+  if ($c('frecon-markup-row')) $c('frecon-markup-row').style.display = 'none';
   _freightReconDeferredItems = items.map(i => ({ ...i, _selected: true }));
   $c('frecon-title').textContent = 'Bill deferred freight';
   $c('frecon-summary').innerHTML = `Pick which deferred-freight items to bill on this invoice. Each line bills the marked-up actual for that item.`;
@@ -11816,6 +11838,18 @@ function renderFreightReconDeferredPicker() {
 
 function onFreightReconDeferredToggle(i, checked) {
   if (_freightReconDeferredItems[i]) _freightReconDeferredItems[i]._selected = checked;
+  renderFreightReconPreview();
+}
+
+let _freightReconMarkupPct = 0;
+let _freightReconMarkedUpAmount = 0;
+let _freightReconRawAmount = 0;
+
+function onFreightReconMarkupToggle() {
+  if (_freightReconMode !== 'overage') return;
+  const applyMarkup = $c('frecon-apply-markup').checked;
+  const target = applyMarkup ? _freightReconMarkedUpAmount : _freightReconRawAmount;
+  $c('frecon-amount').value = target.toFixed(2);
   renderFreightReconPreview();
 }
 
