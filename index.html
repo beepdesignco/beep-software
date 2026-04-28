@@ -6988,6 +6988,20 @@ async function syncToSupabase() {
     // line-X button, etc.) gets the FK cleared so sync doesn't violate
     // expense_allocations_invoice_line_item_id_fkey.
     const _liveLineIds = new Set(current.invoiceLineItems.keys());
+    // Same idea for freight_settlements: each settlement was created
+    // alongside an invoice line that carries its id in line._settlementId.
+    // If the line got removed via any path that didn't filter the
+    // settlement, the settlement now suppresses the project's recon pool
+    // forever. Drop any settlement whose linked line is gone.
+    const _liveSettlementIds = new Set();
+    current.invoiceLineItems.forEach(l => { if (l._settlementId) _liveSettlementIds.add(l._settlementId); });
+    if (S.freightSettlements && S.freightSettlements.length) {
+      const _droppedSettlements = S.freightSettlements.filter(s => !_liveSettlementIds.has(s.id));
+      if (_droppedSettlements.length) {
+        S.freightSettlements = S.freightSettlements.filter(s => _liveSettlementIds.has(s.id));
+        console.log('[BEEP recon] dropped', _droppedSettlements.length, 'orphan settlement(s)');
+      }
+    }
     (S.expenses || []).forEach(e => {
       (e.allocations || []).forEach(a => {
         if (a.invoiceLineItemId && !_liveLineIds.has(a.invoiceLineItemId)) {
