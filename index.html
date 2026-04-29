@@ -18979,10 +18979,12 @@ function fmtDurationFromHours(decimalHours) {
 function fmtDuration(decimalHours) { return fmtDurationFromHours(decimalHours); }
  
 function startTimer() {
-  const projId = $c('tt-timer-proj')?.value;
+  // Project optional at start — user can pick it before stopping (the
+  // proj dropdown stays interactive while running) or set it in the
+  // Log Time modal that opens on stop.
+  const projId = $c('tt-timer-proj')?.value || '';
   const person = $c('tt-timer-person')?.value || 'baylor';
-  if (!projId) { toast('Pick a project first.'); return; }
-  S.activeTimer = { projectId: projId, person, startMs: Date.now() };
+  S.activeTimer = { projectId: projId || null, person, startMs: Date.now() };
   save();
   _startTimerTick();
 }
