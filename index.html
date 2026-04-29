@@ -2822,7 +2822,7 @@ tr:hover .row-btns { opacity:1; }
         <label class="fl">Name</label>
         <input type="text" class="fi" id="tm-person-custom" placeholder="Full name">
       </div>
-      <div class="fg">
+      <div class="fg" id="tm-rate-wrap">
         <label class="fl">Rate ($/hr)</label>
         <input type="number" class="fi" id="tm-rate" min="0" step="5" placeholder="195">
       </div>
@@ -26270,18 +26270,29 @@ function openNewTimeModal() {
   setTimeout(() => $c('tm-project').focus(), 80);
 }
 
-// Disable the duration inputs (h/m/s) when admin has revoked the user's
-// can_adjust_time_entries permission. Project/person/rate/notes/billable
-// stay editable — those aren't the time-fudging risk.
+// Apply admin-defined permission gating to the Log Time modal.
+// When can_adjust_time_entries is false:
+//   • Duration h/m/s — disabled
+//   • Date — disabled
+//   • Person picker — disabled (employees log as themselves)
+//   • Rate — hidden entirely (admin-set, not visible to employee)
+//   • Fee preview — hidden (depends on rate, also not visible)
+// Project, notes, billable stay editable — essential for any employee.
+// Owners always pass canAdjustTimeEntries() so they see/edit everything.
 function _applyTimeModalPermissions() {
   const allow = canAdjustTimeEntries();
   ['tm-h', 'tm-m', 'tm-s'].forEach(id => {
     const el = $c(id);
-    if (el) {
-      el.disabled = !allow;
-      el.style.opacity = allow ? '1' : '0.5';
-    }
+    if (el) { el.disabled = !allow; el.style.opacity = allow ? '1' : '0.5'; }
   });
+  ['tm-date', 'tm-person', 'tm-person-custom'].forEach(id => {
+    const el = $c(id);
+    if (el) { el.disabled = !allow; el.style.opacity = allow ? '1' : '0.5'; }
+  });
+  const rateWrap = $c('tm-rate-wrap');
+  if (rateWrap) rateWrap.style.display = allow ? '' : 'none';
+  const feePrev = $c('tm-fee-preview');
+  if (feePrev) feePrev.style.display = allow ? '' : 'none';
 }
  
 function openEditTimeModal(id) {
