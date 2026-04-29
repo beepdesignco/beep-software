@@ -26049,7 +26049,7 @@ function renderTimeLog(entries) {
   const totalHrs  = sorted.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
   const rows = sorted.map(e => {
     const proj = (S.projects||[]).find(p => p.id === e.projectId);
-    const personLabel = TEAM.find(t=>t.id===e.person)?.label || e.person || '—';
+    const personLabel = _timePersonLabel(e.person);
     const fee = (parseFloat(e.hours)||0) * (parseFloat(e.rate)||0);
     const inv = invoiceForTimeEntry(e);
     const invCell = inv
@@ -26099,11 +26099,40 @@ function setTimeDetailFilter(f) {
   renderTime();
 }
  
+// Resolve an entry's `person` value to a display label. Older entries
+// stored TEAM ids ('baylor' / 'support' / 'other'); newer entries (web
+// + mobile) store the user's auth UUID. Look up _teamCache for the UUID
+// path so studio members show as their display name.
+function _timePersonLabel(personValue) {
+  if (!personValue) return '—';
+  const team = TEAM.find(t => t.id === personValue);
+  if (team) return team.label;
+  const member = (_teamCache || []).find(m => m.user_id === personValue);
+  if (member) return member.display_name || member.role || 'Member';
+  return personValue;          // fallback (likely raw UUID)
+}
+
+// Distinct list of persons appearing in the given entries, in
+// stable-encounter order. Used as the iteration key for the per-person
+// summary cards + log sections (replaces the legacy TEAM.map which
+// missed entries logged via Supabase auth uid).
+function _distinctPersons(entries) {
+  const seen = new Set();
+  const out = [];
+  entries.forEach(e => {
+    const k = e.person || '';
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    out.push(k);
+  });
+  return out;
+}
+
 function renderTimeDetail(allEntries) {
   const proj = (S.projects||[]).find(p => p.id === _timeDetailProj);
   const name = proj?.name || 'Unknown Project';
   const client = proj ? getClientName(proj.clientId) : '';
- 
+
   // Filter by project first
   const projEntries = allEntries.filter(e => e.projectId === _timeDetailProj);
  
@@ -26123,10 +26152,13 @@ function renderTimeDetail(allEntries) {
   const unbilledHrs   = projEntries.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
   const unbilledFee   = projEntries.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
  
-  // Per-person summary
-  const personCards = TEAM.map(t => {
-    const pEnts = projEntries.filter(e => e.person === t.id);
+  // Per-person summary — iterates the distinct persons that actually
+  // logged time on this project (legacy TEAM ids OR studio_member uuids).
+  const persons = _distinctPersons(projEntries);
+  const personCards = persons.map(pid => {
+    const pEnts = projEntries.filter(e => e.person === pid);
     if (!pEnts.length) return '';
+    const label = _timePersonLabel(pid);
     const pH  = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
     const pBH = pEnts.filter(e=>e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
     const pUH = pEnts.filter(e=>!e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
@@ -26134,7 +26166,7 @@ function renderTimeDetail(allEntries) {
     const pUF = pEnts.filter(e=>!e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
     return `
       <div class="tt-person-card">
-        <div class="tt-person-name">${escH(t.label)}</div>
+        <div class="tt-person-name">${escH(label)}</div>
         <div class="tt-person-row">
           <span class="lbl">Total Hours</span>
           <span class="val">${fmtHrs(pH)} hrs</span>
@@ -26149,11 +26181,13 @@ function renderTimeDetail(allEntries) {
         </div>
       </div>`;
   }).join('');
- 
-  // Per-person log sections
-  const logSections = TEAM.map(t => {
-    const pEnts = entries.filter(e => e.person === t.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  // Per-person log sections (filtered by billed/unbilled tab).
+  const filteredPersons = _distinctPersons(entries);
+  const logSections = filteredPersons.map(pid => {
+    const pEnts = entries.filter(e => e.person === pid).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     if (!pEnts.length) return '';
+    const label = _timePersonLabel(pid);
     const rows = pEnts.map(e => {
       const fee = (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0);
       return `
@@ -26170,7 +26204,7 @@ function renderTimeDetail(allEntries) {
     const secHrs = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
     const secFee = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
     return `
-      <div class="tt-section-head">${escH(t.label)}</div>
+      <div class="tt-section-head">${escH(label)}</div>
       <table class="tt-log-table" style="margin-bottom:24px">
         <thead><tr>
           <th>Date</th>
