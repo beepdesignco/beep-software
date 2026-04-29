@@ -3874,6 +3874,7 @@ async function afterSignIn() {
   loadTeamCache();
   loadNotifications();
   subscribeNotifications();
+  subscribeExpensesRealtime();
 
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
@@ -4016,6 +4017,39 @@ async function loadNotifications() {
   NOTIFICATIONS.items = data || [];
   NOTIFICATIONS.unread = NOTIFICATIONS.items.filter(n => !n.read_at).length;
   renderNotificationBell();
+}
+
+// Realtime: expenses logged on the mobile app (or another web session)
+// land in S.expenses without a refresh. INSERT only — updates / deletes
+// from other clients are rare for new expenses; the existing sync path
+// keeps locally-edited rows in sync via shadow-diff on save().
+let _expensesRealtimeChannel = null;
+function subscribeExpensesRealtime() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  if (_expensesRealtimeChannel) { sb.removeChannel(_expensesRealtimeChannel); _expensesRealtimeChannel = null; }
+  _expensesRealtimeChannel = sb
+    .channel('expenses-' + AUTH.studio.id)
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'expenses', filter: 'studio_id=eq.' + AUTH.studio.id },
+      (payload) => {
+        const row = payload.new;
+        if (!row?.id) return;
+        if (!S.expenses) S.expenses = [];
+        // Dedupe: own writes round-trip via Realtime too. Skip if we
+        // already have the row (probably from optimistic local insert).
+        if (S.expenses.some(e => e.id === row.id)) return;
+        const mapped = (typeof dbExpenseToS === 'function') ? dbExpenseToS(row) : null;
+        if (!mapped) return;
+        S.expenses.unshift(mapped);
+        if (typeof captureSbShadow === 'function') {
+          // Keep the sync engine's shadow aligned so a subsequent save()
+          // doesn't try to insert it again.
+          if (_sbShadow?.expenses) _sbShadow.expenses.set(mapped.id, JSON.parse(JSON.stringify(mapped)));
+        }
+        if (S.currentView === 'expenses' && typeof renderExpenses === 'function') renderExpenses();
+        if (S.currentView === 'project-detail' && typeof renderProjectDetail === 'function') renderProjectDetail();
+      })
+    .subscribe();
 }
 
 function subscribeNotifications() {
