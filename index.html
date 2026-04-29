@@ -26242,10 +26242,6 @@ function canAdjustTimeEntries() {
 }
 
 function openNewTimeModal() {
-  if (!canAdjustTimeEntries()) {
-    toast('Your admin has disabled manual time entries for your account.');
-    return;
-  }
   // Clear any stale timer bounds from a previous stopTimer so a plain manual
   // entry doesn't accidentally inherit them. stopTimer re-sets them *after* it
   // calls this function.
@@ -26269,17 +26265,28 @@ function openNewTimeModal() {
   $c('tm-notes').value = '';
   $c('tm-billed').checked = true;       // default: new entries are billable
   $c('tm-fee-val').textContent = '$0.00';
+  _applyTimeModalPermissions();
   $c('modal-time').classList.add('open');
   setTimeout(() => $c('tm-project').focus(), 80);
+}
+
+// Disable the duration inputs (h/m/s) when admin has revoked the user's
+// can_adjust_time_entries permission. Project/person/rate/notes/billable
+// stay editable — those aren't the time-fudging risk.
+function _applyTimeModalPermissions() {
+  const allow = canAdjustTimeEntries();
+  ['tm-h', 'tm-m', 'tm-s'].forEach(id => {
+    const el = $c(id);
+    if (el) {
+      el.disabled = !allow;
+      el.style.opacity = allow ? '1' : '0.5';
+    }
+  });
 }
  
 function openEditTimeModal(id) {
   const e = (S.timeEntries||[]).find(x => x.id === id);
   if (!e) return;
-  if (!canAdjustTimeEntries()) {
-    toast('Your admin has disabled time-entry adjustments for your account.');
-    return;
-  }
   if (e.status === 'billed') {
     const inv = (S.invoices || []).find(i => (i.lineItems||[]).some(l => l.id === e.invoiceLineItemId)) || null;
     toast('This entry is on a sent invoice and is locked. ' + (inv ? 'Void invoice ' + inv.number + ' to edit.' : 'Void the invoice to edit.'));
@@ -26311,6 +26318,7 @@ function openEditTimeModal(id) {
   $c('tm-notes').value = e.notes || '';
   $c('tm-billed').checked = e.billable !== false;     // default true if undefined
   updateTimeFee();
+  _applyTimeModalPermissions();
   $c('modal-time').classList.add('open');
 }
  
