@@ -1454,7 +1454,7 @@ tr:hover .row-btns { opacity:1; }
           <input type="date" class="fi" id="tt-filter-to" onchange="renderTime()" title="To date" style="font-size:12px;padding:6px 10px;width:140px">
           <button class="btn btn-ghost btn-sm" onclick="clearTimeFilters()" style="font-size:11px" title="Reset all filters">Clear</button>
           <button class="btn btn-secondary btn-sm" onclick="exportTimeCsv()" style="font-size:11px" title="Download the filtered entries as CSV">Export CSV</button>
-          <button class="btn btn-primary" onclick="openNewTimeModal()">+ Log Time</button>
+          <button class="btn btn-primary" id="tt-new-entry-btn" onclick="openNewTimeModal()">+ Log Time</button>
         </div>
       </div>
       <!-- Live Timer Bar -->
@@ -2850,8 +2850,8 @@ tr:hover .row-btns { opacity:1; }
     </div>
  
     <div class="fg" style="flex-direction:row;align-items:center;gap:10px;padding:6px 0">
-      <input type="checkbox" id="tm-billed" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
-      <label for="tm-billed" style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);cursor:pointer">Mark as already billed</label>
+      <input type="checkbox" id="tm-billed" checked style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+      <label for="tm-billed" style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);cursor:pointer">Billable</label>
     </div>
  
     <div class="modal-footer">
@@ -6416,6 +6416,8 @@ function dbTimeToS(t) {
     date:      dateStr,
     notes:     t.description || '',
     billed:    t.status === 'billed',
+    billable:  t.billable !== false,             // default true if column is null
+
     // New-column pass-through (surfaces them to any future UI that wants to read them directly)
     startedAt:           t.started_at,
     endedAt:             t.ended_at,
@@ -6970,6 +6972,7 @@ function timeEntryToDB(t, studioId) {
     duration_seconds:    durSec,
     rate:                t.rate != null && t.rate !== '' ? Number(t.rate) : null,
     status:              'unbilled',
+    billable:            t.billable === false ? false : true,
     invoice_line_item_id: null,
     billed_at:           null,
   };
@@ -18018,11 +18021,12 @@ function renderTeamMemberRow(m, isOwner) {
   const canRemove = isOwner && !isSelf && m.role !== 'owner';
   const pending = !m.accepted_at;
   const perms = [
-    ['can_view_financials',  'view financials'],
-    ['can_record_payments',  'record payments'],
-    ['can_send_invoices',    'send invoices'],
-    ['can_manage_expenses',  'manage expenses'],
-    ['can_manage_members',   'manage members'],
+    ['can_view_financials',     'view financials'],
+    ['can_record_payments',     'record payments'],
+    ['can_send_invoices',       'send invoices'],
+    ['can_manage_expenses',     'manage expenses'],
+    ['can_manage_members',      'manage members'],
+    ['can_adjust_time_entries', 'adjust time entries'],
   ];
   const permPills = perms.map(([k, label]) => {
     const active = m.role === 'owner' || m[k];
@@ -25936,6 +25940,10 @@ function collectFilteredTimeEntries() {
 function renderTime() {
   const body = $c('tt-body');
   if (!body) return;
+  // Hide the "+ Log Time" button when admin has disabled manual entries
+  // for this user.
+  const newBtn = $c('tt-new-entry-btn');
+  if (newBtn) newBtn.style.display = canAdjustTimeEntries() ? '' : 'none';
 
   // Populate project filter + timer project dropdowns
   const projSel = $c('tt-filter-proj');
@@ -26224,7 +26232,20 @@ function renderTimeDetail(allEntries) {
     ${logSections || '<p style="color:var(--text-mid);font-size:13px;font-family:var(--font-b)">No entries match this filter.</p>'}`;
 }
  
+// Permission helper: owners always can; default true for members until
+// admin un-toggles can_adjust_time_entries on App Settings → Team.
+function canAdjustTimeEntries() {
+  const m = AUTH?.member;
+  if (!m) return true;
+  if (m.role === 'owner') return true;
+  return m.can_adjust_time_entries !== false;
+}
+
 function openNewTimeModal() {
+  if (!canAdjustTimeEntries()) {
+    toast('Your admin has disabled manual time entries for your account.');
+    return;
+  }
   // Clear any stale timer bounds from a previous stopTimer so a plain manual
   // entry doesn't accidentally inherit them. stopTimer re-sets them *after* it
   // calls this function.
@@ -26246,7 +26267,7 @@ function openNewTimeModal() {
   $c('tm-m').value = '';
   $c('tm-s').value = '';
   $c('tm-notes').value = '';
-  $c('tm-billed').checked = false;
+  $c('tm-billed').checked = true;       // default: new entries are billable
   $c('tm-fee-val').textContent = '$0.00';
   $c('modal-time').classList.add('open');
   setTimeout(() => $c('tm-project').focus(), 80);
@@ -26255,6 +26276,10 @@ function openNewTimeModal() {
 function openEditTimeModal(id) {
   const e = (S.timeEntries||[]).find(x => x.id === id);
   if (!e) return;
+  if (!canAdjustTimeEntries()) {
+    toast('Your admin has disabled time-entry adjustments for your account.');
+    return;
+  }
   if (e.status === 'billed') {
     const inv = (S.invoices || []).find(i => (i.lineItems||[]).some(l => l.id === e.invoiceLineItemId)) || null;
     toast('This entry is on a sent invoice and is locked. ' + (inv ? 'Void invoice ' + inv.number + ' to edit.' : 'Void the invoice to edit.'));
@@ -26284,7 +26309,7 @@ function openEditTimeModal(id) {
   $c('tm-m').value = _em || '';
   $c('tm-s').value = _es || '';
   $c('tm-notes').value = e.notes || '';
-  $c('tm-billed').checked = !!e.billed;
+  $c('tm-billed').checked = e.billable !== false;     // default true if undefined
   updateTimeFee();
   $c('modal-time').classList.add('open');
 }
@@ -26333,13 +26358,13 @@ function saveTimeEntry() {
   const totalSec = Math.round(hours * 3600);
   const date     = $c('tm-date').value;
   const notes    = $c('tm-notes').value.trim();
-  const billed   = $c('tm-billed').checked;  // captured for UI; does not drive DB status in Part 2
+  const billable = $c('tm-billed').checked;            // is this work billable to the client?
 
   if (!projId) { $c('tm-project').focus(); return; }
   if (totalSec <= 0) { $c('tm-h').focus(); toast('Enter a duration.'); return; }
 
   const data = {
-    projectId: projId, person, rate, hours, date, notes, billed,
+    projectId: projId, person, rate, hours, date, notes, billable,
     durationSeconds: totalSec,
   };
 
