@@ -6161,6 +6161,7 @@ function dbItemTypeToS(t) {
     description: t.description || '',
     color: t.color || '',
     sortOrder: t.sort_order || 0,
+    systemKey: t.system_key || null,
     created: t.created_at,
   };
 }
@@ -6722,6 +6723,7 @@ function itemTypeToDB(t, studioId) {
     description: t.description || null,
     color: t.color || null,
     sort_order: t.sortOrder || 0,
+    system_key: t.systemKey || null,
     deleted_at: null,
   };
 }
@@ -7436,6 +7438,15 @@ const ITEM_TYPES = [
   { id:'readymade',   label:'Ready Made',        badge:'RM' },
   { id:'openline',    label:'Open Line Item',    badge:'OL' },
 ];
+
+// Auto-seeded built-in entries for S.itemTypes. Identified by systemKey
+// (round-trips via item_types.system_key). Users can rename/recolor but
+// can't delete. "Undefined" is the default for items in the design-
+// development phase; "Non-Material" covers services / fees / labor.
+const BUILTIN_ITEM_TYPES = [
+  { systemKey: 'undefined',    name: 'Undefined',                  color: '#A0958C', description: 'Default for items in design-development before the type is decided.', sortOrder: -100 },
+  { systemKey: 'non_material', name: 'Non-Material Item / Service', color: '#7A4535', description: 'Consultations, design fees, freight-only, install labor — anything that isn\'t a physical good.', sortOrder: -99 },
+];
  
 // ─── THEME PRESETS ─────────────────────────────────────────
 // 12 themes total. Each preset defines the 5 spec roles
@@ -7793,6 +7804,20 @@ async function load() {
     if (!S.documents) S.documents = [];
     if (!S.expenses) S.expenses = [];
     if (!S.paymentCards) S.paymentCards = [];
+    // Seed the two built-in item types ("Undefined", "Non-Material Item /
+    // Service") if missing. ensureBuiltInItemTypes is idempotent — adopts
+    // an existing same-named user type before creating a fresh one.
+    if (typeof ensureBuiltInItemTypes === 'function') ensureBuiltInItemTypes();
+    // Backfill items missing an item type to "Undefined" so every item
+    // has a type going forward (the type is now required on save).
+    const _undefId = (typeof getUndefinedItemTypeId === 'function') ? getUndefinedItemTypeId() : null;
+    if (_undefId) {
+      Object.values(S.proposals || {}).forEach(prop => {
+        (prop.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+          if (!it.itemTypeId) it.itemTypeId = _undefId;
+        }));
+      });
+    }
     // Legacy → versions[] conversion for any doc still carrying
     // revisionHistory[] (only relevant on the localStorage code path; the
     // Supabase recovery block above already handled cross-store merges).
@@ -15488,7 +15513,7 @@ function saveItem() {
   showItemModalError(null);
 
   const adjVal = $c('ai-adj-markup').value;
-  const itemTypeId = $c('ai-item-type')?.value || null;
+  const itemTypeId = $c('ai-item-type')?.value || getUndefinedItemTypeId();
 
   // Picker selections + preserved legacy contact text from the existing item
   // (the legacy text field is no longer editable from the modal, but we don't
@@ -15515,7 +15540,7 @@ function saveItem() {
     // Constructed items track actual cost per-component, not at the item
     // level — clear the item-level field on save (the input is hidden).
     costActual: type === 'constructed' ? '' : $c('ai-cost-actual').value.trim(),
-    itemTypeId: itemTypeId || null,
+    itemTypeId: itemTypeId || getUndefinedItemTypeId(),
     vendorId: pickedVendorId,
     vendorContactId: pickedContactId,
     brandId: pickedBrandId,
@@ -17527,10 +17552,12 @@ function populateItemTypeSelect(selectedId) {
   const sel = $c('ai-item-type');
   if (!sel) return;
   const types = (S.itemTypes || []).slice().sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
-  const opts = ['<option value="">— None —</option>']
-    .concat(types.map(t => `<option value="${t.id}" ${t.id === selectedId ? 'selected' : ''}>${escH(t.name)}</option>`))
+  // Item Type is required — fall back to the built-in "Undefined" when
+  // the item has no type yet (e.g. brand-new items, legacy data).
+  const effectiveId = selectedId || getUndefinedItemTypeId();
+  sel.innerHTML = types
+    .map(t => `<option value="${t.id}" ${t.id === effectiveId ? 'selected' : ''}>${escH(t.name)}</option>`)
     .join('');
-  sel.innerHTML = opts;
 }
 
 // "On PO #N" pill for items that are on a purchase order. Click opens that PO.
@@ -17572,15 +17599,54 @@ function renderItemTypesList() {
   el.innerHTML = types.map(t => {
     const count = countItemsOfType(t.id);
     const color = t.color || '#9F6640';
+    const sysChip = t.systemKey
+      ? '<span style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-light);background:rgba(var(--text-rgb),0.06);padding:2px 6px;border-radius:8px">System</span>'
+      : '';
+    const delBtn = t.systemKey
+      ? '<span style="width:24px;display:inline-block"></span>'
+      : `<button onclick="removeItemType('${t.id}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>`;
     return `
     <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--white);border:1px solid var(--border);border-radius:var(--r)">
       <input type="color" value="${color}" style="width:32px;height:32px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;background:none"
         onchange="updateItemTypeField('${t.id}','color',this.value)">
       <input type="text" class="fi" value="${escH(t.name)}" data-old="${escH(t.name)}" style="flex:1;font-size:12px;color:${color};font-weight:700" onchange="renameItemType('${t.id}', this.value.trim())">
+      ${sysChip}
       <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${count} in use</span>
-      <button onclick="removeItemType('${t.id}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>
+      ${delBtn}
     </div>`;
   }).join('');
+}
+
+function ensureBuiltInItemTypes() {
+  if (!S.itemTypes) S.itemTypes = [];
+  let created = 0;
+  BUILTIN_ITEM_TYPES.forEach(b => {
+    let existing = S.itemTypes.find(t => t.systemKey === b.systemKey);
+    if (!existing) {
+      // Adopt a same-named user type if one happens to exist (case-insensitive),
+      // so we don't spawn a duplicate "Undefined" alongside theirs.
+      existing = S.itemTypes.find(t => !t.systemKey && t.name.toLowerCase() === b.name.toLowerCase());
+      if (existing) {
+        existing.systemKey = b.systemKey;
+      } else {
+        S.itemTypes.push({
+          id: uid(),
+          name: b.name,
+          description: b.description,
+          color: b.color,
+          sortOrder: b.sortOrder,
+          systemKey: b.systemKey,
+          created: new Date().toISOString(),
+        });
+        created++;
+      }
+    }
+  });
+  return created;
+}
+
+function getUndefinedItemTypeId() {
+  return (S.itemTypes || []).find(t => t.systemKey === 'undefined')?.id || null;
 }
 
 function addItemType() {
@@ -17633,16 +17699,27 @@ function renameItemType(id, newName) {
 function removeItemType(id) {
   const t = (S.itemTypes || []).find(x => x.id === id);
   if (!t) return;
+  if (t.systemKey) {
+    toast('Built-in item types can\'t be deleted.');
+    return;
+  }
   const inUse = countItemsOfType(id);
+  const undefinedId = getUndefinedItemTypeId();
+  const reassignNote = inUse
+    ? (undefinedId
+      ? ' — they\'ll be reassigned to "Undefined".'
+      : ' — their type will be cleared.')
+    : '';
   const msg = inUse
-    ? 'Delete type "' + t.name + '"? ' + inUse + ' item' + (inUse!==1?'s':'') + ' currently use this type — their type field will be cleared.'
+    ? 'Delete type "' + t.name + '"? ' + inUse + ' item' + (inUse!==1?'s':'') + ' currently use this type' + reassignNote
     : 'Delete type "' + t.name + '"?';
   if (!confirm(msg)) return;
   S.itemTypes = (S.itemTypes || []).filter(x => x.id !== id);
-  // Clear references on items so the soft-deleted FK doesn't dangle
+  // Reassign references to "Undefined" so every item still has a type.
   Object.values(S.proposals || {}).forEach(prop => {
     (prop.spaces||[]).forEach(sp => (sp.items||[]).forEach(it => {
-      if (it.itemTypeId === id) it.itemTypeId = null;
+      if (it.itemTypeId === id) it.itemTypeId = undefinedId;
+      (it.components || []).forEach(c => { if (c.itemTypeId === id) c.itemTypeId = undefinedId; });
     }));
   });
   save();
