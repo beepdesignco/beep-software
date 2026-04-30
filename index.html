@@ -6411,21 +6411,34 @@ function dbExpenseToS(e) {
 }
 
 function dbDocumentToS(d) {
-  return {
-    id: d.id,
-    projectId: d.project_id || '',
-    template: d.template_id,
-    title: d.title,
-    currentVersionId: d.current_version_id,
-    versions: (d.document_versions || []).map(v => ({
+  const versions = (d.document_versions || [])
+    .map(v => ({
       id: v.id,
       letter: v.version_letter,
       revision: v.revision_number,
       data: v.data || {},
       files: v.files || [],
       created: v.created_at,
-    })),
+    }))
+    .sort((a, b) => a.revision - b.revision);
+  const active = versions.find(v => v.id === d.current_version_id) || versions[versions.length - 1];
+  const activeData = active?.data || {};
+  return {
+    id: d.id,
+    projectId: d.project_id || '',
+    templateId: d.template_id,
+    title: d.title,
+    currentVersionId: d.current_version_id,
+    versions,
+    items: activeData.items || [],
+    rooms: activeData.rooms || [],
+    notes: activeData.notes || '',
+    date: activeData.date || '',
+    exportConfig: activeData.exportConfig || null,
+    version: active?.letter || 'A',
+    revision: (active?.revision || 0) + 1,
     created: d.created_at,
+    updated: active?.created || d.created_at,
   };
 }
 
@@ -6962,10 +6975,15 @@ function invPaymentToDB(p) {
   };
 }
 function documentToDB(d, studioId) {
+  // current_version_id is intentionally omitted — Postgres treats absent
+  // columns as "leave unchanged" on UPDATE and "use default (null)" on
+  // INSERT, which is exactly what we want for a 3-phase FK-safe sync.
+  // Phase-3 in syncToSupabase sets it to the right id once the version row
+  // exists. See documents/document_versions section.
   return {
     id: d.id, studio_id: studioId, project_id: d.projectId || null,
     template_id: d.template || d.templateId || 'material_schedule',
-    title: d.title || '', current_version_id: d.currentVersionId || null,
+    title: d.title || '',
     deleted_at: null,
   };
 }
@@ -7257,8 +7275,29 @@ async function syncToSupabase() {
     await syncSafe('freight_actual_allocations', current.freightActualAllocations, _sbShadow.freightActualAllocations, a => freightActualAllocationToDB(a, studioId));
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
+    // Three-phase to satisfy circular FKs:
+    //   1. Parent (documents) without current_version_id — gives child a target
+    //   2. Children (document_versions) — now their FK to parent resolves
+    //   3. Parent's current_version_id — version row now exists, FK resolves
+    // Capture pre-phase-1 shadow cvids so phase-3 only updates docs whose
+    // current_version_id actually changed since last sync.
+    const _preCvShadow = new Map();
+    for (const [id, prev] of _sbShadow.documents) {
+      _preCvShadow.set(id, prev.currentVersionId || null);
+    }
     await syncSafe('documents', current.documents, _sbShadow.documents, d => documentToDB(d, studioId));
     await syncSafe('document_versions', current.documentVersions, _sbShadow.documentVersions, v => documentVersionToDB(v), { softDelete: false });
+    try {
+      for (const [id, doc] of current.documents) {
+        const wantCv = doc.currentVersionId || null;
+        const prevCv = _preCvShadow.has(id) ? _preCvShadow.get(id) : null;
+        if (wantCv !== prevCv) {
+          const { error } = await sb.from('documents').update({ current_version_id: wantCv }).eq('id', id);
+          if (error) console.warn('[BEEP sync] documents.current_version_id update failed:', error.message);
+          else _syncOps++;
+        }
+      }
+    } catch (e) { console.warn('[BEEP sync] documents.cvid phase:', e.message); }
     await syncSafe('time_entries', current.timeEntries, _sbShadow.timeEntries, t => timeEntryToDB(t, studioId), { softDelete: false });
 
     // Studio settings (single row)
@@ -7680,8 +7719,57 @@ async function load() {
       if (d) {
         const p = JSON.parse(d);
         if (p && p.activeTimer) S.activeTimer = p.activeTimer;
+        // Recovery: docs created before document_versions sync was wired up
+        // exist as title-only shells in Supabase. Their content (items, notes,
+        // revisionHistory) only lives in this browser's localStorage. Merge
+        // it into the freshly-loaded shells so the next save pushes a v1 row.
+        if (p && Array.isArray(p.documents)) {
+          const sbDocs = new Map((S.documents || []).map(d => [d.id, d]));
+          let recovered = 0;
+          p.documents.forEach(lsDoc => {
+            const sb = sbDocs.get(lsDoc.id);
+            if (!sb) return;
+            const sbHasContent = (sb.versions || []).length > 0 || (sb.items || []).length > 0;
+            if (sbHasContent) return;
+            const lsHasContent = (lsDoc.items || []).length > 0
+              || (lsDoc.revisionHistory || []).length > 0
+              || (lsDoc.exportConfig != null);
+            if (!lsHasContent) return;
+            sb.items = lsDoc.items || [];
+            sb.rooms = lsDoc.rooms || [];
+            sb.notes = lsDoc.notes || '';
+            sb.date = lsDoc.date || '';
+            sb.exportConfig = lsDoc.exportConfig || null;
+            // Convert legacy revisionHistory[] into versions[] rows so the
+            // history shows up in the panel and round-trips to Supabase.
+            sb.versions = (lsDoc.revisionHistory || []).map(r => ({
+              id: uid(),
+              letter: lsDoc.version || 'A',
+              revision: r.revision,
+              data: {
+                items: r.snapshot || [],
+                rooms: lsDoc.rooms || [],
+                notes: r.notes || '',
+                date: lsDoc.date || '',
+                exportConfig: null,
+                title: r.title || lsDoc.title || '',
+              },
+              files: [],
+              created: r.savedAt || lsDoc.created,
+            }));
+            sb.currentVersionId = sb.versions.length ? sb.versions[sb.versions.length - 1].id : null;
+            // Always push one more version that captures the current working
+            // state — covers cases where revisionHistory was never written.
+            pushDocVersion(sb);
+            recovered++;
+          });
+          if (recovered) {
+            console.log('[BEEP recovery] merged', recovered, 'doc(s) from localStorage; scheduling sync');
+            S._docRecoveryDirty = true;
+          }
+        }
       }
-    } catch (_e) {}
+    } catch (_e) { console.warn('[BEEP recovery] doc merge skipped:', _e); }
   } else {
     try {
       const d = localStorage.getItem('beep_hq_v1');
@@ -7705,6 +7793,29 @@ async function load() {
     if (!S.documents) S.documents = [];
     if (!S.expenses) S.expenses = [];
     if (!S.paymentCards) S.paymentCards = [];
+    // Legacy → versions[] conversion for any doc still carrying
+    // revisionHistory[] (only relevant on the localStorage code path; the
+    // Supabase recovery block above already handled cross-store merges).
+    S.documents.forEach(d => {
+      if ((d.versions && d.versions.length) || !d.revisionHistory) return;
+      d.versions = (d.revisionHistory || []).map(r => ({
+        id: uid(),
+        letter: d.version || 'A',
+        revision: r.revision,
+        data: {
+          items: r.snapshot || [],
+          rooms: d.rooms || [],
+          notes: r.notes || '',
+          date: d.date || '',
+          exportConfig: null,
+          title: r.title || d.title || '',
+        },
+        files: [],
+        created: r.savedAt || d.created,
+      }));
+      if (d.versions.length) d.currentVersionId = d.versions[d.versions.length - 1].id;
+      delete d.revisionHistory;
+    });
     // Migrate old 'brands' field → 'lines'
     S.contacts.forEach(c => {
       if (c.brands !== undefined && c.lines === undefined) {
@@ -20366,7 +20477,6 @@ function saveAndExportList() {
     doc.projectId = d.projectId;
     doc.exportConfig = { listType: d.listType, includeEmptyRooms: d.includeEmptyRooms, filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation };
     doc.updated = new Date().toISOString();
-    doc.revision = (doc.revision || 1) + 1;
   } else {
     doc = {
       id: uid(),
@@ -20377,7 +20487,8 @@ function saveAndExportList() {
       updated: new Date().toISOString(),
       version: 'A',
       revision: 1,
-      revisionHistory: [],
+      versions: [],
+      currentVersionId: null,
       items: [],
       rooms: [],
       exportConfig: { listType: d.listType, includeEmptyRooms: d.includeEmptyRooms, filters: d.filters, columns: d.columns, notes: d.notes, notesPosition: d.notesPosition, orientation: d.orientation },
@@ -20385,6 +20496,7 @@ function saveAndExportList() {
     S.documents.push(doc);
     d.docId = doc.id;
   }
+  pushDocVersion(doc);
   save();
   closeModal('modal-export-list');
   toast(`"${d.name}" saved.`);
@@ -21022,7 +21134,8 @@ function createNewDoc() {
     updated: new Date().toISOString(),
     version: versionLetter,
     revision: 1,
-    revisionHistory: [],
+    versions: [],
+    currentVersionId: null,
     items: [],
     rooms: [],
   };
@@ -21378,15 +21491,16 @@ function renderDocInfoPanel(doc, proj, client, templateLabel, rooms) {
         <div><strong>Created:</strong> ${new Date(doc.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
         <div><strong>Last Saved:</strong> ${doc.updated?new Date(doc.updated).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+new Date(doc.updated).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'—'}</div>
       </div>
-      ${(doc.revisionHistory||[]).length?`
+      ${(doc.versions||[]).length?`
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
         <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-bottom:6px">Version History</div>
-        ${(doc.revisionHistory||[]).slice().reverse().map((r, ri) => {
-          const actualIdx = doc.revisionHistory.length - 1 - ri;
+        ${(doc.versions||[]).slice().reverse().map((v, ri) => {
+          const actualIdx = doc.versions.length - 1 - ri;
+          const itemCount = (v.data?.items || []).length;
           return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;margin-bottom:4px;background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--rs)">
             <div>
-              <div style="font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--mahogany)">${doc.version||'A'}.${r.revision}</div>
-              <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${r.itemCount} item${r.itemCount!==1?'s':''} · ${new Date(r.savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(r.savedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
+              <div style="font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--mahogany)">${v.letter||doc.version||'A'}.${v.revision}</div>
+              <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${itemCount} item${itemCount!==1?'s':''} · ${new Date(v.created).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(v.created).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
             </div>
             <button class="btn btn-ghost btn-sm" onclick="viewDocRevision(${actualIdx})" style="font-size:9px;padding:2px 8px">View</button>
           </div>`;
@@ -21535,42 +21649,54 @@ function uploadDocItemImage(idx, input) {
   input.value = '';
 }
 
+// Snapshot current doc working state into a new versions[] row + flip
+// currentVersionId. Called from saveCurrentDoc and the export-list save.
+// The data jsonb mirrors the in-memory top-level fields the editor reads.
+function pushDocVersion(doc) {
+  if (!doc.versions) doc.versions = [];
+  const lastRev = doc.versions.length ? doc.versions[doc.versions.length - 1].revision : 0;
+  const v = {
+    id: uid(),
+    letter: doc.version || 'A',
+    revision: lastRev + 1,
+    data: {
+      items: doc.items || [],
+      rooms: doc.rooms || [],
+      notes: doc.notes || '',
+      date: doc.date || '',
+      exportConfig: doc.exportConfig || null,
+      title: doc.title || '',
+    },
+    files: [],
+    created: new Date().toISOString(),
+  };
+  doc.versions.push(v);
+  doc.currentVersionId = v.id;
+  doc.revision = v.revision + 1;
+  doc.updated = v.created;
+  return v;
+}
+
 function saveCurrentDoc() {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
-  if (!doc.revisionHistory) doc.revisionHistory = [];
+  if (!doc.versions) doc.versions = [];
 
-  // Check if anything actually changed since last save
-  const currentSnapshot = JSON.stringify(doc.items);
-  const lastSnapshot = doc.revisionHistory.length
-    ? JSON.stringify(doc.revisionHistory[doc.revisionHistory.length - 1].snapshot)
-    : JSON.stringify([]);
-  const notesChanged = (doc._lastSavedNotes || '') !== (doc.notes || '');
-  const titleChanged = (doc._lastSavedTitle || '') !== (doc.title || '');
+  const last = doc.versions[doc.versions.length - 1];
+  const currentItems = JSON.stringify(doc.items || []);
+  const lastItems = last ? JSON.stringify(last.data?.items || []) : JSON.stringify([]);
+  const notesChanged = last ? (last.data?.notes || '') !== (doc.notes || '') : !!(doc.notes || '');
+  const titleChanged = last ? (last.data?.title || '') !== (doc.title || '') : !!(doc.title || '');
 
-  if (currentSnapshot === lastSnapshot && !notesChanged && !titleChanged) {
+  if (last && currentItems === lastItems && !notesChanged && !titleChanged) {
     toast('No changes to save.');
     return;
   }
 
-  // Snapshot current state as this revision
-  doc.revisionHistory.push({
-    revision: (doc.revision || 1),
-    savedAt: new Date().toISOString(),
-    itemCount: doc.items.length,
-    title: doc.title,
-    notes: doc.notes || '',
-    snapshot: JSON.parse(currentSnapshot),
-  });
-
-  // Bump revision
-  doc.revision = (doc.revision || 1) + 1;
-  doc._lastSavedNotes = doc.notes || '';
-  doc._lastSavedTitle = doc.title || '';
-  doc.updated = new Date().toISOString();
+  pushDocVersion(doc);
   save();
   renderDocEditor();
-  toast('Saved as Version ' + (doc.version||'A') + '.' + doc.revision);
+  toast('Saved as Version ' + (doc.version||'A') + '.' + (doc.revision - 1));
 }
 
 async function viewCurrentDoc(docId) {
@@ -21590,8 +21716,15 @@ async function resolveStudioLogoUrl() {
 async function viewDocRevision(revIdx) {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
-  const rev = doc.revisionHistory[revIdx];
-  if (!rev) return;
+  const ver = (doc.versions || [])[revIdx];
+  if (!ver) return;
+  const rev = {
+    revision: ver.revision,
+    savedAt: ver.created,
+    title: ver.data?.title || doc.title,
+    notes: ver.data?.notes || '',
+    snapshot: ver.data?.items || [],
+  };
 
   const proj = S.projects.find(p => p.id === doc.projectId);
   const client = (S.clients||[]).find(c => c.id === proj?.clientId);
@@ -26975,6 +27108,13 @@ async function init() {
 
   // Always init timer (resumes if one was running before page reload)
   initTimer();
+
+  // Recovered docs from localStorage need to be pushed to Supabase. save()
+  // writes localStorage and schedules a debounced sync.
+  if (S._docRecoveryDirty) {
+    delete S._docRecoveryDirty;
+    if (typeof save === 'function') save();
+  }
 }
 
 // init() is called from afterSignIn() once auth + studio are ready (Phase B).
