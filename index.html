@@ -21235,6 +21235,61 @@ function openDocEditor(docId) {
   renderDocEditor();
 }
 
+// Image source resolution for doc items. Two shapes coexist:
+//   - Legacy: item.imageData = data URL string (pre Phase F, or fallback)
+//   - Phase F: item.image = { id, name, type, storagePath } in Supabase Storage
+// Helpers normalize the read paths so render code doesn't branch.
+function docItemImageRef(item) {
+  if (item?.image?.storagePath) return { kind: 'storage', path: item.image.storagePath };
+  if (item?.imageData) return { kind: 'data', data: item.imageData };
+  return null;
+}
+
+function docItemHasImage(item) {
+  return !!docItemImageRef(item);
+}
+
+// Resolve to a renderable URL (signed URL for storage, data URL for legacy).
+async function resolveDocItemImageUrl(item) {
+  const ref = docItemImageRef(item);
+  if (!ref) return null;
+  if (ref.kind === 'data') return ref.data;
+  try { return await getFileSignedUrl(ref.path); }
+  catch (e) { console.warn('[doc image] signed URL failed:', ref.path, e); return null; }
+}
+
+// Inline editor markup for the image slot. Storage-backed images render an
+// <img> with data-path, hydrated by hydrateDocLazyImages after render.
+function docItemImageInlineMarkup(item) {
+  const ref = docItemImageRef(item);
+  if (!ref) return '';
+  if (ref.kind === 'data') {
+    return `background:url('${ref.data}') center/cover`;
+  }
+  // Storage path — return empty background; <img> overlay handles the visual.
+  return '';
+}
+
+function docItemImageOverlayMarkup(item) {
+  const ref = docItemImageRef(item);
+  if (!ref || ref.kind === 'data') return '';
+  return `<img class="lazy-doc-img" data-path="${escH(ref.path)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:var(--rs);position:absolute;inset:0">`;
+}
+
+// Walk the editor body and resolve any pending storage-path images.
+function hydrateDocLazyImages(root) {
+  const scope = root || document;
+  scope.querySelectorAll('.lazy-doc-img[data-path]').forEach(async img => {
+    if (img.src) return;
+    const path = img.dataset.path;
+    if (!path) return;
+    try {
+      const url = await getFileSignedUrl(path);
+      if (url) img.src = url;
+    } catch (_e) {}
+  });
+}
+
 function renderDocEditor() {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
@@ -21281,6 +21336,7 @@ function renderDocEditor() {
 
   html += '</div>';
   $c('doce-body').innerHTML = html;
+  hydrateDocLazyImages($c('doce-body'));
 }
 
 // ── SWATCH SCHEDULE EDITOR (material, furniture, tile, lighting, hardware) ──
@@ -21325,11 +21381,14 @@ function renderSwatchScheduleEditor(doc, proj, rooms) {
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">`;
     roomItems.forEach(item => {
       const gi = doc.items.indexOf(item);
+      const _hasImg = docItemHasImage(item);
+      const _bg = docItemImageInlineMarkup(item) || 'background:rgba(var(--text-rgb),0.06)';
       html += `<div style="border:1px solid var(--border);border-radius:var(--rs);padding:10px;position:relative">
-        <div style="width:100%;aspect-ratio:1;background:${item.imageData?'url('+item.imageData+') center/cover':'rgba(var(--text-rgb),0.06)'};border-radius:var(--rs);margin-bottom:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">
-          ${!item.imageData?'<label style="cursor:pointer;font-size:10px;color:var(--text-light);font-family:var(--font-b);text-align:center">+ Upload<br>Image<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage('+gi+',this)"></label>':''}
+        <div style="width:100%;aspect-ratio:1;${_bg};border-radius:var(--rs);margin-bottom:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative">
+          ${docItemImageOverlayMarkup(item)}
+          ${!_hasImg?'<label style="cursor:pointer;font-size:10px;color:var(--text-light);font-family:var(--font-b);text-align:center">+ Upload<br>Image<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage('+gi+',this)"></label>':''}
         </div>
-        ${item.imageData?`<div style="display:flex;gap:4px;margin-bottom:6px">
+        ${_hasImg?`<div style="display:flex;gap:4px;margin-bottom:6px">
           <select class="fi fsel" style="font-size:9px;padding:2px 4px;flex:1" onchange="updateDocItem(${gi},'imageType',this.value)">
             <option value="material" ${item.imageType==='material'||!item.imageType?'selected':''}>Material</option>
             <option value="detail" ${item.imageType==='detail'?'selected':''}>Detail</option>
@@ -21671,6 +21730,17 @@ function addDocRoom() {
   renderDocEditor();
 }
 
+// Build a doc-item .image record from a proposal-item file, preferring
+// Phase F storagePath over a legacy data URL. Returns null when neither
+// is present.
+function _docImageFromProposalFile(f) {
+  if (!f) return null;
+  if (f.storagePath) {
+    return { id: f.id, name: f.name, type: f.type, storagePath: f.storagePath };
+  }
+  return null;
+}
+
 function addProposalItemToDoc(itemId, spId) {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
@@ -21678,12 +21748,13 @@ function addProposalItemToDoc(itemId, spId) {
   const sp = prop?.spaces?.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === itemId);
   if (!item) return;
-  // Pull image from proposal item files if available
   const img = (item.files||[]).find(f => /\.(png|jpg|jpeg|gif|webp)$/i.test(f.name));
   doc.items.push({
     id: uid(), name: item.name || '', itemCode: item.itemCode || '',
     description: '', room: sp.name || 'Unassigned',
-    imageData: img?.data || null, imageType: 'material', caption: '',
+    imageData: img?.data || null,
+    image: _docImageFromProposalFile(img),
+    imageType: 'material', caption: '',
     proposalItemId: item.id, proposalCompId: null,
   });
   doc.updated = new Date().toISOString();
@@ -21706,7 +21777,9 @@ function addProposalCompToDoc(itemId, spId, compId) {
     itemCode: item.itemCode || '',
     description: '',
     room: sp.name || 'Unassigned',
-    imageData: img?.data || null, imageType: 'material', caption: '',
+    imageData: img?.data || null,
+    image: _docImageFromProposalFile(img),
+    imageType: 'material', caption: '',
     proposalItemId: item.id, proposalCompId: comp.id,
   });
   doc.updated = new Date().toISOString();
@@ -21714,16 +21787,42 @@ function addProposalCompToDoc(itemId, spId, compId) {
   renderDocEditor();
 }
 
-function uploadDocItemImage(idx, input) {
+async function uploadDocItemImage(idx, input) {
   const file = input.files[0];
   if (!file) return;
+  input.value = '';
+  // Prefer Supabase Storage when signed in — matches Phase F file pattern
+  // and survives across devices. Fall back to a base64 data URL if uploadFile
+  // isn't available or the user is offline / unauthenticated.
+  if (AUTH?.ready && AUTH?.studio && typeof uploadFile === 'function') {
+    try {
+      const docId = _currentDocId;
+      const doc = (S.documents||[]).find(d => d.id === docId);
+      if (!doc) return;
+      const item = doc.items?.[idx];
+      if (!item) return;
+      const record = await uploadFile(file, 'doc-item', docId);
+      // Drop any prior storage file for this slot to avoid orphans.
+      const oldPath = item.image?.storagePath;
+      item.image = { id: record.id, name: record.name, type: record.type, storagePath: record.storagePath };
+      item.imageData = null;
+      if (oldPath && oldPath !== record.storagePath && typeof deleteStoredFile === 'function') {
+        deleteStoredFile(oldPath);
+      }
+      save();
+      renderDocEditor();
+      return;
+    } catch (e) {
+      console.warn('[doc image] storage upload failed, falling back to data URL:', e);
+      toast('Storage upload failed, saved inline.');
+    }
+  }
   const reader = new FileReader();
   reader.onload = e => {
     updateDocItem(idx, 'imageData', e.target.result);
     renderDocEditor();
   };
   reader.readAsDataURL(file);
-  input.value = '';
 }
 
 // Snapshot current doc working state into a new versions[] row + flip
@@ -21783,6 +21882,27 @@ async function viewCurrentDoc(docId) {
   _currentDocId = prev;
 }
 
+// Pre-resolve every doc item's image into a Map<itemId, dataUrlOrSignedUrl>
+// before writing a popup HTML string. Storage-backed images are fetched as
+// blobs and converted to data URLs so the popup window doesn't need cookies
+// to read the signed URL (signed URLs work too, but data URLs survive print
+// dialogs reliably across browsers).
+async function _preResolveDocImages(items) {
+  const out = new Map();
+  await Promise.all((items || []).map(async it => {
+    const ref = docItemImageRef(it);
+    if (!ref) return;
+    if (ref.kind === 'data') { out.set(it.id, ref.data); return; }
+    try {
+      const url = await getFileSignedUrl(ref.path);
+      // Embed signed URL — popup will fetch directly. Data URL conversion
+      // is overkill here and slows print preview for image-heavy schedules.
+      out.set(it.id, url);
+    } catch (e) { console.warn('[doc print] image resolve failed:', ref.path, e); }
+  }));
+  return out;
+}
+
 async function resolveStudioLogoUrl() {
   const studio = getStudio();
   if (!studio?.logo?.storagePath) return '';
@@ -21807,6 +21927,7 @@ async function viewDocRevision(revIdx) {
   const client = (S.clients||[]).find(c => c.id === proj?.clientId);
   const isPaint = doc.templateId === 'paint_paper_schedule';
   const logoUrl = await resolveStudioLogoUrl();
+  const imgUrls = await _preResolveDocImages(rev.snapshot);
 
   const w = window.open('','_blank','width=900,height=800');
   let rooms = [...new Set(rev.snapshot.map(i => i.room || 'Unassigned'))];
@@ -21827,11 +21948,14 @@ async function viewDocRevision(revIdx) {
         </tr>`).join('')}</tbody></table></div>`;
     } else {
       itemsHtml += `<div class="room-section"><div class="room-title">${escH(room)}</div>
-        <div class="swatch-grid">${items.map(item => `<div class="swatch-card">
-          ${item.imageData ? '<div class="swatch-img"><img src="'+item.imageData+'" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>' : '<div class="swatch-img empty"></div>'}
+        <div class="swatch-grid">${items.map(item => {
+          const url = imgUrls.get(item.id);
+          return `<div class="swatch-card">
+          ${url ? '<div class="swatch-img"><img src="'+url+'" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>' : '<div class="swatch-img empty"></div>'}
           <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
           ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
-        </div>`).join('')}</div></div>`;
+        </div>`;
+        }).join('')}</div></div>`;
     }
   });
 
@@ -21892,6 +22016,7 @@ async function printCurrentDoc() {
   const proj = S.projects.find(p => p.id === doc.projectId);
   const client = (S.clients||[]).find(c => c.id === proj?.clientId);
   const logoUrl = await resolveStudioLogoUrl();
+  const imgUrls = await _preResolveDocImages(doc.items || []);
 
   const rooms = [...new Set(doc.items.map(i => i.room || 'Unassigned'))];
   const isPaint = doc.templateId === 'paint_paper_schedule';
@@ -21923,13 +22048,16 @@ async function printCurrentDoc() {
       itemsHtml += `<div class="room-section">
         <div class="room-title">${escH(room)}</div>
         <div class="swatch-grid">
-          ${items.map(item => `<div class="swatch-card">
-            ${item.imageData ? `<div class="swatch-img"><img src="${item.imageData}" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>` : '<div class="swatch-img empty"></div>'}
+          ${items.map(item => {
+            const url = imgUrls.get(item.id);
+            return `<div class="swatch-card">
+            ${url ? `<div class="swatch-img"><img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:4px"></div>` : '<div class="swatch-img empty"></div>'}
             <div class="swatch-name">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
             ${item.description ? '<div class="swatch-desc">'+escH(item.description)+'</div>' : ''}
             ${item.caption ? '<div class="swatch-caption">'+escH(item.caption)+'</div>' : ''}
             ${item.imageType && item.imageType !== 'material' ? '<div class="swatch-type">'+escH(item.imageType === 'detail' ? 'Detail' : 'Reference')+'</div>' : ''}
-          </div>`).join('')}
+          </div>`;
+          }).join('')}
         </div>
       </div>`;
     }
