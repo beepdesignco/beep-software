@@ -3735,7 +3735,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div class="fg" style="flex:1">
         <label class="fl">Invoice Type</label>
-        <select class="fi fsel" id="inv-type" onchange="if(this.value==='monthly')autoSetDueDate($c('inv-sent-date').value)">
+        <select class="fi fsel" id="inv-type" onchange="onInvTypeChangeInModal(this.value)">
           <option value="phased">Phased Invoice</option>
           <option value="monthly">Monthly Charges</option>
           <option value="standalone">Standalone</option>
@@ -22238,6 +22238,42 @@ function getNextInvoiceNumber() {
   return 'BE-' + (max + 1);
 }
 
+// Total billable+unbilled hours for a project. Used by the New Invoice
+// project picker to surface projects that have time waiting to be billed
+// (especially relevant on Monthly type so they don't get missed).
+function unbilledHoursForProject(projectId) {
+  if (!projectId) return 0;
+  return (S.timeEntries || [])
+    .filter(e => e.projectId === projectId
+      && e.billable !== false
+      && e.status !== 'billed'
+      && (Number(e.durationSeconds) || 0) > 0)
+    .reduce((sum, e) => sum + ((Number(e.durationSeconds) || 0) / 3600), 0);
+}
+
+// Build the New-Invoice project <select> options. When invType==='monthly',
+// projects with unbilled time float to the top (descending by hours);
+// otherwise plain alphabetical. The unbilled-hours badge appears regardless.
+function _buildInvoiceProjectOptions(invType) {
+  const projs = (S.projects || []).map(p => ({
+    p,
+    unbilled: unbilledHoursForProject(p.id),
+  }));
+  if (invType === 'monthly') {
+    projs.sort((a, b) => {
+      if ((b.unbilled > 0) !== (a.unbilled > 0)) return b.unbilled - a.unbilled;
+      if (a.unbilled !== b.unbilled) return b.unbilled - a.unbilled;
+      return (a.p.name || '').localeCompare(b.p.name || '');
+    });
+  } else {
+    projs.sort((a, b) => (a.p.name || '').localeCompare(b.p.name || ''));
+  }
+  return '<option value="">— Select project —</option>' + projs.map(({p, unbilled}) => {
+    const badge = unbilled > 0 ? `  ·  ${unbilled.toFixed(1)} hr unbilled` : '';
+    return `<option value="${p.id}">${escH(p.name)}${badge}</option>`;
+  }).join('');
+}
+
 function openNewInvoiceModal() {
   $c('inv-modal-title').textContent = 'New Invoice';
   $c('inv-id').value = '';
@@ -22254,8 +22290,7 @@ function openNewInvoiceModal() {
   _invSelectedComponents = new Map();
   _invExpandedItems = new Set();
 
-  $c('inv-project').innerHTML = '<option value="">— Select project —</option>' +
-    S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  $c('inv-project').innerHTML = _buildInvoiceProjectOptions($c('inv-type').value);
   $c('inv-client').innerHTML = '<option value="">— No client —</option>' +
     (S.clients||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(c =>
       `<option value="${c.id}">${escH(c.name)}</option>`).join('');
@@ -22267,6 +22302,19 @@ function onInvTypeChange() {
   // Used by builder view
   const picker = $c('inv-proposal-picker');
   if (picker) picker.style.display = ($c('inv-type')?.value === 'phased') ? '' : 'none';
+}
+
+// New Invoice modal type change. Re-orders the project select so projects
+// with unbilled time float to the top under Monthly Charges, and (preserved
+// from prior behavior) auto-sets the due date when type flips to monthly.
+function onInvTypeChangeInModal(value) {
+  const sel = $c('inv-project');
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = _buildInvoiceProjectOptions(value);
+    if (prev) sel.value = prev;
+  }
+  if (value === 'monthly') autoSetDueDate($c('inv-sent-date').value);
 }
 
 function onInvProjectChange() {
