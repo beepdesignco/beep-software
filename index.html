@@ -13655,7 +13655,7 @@ function renderTotals(prop, pid) {
 
   const allow = calcProposalAllowanceTotal(prop, pid);
   const allowRow = allow.count > 0
-    ? `<tr style="color:var(--text-light);font-style:italic"><td>Allowances <span style="font-style:normal;font-size:10px;text-transform:uppercase;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;color:var(--text-light);margin-left:6px">informational · ${allow.count} item${allow.count!==1?'s':''}</span></td><td id="t-allow">${fmt(allow.total)}</td></tr>`
+    ? `<tr style="color:var(--text-light);font-style:italic"><td>Allowances</td><td id="t-allow">${fmt(allow.total)}</td></tr>`
     : '';
 
   return `
