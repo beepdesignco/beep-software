@@ -8658,14 +8658,20 @@ function renderPDOverview(proj, pid) {
     html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:14px 0">Add info in the Address Book tab to see it here.</div>';
   }
 
-  // ── Project Notes
-  const notesVal = proj.settings?.notes || '';
+  // ── Project Notes (chat-style log: who, when, what)
+  const notes = getProjectNotesList(proj);
   html += `
   <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-top:18px">
-    <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:8px">Project Notes</div>
-    <textarea class="fi" style="resize:vertical;min-height:60px;font-size:12px;width:100%;font-family:var(--font-b);padding:8px 10px"
-      placeholder="Anything to remember about this project — paint codes, ideas, blockers…"
-      onchange="saveProjectNotes('${pid}', this.value)">${escH(notesVal)}</textarea>
+    <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Project Notes</div>
+    <div style="max-height:360px;overflow-y:auto;margin-bottom:10px">
+      ${notes.length ? notes.map(n => _renderProjNote(pid, n)).join('') : '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No notes yet — add the first one below.</div>'}
+    </div>
+    <div style="display:flex;gap:6px;align-items:flex-end;border-top:1px solid var(--border);padding-top:10px">
+      <textarea class="fi" id="proj-note-input-${pid}" placeholder="Add a note… (Enter to post, Shift+Enter for new line)"
+        style="flex:1;resize:vertical;min-height:36px;font-size:12px;font-family:var(--font-b);padding:6px 10px"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();addProjectNote('${pid}');}"></textarea>
+      <button class="btn btn-primary btn-sm" onclick="addProjectNote('${pid}')" style="font-size:11px;padding:6px 14px">Post</button>
+    </div>
   </div>`;
 
   // ── Additional contacts (housekeepers, pets, etc.)
@@ -8701,6 +8707,157 @@ function renderPDOverview(proj, pid) {
 }
 
 // ─── Project Overview: notes + additional contacts (stored in proj.settings) ──
+// Notes are a chat-style log: array of entries with {id, ts, author, text,
+// editedTs}. Legacy projects where notes was a single string are shown as a
+// pinned legacy entry until the user posts something new (which migrates).
+
+let _editingProjNoteId = null;
+
+function getProjectNotesList(p) {
+  const raw = p?.settings?.notes;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    return [{ id: 'legacy', ts: null, author: '', text: raw, _legacy: true }];
+  }
+  return [];
+}
+
+function _migrateLegacyProjectNotes(p) {
+  p.settings = p.settings || {};
+  if (typeof p.settings.notes === 'string' && p.settings.notes.trim()) {
+    p.settings.notes = [{
+      id: uid(),
+      ts: new Date().toISOString(),
+      author: 'Imported',
+      text: p.settings.notes.trim(),
+    }];
+  } else if (!Array.isArray(p.settings.notes)) {
+    p.settings.notes = [];
+  }
+}
+
+function _renderProjNote(pid, n) {
+  const isEditing = _editingProjNoteId === n.id;
+  const ts = n.ts ? new Date(n.ts) : null;
+  const tsStr = ts
+    ? ts.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' · ' +
+      ts.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'})
+    : (n._legacy ? 'Legacy note' : '');
+  const editedStr = n.editedTs ? ' · edited ' + new Date(n.editedTs).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : '';
+
+  if (isEditing) {
+    return `
+    <div style="background:rgba(var(--text-rgb),0.04);border:1px solid var(--russet);border-radius:var(--r);padding:8px 12px;margin-bottom:6px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">${escH(n.author || 'Unknown')}</div>
+        <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${escH(tsStr)}${editedStr}</div>
+      </div>
+      <textarea class="fi" id="proj-note-edit-${n.id}" style="resize:vertical;min-height:40px;font-size:12px;width:100%;font-family:var(--font-b);padding:6px 10px"
+        onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();saveProjectNoteEdit('${pid}','${n.id}');}else if(event.key==='Escape'){event.preventDefault();cancelProjectNoteEdit();}">${escH(n.text || '')}</textarea>
+      <div style="margin-top:6px;display:flex;gap:6px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="cancelProjectNoteEdit()" style="font-size:10px;padding:4px 10px">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="saveProjectNoteEdit('${pid}','${n.id}')" style="font-size:10px;padding:4px 10px">Save</button>
+      </div>
+    </div>`;
+  }
+
+  const authorLabel = n.author || (n._legacy ? '—' : 'Unknown');
+  const editActions = n._legacy ? '' : `
+    <button onclick="editProjectNoteStart('${pid}','${n.id}')" style="background:transparent;border:none;cursor:pointer;font-size:9px;color:var(--text-light);font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 4px">Edit</button>
+    <button onclick="deleteProjectNote('${pid}','${n.id}')" style="background:transparent;border:none;cursor:pointer;font-size:9px;color:#b33;font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 4px">Delete</button>`;
+
+  return `
+  <div style="background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">${escH(authorLabel)}</div>
+      <div style="font-size:9px;color:var(--text-light);font-family:var(--font-b)">${escH(tsStr)}${editedStr}</div>
+    </div>
+    <div style="font-size:12px;color:var(--text-dark);font-family:var(--font-b);white-space:pre-wrap;line-height:1.5">${escH(n.text || '')}</div>
+    <div style="margin-top:4px;display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="copyProjectNote('${pid}','${n.id}')" style="background:transparent;border:none;cursor:pointer;font-size:9px;color:var(--text-light);font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 4px">Copy</button>
+      ${editActions}
+    </div>
+  </div>`;
+}
+
+function addProjectNote(pid) {
+  const input = $c('proj-note-input-' + pid);
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  const p = (S.projects||[]).find(x => x.id === pid);
+  if (!p) return;
+  _migrateLegacyProjectNotes(p);
+  p.settings.notes.push({
+    id: uid(),
+    ts: new Date().toISOString(),
+    author: AUTH.member?.display_name || AUTH.user?.email?.split('@')[0] || 'You',
+    text,
+  });
+  save();
+  input.value = '';
+  renderProjectDetail();
+}
+
+function editProjectNoteStart(pid, noteId) {
+  _editingProjNoteId = noteId;
+  renderProjectDetail();
+  setTimeout(() => {
+    const ta = $c('proj-note-edit-' + noteId);
+    if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  }, 50);
+}
+
+function saveProjectNoteEdit(pid, noteId) {
+  const ta = $c('proj-note-edit-' + noteId);
+  if (!ta) return;
+  const newText = ta.value.trim();
+  const p = (S.projects||[]).find(x => x.id === pid);
+  if (!p) return;
+  _migrateLegacyProjectNotes(p);
+  if (!newText) {
+    if (!confirm('Delete this note?')) return;
+    p.settings.notes = p.settings.notes.filter(x => x.id !== noteId);
+  } else {
+    const n = p.settings.notes.find(x => x.id === noteId);
+    if (n) { n.text = newText; n.editedTs = new Date().toISOString(); }
+  }
+  _editingProjNoteId = null;
+  save();
+  renderProjectDetail();
+}
+
+function cancelProjectNoteEdit() {
+  _editingProjNoteId = null;
+  renderProjectDetail();
+}
+
+function deleteProjectNote(pid, noteId) {
+  if (!confirm('Delete this note?')) return;
+  const p = (S.projects||[]).find(x => x.id === pid);
+  if (!p) return;
+  _migrateLegacyProjectNotes(p);
+  p.settings.notes = p.settings.notes.filter(x => x.id !== noteId);
+  save();
+  renderProjectDetail();
+}
+
+function copyProjectNote(pid, noteId) {
+  const p = (S.projects||[]).find(x => x.id === pid);
+  if (!p) return;
+  let text = '';
+  if (Array.isArray(p.settings?.notes)) {
+    const n = p.settings.notes.find(x => x.id === noteId);
+    text = n?.text || '';
+  } else if (typeof p.settings?.notes === 'string') {
+    text = p.settings.notes;
+  }
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => toast('Note copied.'), () => toast('Copy failed.'));
+}
+
+// Legacy single-field setter; preserved for safety, no longer wired to UI.
 function saveProjectNotes(pid, val) {
   const p = (S.projects||[]).find(x => x.id === pid);
   if (!p) return;
@@ -14663,7 +14820,7 @@ function renderModalComponents() {
       .map(t => `<option value="${t.id}" ${c.itemTypeId === t.id ? 'selected' : ''}>${escH(t.name)}</option>`)
       .join('');
     return `
-    <div class="person-entry" style="margin-bottom:6px" data-cidx="${i}" data-cid="${c.id}">
+    <div class="person-entry" style="margin-bottom:16px;border:2px solid rgba(var(--text-rgb),0.18)" data-cidx="${i}" data-cid="${c.id}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <span class="person-entry-lbl">Component ${i + 1}</span>
         <button type="button" class="remove-poc-btn" onclick="removeModalComponent(${i})">Remove</button>
@@ -15800,18 +15957,194 @@ function setPropFilter(filter) {
   else if (S.currentPropProject) renderPropBody();
 }
 
-// Expand every <details> element before printing, then restore. Without this,
-// collapsed sections print as just their summary, which is what made the
-// Print/Export button look like it was only printing "what's visible".
+// Opens a new window with a clean document-style layout of the full proposal
+// (mirrors the printEstimate template — same typography + table structure).
+// Avoids printing the live web view, which captures UI chrome / scroll state.
 function printProposal() {
-  const closed = [];
-  document.querySelectorAll('details:not([open])').forEach(d => { closed.push(d); d.open = true; });
-  // Defer so the layout reflows before the print dialog opens.
-  setTimeout(() => {
-    window.print();
-    // Restore after the print dialog returns (sync; works in all browsers).
-    closed.forEach(d => { d.open = false; });
-  }, 50);
+  const pid = S._detailProjectId || S.currentPropProject;
+  if (!pid) { toast('No proposal open.'); return; }
+  printProposalAsDocument(pid);
+}
+
+function printProposalAsDocument(pid) {
+  const proj = S.projects.find(p => p.id === pid);
+  const prop = S.proposals?.[pid];
+  if (!proj || !prop) { toast('Proposal not found.'); return; }
+  const clientName = (typeof getClientName === 'function' ? getClientName(proj.clientId) : '') || '';
+  const location = [proj.street, proj.city, proj.zip].filter(Boolean).join(', ') || proj.city || '';
+  const totals = (typeof calcProposalTotals === 'function')
+    ? calcProposalTotals(prop, pid)
+    : { subtotal:0, freight:0, adjacentCharges:0, tax:0, total:0 };
+  const dateStr = new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+
+  // Build item rows space-by-space — same structure as printEstimate so the
+  // two output formats stay visually consistent.
+  let itemsHtml = '';
+  (prop.spaces || []).forEach(sp => {
+    const spaceItems = (sp.items || []).filter(it =>
+      _propFilter === 'allowances' ? it.allowance : true
+    );
+    if (!spaceItems.length) return;
+    itemsHtml += `<tr class="space-row"><td colspan="4">${escH(sp.name||'Unnamed Space')}</td></tr>`;
+    spaceItems.forEach(item => {
+      const client = (typeof getItemClient === 'function' ? getItemClient(item, pid) : parse$(item.netPrice));
+      const qty = parseFloat(item.qty) || 1;
+      const isAllowance = !!item.allowance;
+      const qtyDisplay = item.type === 'constructed'
+        ? (qty > 1 ? qty + ' <span class="qty-note">(total)</span>' : (qty === 1 ? '1' : '—'))
+        : (qty ? qty + (item.qtyUnit ? ' '+escH(item.qtyUnit) : '') : '—');
+      const total = item.type === 'constructed' ? client : client * qty;
+      const badge = isAllowance ? '<span class="allow-badge">Allowance</span>' : '';
+      const typeLabels = { constructed:'Constructed', readymade:'Ready Made', openline:'Open Line' };
+      const itemTypeLabel = typeLabels[item.type] || '';
+      const notesHtml = item.notes ? '<div class="item-notes">'+escH(item.notes)+'</div>' : '';
+
+      itemsHtml += `<tr class="item-row${isAllowance?' allowance':''}">
+        <td class="item-name">
+          <div class="item-title">${escH(item.name||'—')} ${badge}</div>
+          ${itemTypeLabel ? '<div class="item-meta">'+itemTypeLabel+'</div>' : ''}
+          ${notesHtml}
+        </td>
+        <td class="qty-col">${qtyDisplay}</td>
+        <td class="price-col">${client>0?fmt(client):'—'}</td>
+        <td class="amt-col">${total>0?fmt(total):'—'}</td>
+      </tr>`;
+
+      if (!isAllowance && item.type === 'constructed' && item.components?.length) {
+        item.components.forEach(c => {
+          const cQty = parseFloat(c.qty) || 1;
+          const cNet = parse$(c.netCost) * cQty;
+          const cMarkup = (typeof componentEffectiveMarkup === 'function' ? componentEffectiveMarkup(c, item, pid) : 25) / 100;
+          const cClient = cNet * (1 + cMarkup);
+          const cTypeLabel = (typeof COMPONENT_TYPES !== 'undefined' ? COMPONENT_TYPES.find(t => t.id === c.componentType)?.label : '') || '';
+          const cAllow = !!c.allowance;
+          itemsHtml += `<tr class="comp-row${cAllow?' allowance':''}">
+            <td class="comp-name">
+              <span class="comp-dash">—</span>
+              ${escH(c.name||'')}
+              ${cTypeLabel ? '<span class="type-tag">'+escH(cTypeLabel)+'</span>' : ''}
+              ${cAllow ? '<span class="allow-badge-sm">Allowance</span>' : ''}
+            </td>
+            <td class="qty-col comp">${cQty}${c.qtyUnit?' '+escH(c.qtyUnit):''}</td>
+            <td class="price-col comp">${cClient>0?fmt(cClient):'—'}</td>
+            <td class="amt-col comp"></td>
+          </tr>`;
+        });
+      }
+      if (!isAllowance && item.type === 'readymade' && item.additionalCharges?.length) {
+        item.additionalCharges.forEach(ch => {
+          const fakeItem = { billCostOnly: ch.billCostOnly || item.billCostOnly, adjustMarkup: ch.adjustMarkup != null ? ch.adjustMarkup : item.adjustMarkup };
+          const chClient = typeof calcClientPrice === 'function' ? calcClientPrice(ch.amount, fakeItem, pid) : parse$(ch.amount);
+          itemsHtml += `<tr class="comp-row">
+            <td class="comp-name">
+              <span class="comp-dash">—</span>
+              ${escH(ch.name||'')}
+              ${ch.category ? '<span class="type-tag">'+escH(ch.category)+'</span>' : ''}
+            </td>
+            <td class="qty-col comp"></td>
+            <td class="price-col comp">${chClient>0?fmt(chClient):'—'}</td>
+            <td class="amt-col comp"></td>
+          </tr>`;
+        });
+      }
+    });
+  });
+
+  if (!itemsHtml) {
+    itemsHtml = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#888;font-style:italic">No items to print' + (_propFilter==='allowances'?' (filter is set to Allowances)':'') + '.</td></tr>';
+  }
+
+  const studioName = AUTH.studio?.name || 'Studio';
+  const titleSuffix = _propFilter === 'allowances' ? ' — Allowances' : '';
+
+  const w = window.open('', '_blank', 'width=900,height=1000');
+  const h = `<!DOCTYPE html><html><head><title>${escH(proj.name)} — Proposal${titleSuffix}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --pecan:#5B2D22; --mahogany:#3F151C; --russet:#963D27; --cloud:#F3E8D6;
+      --text-dark:#2A1008; --text-mid:#7A4535; --text-light:#A89682;
+      --border:rgba(63,21,28,0.14); --bg-rgb:243,232,214; --text-rgb:42,16,8;
+      --font-h:'Barlow Condensed',sans-serif; --font-b:'Courier Prime',monospace;
+    }
+    * { box-sizing:border-box; }
+    body { font-family:var(--font-b); padding:42px 48px; color:var(--text-dark); max-width:820px; margin:0 auto; background:#fff; line-height:1.45; }
+    .doc-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:26px; padding-bottom:18px; border-bottom:2px solid var(--pecan); }
+    .doc-title { font-family:var(--font-h); font-weight:900; font-size:30px; text-transform:uppercase; letter-spacing:0.04em; color:var(--mahogany); line-height:1; margin-bottom:4px; }
+    .doc-subtitle { font-family:var(--font-h); font-size:14px; color:var(--text-mid); letter-spacing:0.03em; }
+    .doc-meta { text-align:right; font-size:11px; color:var(--text-mid); line-height:1.7; }
+    .doc-meta .label { font-family:var(--font-h); font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-light); font-size:9px; }
+    .doc-meta .value { font-family:var(--font-h); font-weight:700; color:var(--mahogany); font-size:13px; }
+    .badge { display:inline-block; font-family:var(--font-h); font-weight:700; font-size:10px; letter-spacing:0.08em; text-transform:uppercase; padding:3px 10px; border-radius:12px; background:rgba(150,61,39,0.1); color:var(--russet); border:1px solid rgba(150,61,39,0.25); margin-top:4px; }
+    table.items { width:100%; border-collapse:collapse; margin-bottom:24px; }
+    table.items thead th { font-family:var(--font-h); font-weight:700; text-transform:uppercase; letter-spacing:0.08em; font-size:10px; color:var(--text-light); padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; }
+    table.items thead th.r { text-align:right; }
+    .space-row td { font-family:var(--font-h); font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--pecan); background:rgba(243,232,214,0.55); padding:10px 12px; border-bottom:1px solid var(--border); border-top:1px solid var(--border); }
+    .item-row td { padding:10px 10px; border-bottom:1px solid var(--border); font-size:12px; vertical-align:top; page-break-inside:avoid; }
+    .item-row.allowance td { background:rgba(150,61,39,0.04); }
+    .item-title { font-family:var(--font-h); font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:0.03em; color:var(--mahogany); }
+    .item-meta { font-size:11px; color:var(--text-mid); margin-top:2px; }
+    .item-notes { font-size:11px; color:var(--text-mid); font-style:italic; margin-top:4px; padding-left:2px; white-space:pre-wrap; }
+    .allow-badge { display:inline-block; font-family:var(--font-h); font-weight:700; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; padding:2px 8px; border-radius:10px; background:rgba(150,61,39,0.12); color:var(--russet); margin-left:6px; }
+    .allow-badge-sm { font-size:8px; padding:1px 6px; margin-left:4px; background:rgba(150,61,39,0.1); color:var(--russet); border-radius:8px; font-family:var(--font-h); font-weight:700; letter-spacing:0.06em; text-transform:uppercase; }
+    .type-tag { font-size:8.5px; font-family:var(--font-h); font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-light); margin-left:6px; padding:1px 6px; background:rgba(42,16,8,0.05); border-radius:8px; }
+    .comp-row td { padding:4px 10px; font-size:11px; border-bottom:1px solid rgba(42,16,8,0.06); background:rgba(243,232,214,0.25); page-break-inside:avoid; }
+    .comp-row.allowance td { background:rgba(150,61,39,0.03); }
+    .comp-name { padding-left:24px; color:var(--text-dark); }
+    .comp-dash { color:var(--text-light); margin-right:6px; }
+    .qty-col, .price-col, .amt-col { text-align:right; white-space:nowrap; }
+    .qty-col.comp, .price-col.comp { color:var(--text-mid); font-size:10.5px; }
+    .qty-note { font-size:10px; color:var(--text-light); }
+    .amt-col { font-family:var(--font-h); font-weight:700; color:var(--pecan); }
+    table.totals { width:340px; margin-left:auto; font-size:12px; border-collapse:collapse; }
+    table.totals td { padding:6px 10px; color:var(--text-mid); }
+    table.totals td.amt { text-align:right; font-family:var(--font-h); font-weight:700; color:var(--text-dark); }
+    .subtotal-row td { border-top:1px solid var(--border); padding-top:10px; font-weight:700; }
+    .grand-total-row td { border-top:3px double var(--pecan); padding-top:14px; font-family:var(--font-h); font-weight:900; text-transform:uppercase; letter-spacing:0.05em; font-size:16px; color:var(--mahogany); }
+    .grand-total-row td.amt { color:var(--pecan); font-size:20px; }
+    .doc-footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--border); font-size:10px; color:var(--text-light); font-style:italic; }
+    @media print { body { padding:30px 40px; } @page { margin: 0.5in; } }
+  </style></head><body>
+    <div class="doc-header">
+      <div>
+        <div class="doc-title">${escH(proj.name)}</div>
+        <div class="doc-subtitle">${clientName?escH(clientName):''}${clientName&&location?' · ':''}${location?escH(location):''}</div>
+        <div class="badge">Proposal${titleSuffix}</div>
+      </div>
+      <div class="doc-meta">
+        <div><span class="label">Prepared by</span><br><span class="value">${escH(studioName)}</span></div>
+        <div style="margin-top:8px"><span class="label">Date</span><br><span class="value">${escH(dateStr)}</span></div>
+      </div>
+    </div>
+
+    <table class="items">
+      <thead>
+        <tr>
+          <th style="width:54%">Item</th>
+          <th class="r" style="width:12%">Qty</th>
+          <th class="r" style="width:14%">Unit Price</th>
+          <th class="r" style="width:20%">Total</th>
+        </tr>
+      </thead>
+      <tbody>${itemsHtml}</tbody>
+    </table>
+
+    <table class="totals">
+      <tr><td>Subtotal</td><td class="amt">${fmt(totals.subtotal)}</td></tr>
+      ${totals.freight>0 ? '<tr><td>Freight</td><td class="amt">'+fmt(totals.freight)+'</td></tr>' : ''}
+      ${totals.adjacentCharges>0 ? '<tr><td>Other Charges</td><td class="amt">'+fmt(totals.adjacentCharges)+'</td></tr>' : ''}
+      ${totals.tax>0 ? '<tr><td>Tax'+(proj.taxRate?' ('+proj.taxRate+'%)':'')+'</td><td class="amt">'+fmt(totals.tax)+'</td></tr>' : ''}
+      <tr class="grand-total-row"><td>Proposal Total</td><td class="amt">${fmt(totals.total)}</td></tr>
+    </table>
+
+    <div class="doc-footer">Prices subject to change. This proposal is not an invoice.</div>
+  </body></html>`;
+
+  w.document.write(h);
+  w.document.close();
+  setTimeout(() => w.print(), 600);
 }
 
 function toggleClientView() {
