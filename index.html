@@ -1896,6 +1896,8 @@ tr:hover .row-btns { opacity:1; }
           <div id="as-tax-states-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
           <button class="btn btn-primary btn-sm" onclick="openTaxStateEditor(null)">+ Add Tax State</button>
 
+          <div id="as-sales-tax-tracker" style="margin-top:18px;padding:12px 14px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--r);max-width:680px"></div>
+
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--mahogany);margin:28px 0 10px;border-top:1px solid var(--border);padding-top:20px">Freight &amp; associated charges</div>
           <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:10px">Categories of freight-related charges that appear on items and components. Default markup blank = use the project's markup; explicit 0 = bill at cost. Taxable means it's subject to sales tax when the project's freight tax flag is on.</div>
           <div id="as-freight-cats-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
@@ -6009,6 +6011,8 @@ async function loadFromSupabase() {
   S.vendorTypes      = Array.isArray(studioSettings.vendor_types) ? studioSettings.vendor_types : [];
   S.taxStates        = Array.isArray(studioSettings.tax_states)   ? studioSettings.tax_states   : [];
   S.taxFilings       = Array.isArray(studioSettings.tax_filings)  ? studioSettings.tax_filings  : [];
+  S.salesTaxTrackerEnabled   = !!studioSettings.sales_tax_tracker_enabled;
+  S.salesTaxTrackerStartDate = studioSettings.sales_tax_tracker_start_date || '';
   S.studio       = AUTH.studio.studio_info || {};
 
   // One-time fold of legacy S.contacts → vendors + vendor_contacts. Runs on
@@ -7385,6 +7389,8 @@ async function syncToSupabase() {
       vendor_types:  S.vendorTypes  || [],
       tax_states:    S.taxStates    || [],
       tax_filings:   S.taxFilings   || [],
+      sales_tax_tracker_enabled:    !!S.salesTaxTrackerEnabled,
+      sales_tax_tracker_start_date: S.salesTaxTrackerStartDate || '',
     };
     const currentInfo = S.studio || {};
     if (!_deepEq(currentSettings, _sbShadow.studioSettings) || !_deepEq(currentInfo, _sbShadow.studioInfo)) {
@@ -7735,6 +7741,8 @@ let S = {
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
   taxFilings: [],  // [{id, stateId, stateName, periodKey, periodLabel, filedDate, filedBy, notes}]
+  salesTaxTrackerEnabled: false,
+  salesTaxTrackerStartDate: '',
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -17881,7 +17889,7 @@ function setSettingsTab(tab) {
   if (tab === 'cards')  renderCardsList();
   if (tab === 'emails') renderEmailTemplatesList();
   if (tab === 'notes')  renderInvoiceNotesList();
-  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); renderFreightCategoriesList(); }
+  if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); renderSalesTaxTrackerToggle(); renderFreightCategoriesList(); }
   if (tab === 'reminders') renderRemindersPanel();
   if (tab === 'appearance') renderAppearanceSettings();
 }
@@ -18615,6 +18623,65 @@ function projectsUsingTaxState(name) {
 
 function fmtFreq(f) {
   return ({ 'monthly':'Monthly', 'quarterly':'Quarterly', 'bi-annually':'Bi-annually', 'annually':'Annually' })[f] || '—';
+}
+
+// ─── Sales Tax Filing Tracker toggle ─────────────────────────
+// Default OFF — owners opt in. When ON, prompts for a start date and the
+// Dashboard → Sales Tax → Outstanding Filings widget appears, enumerating
+// only periods that started on or after that date.
+
+function renderSalesTaxTrackerToggle() {
+  const host = $c('as-sales-tax-tracker');
+  if (!host) return;
+  const enabled   = !!S.salesTaxTrackerEnabled;
+  const startDate = S.salesTaxTrackerStartDate || '';
+  host.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="stt-enabled" ${enabled?'checked':''}
+          onchange="onSalesTaxTrackerToggle(this.checked)"
+          style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+        <strong style="font-family:var(--font-h);font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-size:11px;color:var(--mahogany)">Sales Tax Filing Tracker</strong>
+      </label>
+      ${enabled ? `
+        <div style="display:flex;align-items:center;gap:6px;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+          <span>Track from</span>
+          <input type="date" class="fi" id="stt-start" value="${escH(startDate)}"
+            onchange="onSalesTaxTrackerStartChange(this.value)"
+            style="font-size:11px;padding:4px 8px;max-width:160px">
+        </div>` : ''}
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:var(--text-light);font-style:italic;line-height:1.5">
+      ${enabled
+        ? 'On — Dashboard → Sales Tax shows an Outstanding Filings widget. Periods that started before ' + escH(startDate||'the start date') + ' are excluded.'
+        : 'Off — the Outstanding Filings widget on Dashboard → Sales Tax is hidden. Default off; enable for per-state per-period filed/unfiled tracking.'}
+    </div>`;
+}
+
+function onSalesTaxTrackerToggle(enabled) {
+  if (enabled) {
+    if (!S.salesTaxTrackerStartDate) {
+      const today = new Date().toISOString().slice(0, 10);
+      const ans = prompt('Track sales tax filings starting from what date? (YYYY-MM-DD)\n\nPeriods that started before this date will be ignored.', today);
+      if (ans == null) { renderSalesTaxTrackerToggle(); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ans.trim())) { toast('Invalid date — expected YYYY-MM-DD.'); renderSalesTaxTrackerToggle(); return; }
+      S.salesTaxTrackerStartDate = ans.trim();
+    }
+    S.salesTaxTrackerEnabled = true;
+  } else {
+    S.salesTaxTrackerEnabled = false;
+  }
+  save();
+  renderSalesTaxTrackerToggle();
+  if (typeof renderDashboard === 'function') renderDashboard();
+}
+
+function onSalesTaxTrackerStartChange(val) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test((val||'').trim())) return;
+  S.salesTaxTrackerStartDate = val.trim();
+  save();
+  renderSalesTaxTrackerToggle();
+  if (typeof renderDashboard === 'function') renderDashboard();
 }
 
 function renderTaxStatesList() {
@@ -26498,14 +26565,13 @@ function enumeratePeriodsForState(state, today) {
   const periods = [];
 
   if (fq === 'monthly') {
-    // 12 months back through the period currently being filed (last month).
     for (let offset = 12; offset >= 0; offset--) {
-      const periodM = new Date(t.getFullYear(), t.getMonth() - offset - 1, 1);
-      const dueDate = new Date(t.getFullYear(), t.getMonth() - offset, 20);
+      const periodStart = new Date(t.getFullYear(), t.getMonth() - offset - 1, 1);
+      const dueDate     = new Date(t.getFullYear(), t.getMonth() - offset, 20);
       periods.push({
-        periodKey:   `${periodM.getFullYear()}-${String(periodM.getMonth()+1).padStart(2,'0')}`,
-        periodLabel: periodM.toLocaleDateString('en-US', { month:'long', year:'numeric' }),
-        dueDate,
+        periodKey:   `${periodStart.getFullYear()}-${String(periodStart.getMonth()+1).padStart(2,'0')}`,
+        periodLabel: periodStart.toLocaleDateString('en-US', { month:'long', year:'numeric' }),
+        periodStart, dueDate,
       });
     }
   } else if (fq === 'quarterly') {
@@ -26520,6 +26586,7 @@ function enumeratePeriodsForState(state, today) {
       periods.push({
         periodKey:   `${qY}-Q${q + 1}`,
         periodLabel: `Q${q + 1} ${qY}`,
+        periodStart: new Date(qY, q * 3, 1),
         dueDate:     new Date(dueY, dueM, 20),
       });
     }
@@ -26534,6 +26601,7 @@ function enumeratePeriodsForState(state, today) {
       periods.push({
         periodKey:   `${hY}-H${h + 1}`,
         periodLabel: `H${h + 1} ${hY}`,
+        periodStart: new Date(hY, h === 0 ? 0 : 6, 1),
         dueDate:     new Date(dueY, dueM, 20),
       });
     }
@@ -26543,6 +26611,7 @@ function enumeratePeriodsForState(state, today) {
       periods.push({
         periodKey:   `${yY}`,
         periodLabel: `${yY}`,
+        periodStart: new Date(yY, 0, 1),
         dueDate:     new Date(yY + 1, 0, 20),
       });
     }
@@ -26556,6 +26625,11 @@ function enumeratePeriodsForState(state, today) {
     else if (p.daysFromToday <= 14) p.status = 'soon';
     else                            p.status = 'scheduled';
   });
+
+  // Honor the tracker start date — periods whose start is before the
+  // configured cutoff aren't this user's responsibility to track here.
+  const cutoff = S.salesTaxTrackerStartDate ? new Date(S.salesTaxTrackerStartDate + 'T00:00:00') : null;
+  if (cutoff) return periods.filter(p => p.periodStart && p.periodStart >= cutoff);
   return periods;
 }
 
@@ -26597,7 +26671,9 @@ function unmarkFilingFiled(filingId) {
 
 // Renders the "Upcoming Tax Filings" widget. Lists every UNFILED period
 // across configured tax states + a collapsed Filing History below.
+// Gated by the App Settings → Sales Tax Filing Tracker toggle.
 function renderUpcomingFilings() {
+  if (!S.salesTaxTrackerEnabled) return '';
   const states = (S.taxStates || []).filter(s => s.filingFrequency);
   if (!states.length) return '';
 
