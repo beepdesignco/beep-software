@@ -16039,13 +16039,20 @@ function printProposalAsDocument(pid) {
       const badge = isAllowance ? '<span class="allow-badge">Allowance</span>' : '';
       const typeLabels = { constructed:'Constructed', readymade:'Ready Made', openline:'Open Line' };
       const itemTypeLabel = typeLabels[item.type] || '';
-      // Notes excluded from the printable — typically internal-facing and
-      // commonly contain URLs the user doesn't want in a client-facing doc.
+      // Strip URLs from notes — descriptions stay, links don't belong in the
+      // client-facing document. Matches http/https/www-prefixed URLs.
+      const cleanNotes = (item.notes || '')
+        .replace(/(https?:\/\/\S+|www\.\S+)/gi, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\s*\n\s*/g, '\n')
+        .trim();
+      const notesHtml = cleanNotes ? '<div class="item-notes">'+escH(cleanNotes)+'</div>' : '';
 
       itemsHtml += `<tr class="item-row${isAllowance?' allowance':''}">
         <td class="item-name">
           <div class="item-title">${escH(item.name||'—')} ${badge}</div>
           ${itemTypeLabel ? '<div class="item-meta">'+itemTypeLabel+'</div>' : ''}
+          ${notesHtml}
         </td>
         <td class="qty-col">${qtyDisplay}</td>
         <td class="price-col">${client>0?fmt(client):'—'}</td>
