@@ -1587,7 +1587,11 @@ tr:hover .row-btns { opacity:1; }
           <div class="page-sub">Revenue, expenses, profit, outstanding, taxes</div>
         </div>
       </div>
-      <div style="padding:14px 30px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
+        <button class="view-tab active" data-dashtab="overview" onclick="setDashTab('overview')" style="margin-bottom:-1px">Overview</button>
+        <button class="view-tab" data-dashtab="tax" onclick="setDashTab('tax')" style="margin-bottom:-1px">Tax</button>
+      </div>
+      <div id="dash-filter-row" style="padding:14px 30px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
         <div style="display:flex;flex-direction:column;gap:3px">
           <label class="fl" style="font-size:9px">Date Range</label>
           <select class="fi" id="dash-range" onchange="onDashRangeChange()" style="font-size:12px;padding:6px 10px">
@@ -2586,6 +2590,29 @@ tr:hover .row-btns { opacity:1; }
     <div class="fg">
       <label class="fl">Notes</label>
       <textarea class="fi" id="vn-notes" style="resize:vertical;min-height:52px" placeholder="Payment terms, rep notes, minimums…"></textarea>
+    </div>
+    <div id="vn-creds-section" style="display:none;margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <label class="fl" style="margin:0">Vendor login <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-light);font-style:italic">· encrypted</span></label>
+        <button class="btn btn-ghost btn-sm" id="vn-creds-clear-btn" onclick="clearVendorCredentialsUI()" style="display:none;font-size:10px;color:var(--mahogany)">Clear</button>
+      </div>
+      <div id="vn-creds-loading" style="display:none;font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">Loading credentials…</div>
+      <div id="vn-creds-fields">
+        <div class="fg" style="margin-bottom:8px">
+          <input type="text" class="fi" id="vn-creds-username" placeholder="Username" autocomplete="off">
+        </div>
+        <div class="fg" style="margin-bottom:8px">
+          <div style="position:relative">
+            <input type="password" class="fi" id="vn-creds-password" placeholder="Password" autocomplete="new-password" style="padding-right:64px">
+            <button type="button" id="vn-creds-toggle" onclick="toggleVendorPasswordVisibility()"
+              style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:transparent;border:none;font-size:10px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);cursor:pointer;padding:4px 8px">Show</button>
+          </div>
+        </div>
+        <div class="fg">
+          <input type="text" class="fi" id="vn-creds-account" placeholder="Customer account number" autocomplete="off">
+        </div>
+      </div>
+      <div id="vn-creds-meta" style="display:none;margin-top:6px;font-size:10px;color:var(--text-light);font-style:italic"></div>
     </div>
     <div style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">
       <label class="fl">Brands carried <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-light);font-style:italic">(optional)</span></label>
@@ -3799,7 +3826,9 @@ tr:hover .row-btns { opacity:1; }
 <script>
 'use strict';
 
-// ─── AUTH / SUPABASE ──────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// AUTH / SUPABASE
+// ═════════════════════════════════════════════════════════════
 // Phase A: session + studio loaded. Feature code still uses localStorage.
 // Swap reads/writes feature-by-feature in later phases.
 
@@ -5776,7 +5805,9 @@ async function initAuth() {
 // Kick off auth as soon as the script parses
 initAuth();
 
-// ─── DATA LOAD (Phase B: read from Supabase; writes still go to localStorage in Phase C) ─────────
+// ═════════════════════════════════════════════════════════════
+// DATA LOAD (Phase B: read from Supabase; writes still go to localStorage in Phase C)
+// ═════════════════════════════════════════════════════════════
 
 // Flip to false to temporarily read from localStorage instead (escape hatch while iterating on Phase B/C).
 const USE_SUPABASE_READS = true;
@@ -6568,7 +6599,9 @@ function dbCompToS(c) {
   };
 }
 
-// ─── SYNC ENGINE (Phase C) ─────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// SYNC ENGINE (Phase C)
+// ═════════════════════════════════════════════════════════════
 // Keeps a shadow snapshot of what's in Supabase. On every save(), diff current
 // S vs shadow and upsert/delete the changes. Runs debounced in the background.
 
@@ -7448,7 +7481,9 @@ const BUILTIN_ITEM_TYPES = [
   { systemKey: 'non_material', name: 'Non-Material Item / Service', color: '#7A4535', description: 'Consultations, design fees, freight-only, install labor — anything that isn\'t a physical good.', sortOrder: -99 },
 ];
  
-// ─── THEME PRESETS ─────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// THEME PRESETS
+// ═════════════════════════════════════════════════════════════
 // 12 themes total. Each preset defines the 5 spec roles
 // (background / surface / text / accent / border). applyTheme also
 // derives values for the brand variables the existing CSS uses
@@ -8294,7 +8329,9 @@ function showView(v) {
   save();
 }
 
-// ─── PROJECT DETAIL ───────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// PROJECT DETAIL
+// ═════════════════════════════════════════════════════════════
 
 let _projDetailTab = 'overview';
 
@@ -12388,7 +12425,9 @@ function onProjectStateChange(pid, name) {
   save();
 }
 
-// ─── PROJECTS ─────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// PROJECTS
+// ═════════════════════════════════════════════════════════════
  
 function renderProjects() {
   const board = $c('projects-board');
@@ -12653,7 +12692,9 @@ document.addEventListener('click', e => {
   if (menu && !menu.contains(e.target)) hideDocContextMenu();
 });
  
-// ─── PROPOSAL ─────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// PROPOSAL
+// ═════════════════════════════════════════════════════════════
  
 function updateProjSelect() {
   const sel = $c('proj-select');
@@ -14399,7 +14440,9 @@ function refreshTotals(pid) {
   if (tGrd) tGrd.textContent = fmt(t.total);
 }
 
-// ─── ITEM MODAL ───────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// ITEM MODAL
+// ═════════════════════════════════════════════════════════════
 
 let _modalComponents = [];
 // _modalCharges retired in U-Freight Phase 2 — replaced by _modalFreight +
@@ -15635,7 +15678,9 @@ function toggleClientView() {
  
 // ─── SAMPLE DATA ──────────────────────────────────────────
  
-// ─── CONTACTS (unified: vendors + vendor_contacts in one view) ─────────
+// ═════════════════════════════════════════════════════════════
+// CONTACTS (unified: vendors + vendor_contacts in one view)
+// ═════════════════════════════════════════════════════════════
 //
 // This is the only list view for everyone you work with — vendor companies,
 // reps, workrooms, architects, GCs, receivers. Data lives in S.vendors +
@@ -16791,10 +16836,11 @@ function openVendorEditor(id, callback, prefillName) {
     $c('vn-items-section').style.display = 'none';
   }
   $c('modal-vendor').classList.add('open');
+  loadVendorCredentialsIntoEditor(v ? v.id : null);
   setTimeout(() => $c('vn-name').focus(), 80);
 }
 
-function saveVendor() {
+async function saveVendor() {
   const id = $c('vn-id').value;
   const name = $c('vn-name').value.trim();
   if (!name) { toast('Vendor name is required.'); return; }
@@ -16834,11 +16880,133 @@ function saveVendor() {
     }
   }
   save();
+  // Credentials live in a separate RPC. For a NEW vendor the row must exist
+  // in DB before set_vendor_credentials can resolve its studio_id, so we
+  // force-flush the sync first; for existing vendors the row already exists.
+  if (canViewVendorCredentials()) {
+    if (!id) { try { await syncToSupabase(); } catch (_) {} }
+    await saveVendorCredentialsIfDirty(savedId);
+  }
   closeModal('modal-vendor');
   renderContacts();
   toast(id ? 'Vendor updated.' : 'Vendor created.');
   const cb = _vendorSaveCallback; _vendorSaveCallback = null;
   cb?.(savedId);
+}
+
+// ─── Vendor credentials (encrypted via phase0_29 RPC) ─────────
+// All read/write goes through SECURITY DEFINER RPCs gated by
+// studio_members.can_view_vendor_credentials. Plaintext only lives in memory
+// while the editor is open — never in S, never in localStorage, never in
+// the sync engine. Per-open snapshot drives dirty detection.
+let _vnCredsOriginal = null;
+
+function canViewVendorCredentials() {
+  if (!AUTH.member) return false;
+  if (AUTH.member.role === 'owner') return true;
+  return !!AUTH.member.can_view_vendor_credentials;
+}
+
+async function loadVendorCredentialsIntoEditor(vendorId) {
+  const sec = $c('vn-creds-section');
+  if (!sec) return;
+  if (!canViewVendorCredentials()) {
+    sec.style.display = 'none';
+    _vnCredsOriginal = null;
+    return;
+  }
+  sec.style.display = '';
+  $c('vn-creds-username').value = '';
+  $c('vn-creds-password').value = '';
+  $c('vn-creds-account').value  = '';
+  $c('vn-creds-password').type  = 'password';
+  $c('vn-creds-toggle').textContent = 'Show';
+  $c('vn-creds-meta').style.display = 'none';
+  $c('vn-creds-clear-btn').style.display = 'none';
+  _vnCredsOriginal = { username: '', password: '', account_number: '' };
+  if (!vendorId) return; // brand-new vendor, nothing stored yet
+  const loading = $c('vn-creds-loading');
+  loading.style.display = '';
+  try {
+    const { data, error } = await sb.rpc('get_vendor_credentials', { p_vendor_id: vendorId });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    const u = row?.username || '';
+    const p = row?.password || '';
+    const a = row?.account_number || '';
+    $c('vn-creds-username').value = u;
+    $c('vn-creds-password').value = p;
+    $c('vn-creds-account').value  = a;
+    _vnCredsOriginal = { username: u, password: p, account_number: a };
+    if (u || p || a) {
+      $c('vn-creds-clear-btn').style.display = '';
+      if (row?.updated_at) {
+        const d = new Date(row.updated_at);
+        $c('vn-creds-meta').textContent = 'Last updated ' + d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+        $c('vn-creds-meta').style.display = '';
+      }
+    }
+  } catch (e) {
+    console.warn('[vendor creds] load failed:', e);
+    toast('Could not load vendor credentials: ' + (e?.message || 'unknown'));
+  } finally {
+    loading.style.display = 'none';
+  }
+}
+
+function toggleVendorPasswordVisibility() {
+  const inp = $c('vn-creds-password');
+  const btn = $c('vn-creds-toggle');
+  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'Hide'; }
+  else                          { inp.type = 'password'; btn.textContent = 'Show'; }
+}
+
+async function clearVendorCredentialsUI() {
+  const id = $c('vn-id').value;
+  if (!id) {
+    $c('vn-creds-username').value = '';
+    $c('vn-creds-password').value = '';
+    $c('vn-creds-account').value  = '';
+    return;
+  }
+  if (!confirm('Remove the stored login for this vendor?')) return;
+  try {
+    const { error } = await sb.rpc('clear_vendor_credentials', { p_vendor_id: id });
+    if (error) throw error;
+    $c('vn-creds-username').value = '';
+    $c('vn-creds-password').value = '';
+    $c('vn-creds-account').value  = '';
+    $c('vn-creds-clear-btn').style.display = 'none';
+    $c('vn-creds-meta').style.display = 'none';
+    _vnCredsOriginal = { username: '', password: '', account_number: '' };
+    toast('Credentials cleared.');
+  } catch (e) {
+    toast('Clear failed: ' + (e?.message || 'unknown'));
+  }
+}
+
+async function saveVendorCredentialsIfDirty(vendorId) {
+  if (!_vnCredsOriginal) return;
+  const u = $c('vn-creds-username').value;
+  const p = $c('vn-creds-password').value;
+  const a = $c('vn-creds-account').value;
+  const dirty = (u !== _vnCredsOriginal.username) ||
+                (p !== _vnCredsOriginal.password) ||
+                (a !== _vnCredsOriginal.account_number);
+  if (!dirty) return;
+  try {
+    const { error } = await sb.rpc('set_vendor_credentials', {
+      p_vendor_id: vendorId,
+      p_username: u,
+      p_password: p,
+      p_account_number: a,
+    });
+    if (error) throw error;
+    _vnCredsOriginal = { username: u, password: p, account_number: a };
+  } catch (e) {
+    console.warn('[vendor creds] save failed:', e);
+    toast('Credentials not saved: ' + (e?.message || 'unknown'));
+  }
 }
 
 function deleteVendor(id) {
@@ -17154,7 +17322,9 @@ function clientSelectOptions(selectedId) {
     '<option value="__new__">+ Add New Client</option>';
 }
 
-// ─── APP SETTINGS ─────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// APP SETTINGS
+// ═════════════════════════════════════════════════════════════
 
 function openAppSettings() {
   showView('settings');
@@ -18208,7 +18378,9 @@ function deleteEmailTemplate(id) {
   renderEmailTemplatesList();
 }
 
-// ─── TEAM MANAGEMENT (Phase D) ──────────────────────────
+// ═════════════════════════════════════════════════════════════
+// TEAM MANAGEMENT (Phase D)
+// ═════════════════════════════════════════════════════════════
 
 let _teamMembers = [];
 
@@ -18242,12 +18414,13 @@ function renderTeamMemberRow(m, isOwner) {
   const canRemove = isOwner && !isSelf && m.role !== 'owner';
   const pending = !m.accepted_at;
   const perms = [
-    ['can_view_financials',     'view financials'],
-    ['can_record_payments',     'record payments'],
-    ['can_send_invoices',       'send invoices'],
-    ['can_manage_expenses',     'manage expenses'],
-    ['can_manage_members',      'manage members'],
-    ['can_adjust_time_entries', 'adjust time entries'],
+    ['can_view_financials',          'view financials'],
+    ['can_record_payments',          'record payments'],
+    ['can_send_invoices',            'send invoices'],
+    ['can_manage_expenses',          'manage expenses'],
+    ['can_manage_members',           'manage members'],
+    ['can_adjust_time_entries',      'adjust time entries'],
+    ['can_view_vendor_credentials',  'view vendor logins'],
   ];
   const permPills = perms.map(([k, label]) => {
     const active = m.role === 'owner' || m[k];
@@ -19302,7 +19475,9 @@ function initTimer() {
   else _renderTimerWidget();
 }
  
-// ─── EXPENSES ─────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// EXPENSES
+// ═════════════════════════════════════════════════════════════
 
 let _expReceipt = null;
 let _expReportTab = 'list';
@@ -20325,7 +20500,9 @@ function _rollupExpenseStatus(exp) {
   if (allResolved && !exp.resolved) exp.resolved = true;
 }
 
-// ─── DOCUMENTS ────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// DOCUMENTS
+// ═════════════════════════════════════════════════════════════
 
 const DOC_TEMPLATES = [
   { id:'material_schedule', label:'Material / Scheme Schedule' },
@@ -22214,7 +22391,9 @@ function renderDocuments() {
   }).join('')}</div>`;
 }
 
-// ─── INVOICES ─────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// INVOICES
+// ═════════════════════════════════════════════════════════════
 
 let _invLineItems = [];
 let _invFiles = [];
@@ -25492,7 +25671,9 @@ function setInvTab(tab) {
   else if (tab === 'reports') renderInvReports();
 }
 
-// ─── DASHBOARD ────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═════════════════════════════════════════════════════════════
 
 function dashRangeToDates(sel) {
   const now = new Date();
@@ -25561,6 +25742,120 @@ function dashGetFilters() {
   return { from, to, clientId, projectId };
 }
 
+// ─── Dashboard tabs ───────────────────────────────────────
+// Overview = revenue/profit/expenses/outstanding (invoice-date filter)
+// Tax      = sales tax filing report (payment-date filter, cash basis)
+let _dashTab = 'overview';
+
+function setDashTab(tab) {
+  _dashTab = tab;
+  $a('[data-dashtab]').forEach(b => b.classList.toggle('active', b.dataset.dashtab === tab));
+  renderDashboard();
+}
+
+// ─── Sales tax computation (cash basis) ───────────────────
+// Per-invoice buckets are computed from the invoice's own snapshot of
+// tax + rate + total. The taxable base is `tax / rate`; nontaxable is the
+// remainder of net revenue. CC fee is excluded from net revenue (it's a
+// pass-through, not a sale). Allocation to a payment is proportional to
+// payment.amount / invoice.total — so a half-paid invoice contributes half
+// of each bucket to the period that half landed in.
+function computeInvoiceTaxBuckets(inv) {
+  const tax    = Number(inv.tax    || 0);
+  const ccFee  = Number(inv.ccFee  || 0);
+  const gross  = Number(inv.total  || 0);
+  const net    = Math.max(0, gross - tax - ccFee);
+  const rate   = Number(inv.taxRate || 0) / 100;
+  const taxable    = rate > 0 ? tax / rate : 0;
+  const nontaxable = Math.max(0, net - taxable);
+  return { gross, net, tax, ccFee, taxable, nontaxable, rate };
+}
+
+function allocatePaymentToBuckets(payment, inv) {
+  const buckets = computeInvoiceTaxBuckets(inv);
+  const total   = buckets.gross;
+  const frac    = total > 0 ? Math.min(1, (payment.amount || 0) / total) : 0;
+  return {
+    grossPaid:      (payment.amount || 0),
+    netPaid:        buckets.net        * frac,
+    taxPaid:        buckets.tax        * frac,
+    taxablePaid:    buckets.taxable    * frac,
+    nontaxablePaid: buckets.nontaxable * frac,
+    ccFeePaid:      buckets.ccFee      * frac,
+    frac,
+  };
+}
+
+// Returns the canonical state name for an invoice — normalized through the
+// studio's taxStates list so "NY" / "New York" / "new york" collapse into
+// one bucket if they match a configured tax state.
+function getInvoiceStateName(inv) {
+  const proj = (S.projects || []).find(p => p.id === inv.projectId);
+  const raw  = (proj?.state || '').trim();
+  if (!raw) return 'Unassigned';
+  const ts = (S.taxStates || []).find(s => (s.name || '').toLowerCase() === raw.toLowerCase());
+  return ts?.name || raw;
+}
+
+// Builds the per-state aggregation for the tax report. Iterates payments
+// (cash basis), filters by payment.date in range, applies client/project
+// scope, and groups by the invoice's project state.
+function buildSalesTaxReport(from, to, filters) {
+  const stateData = {};
+  const invoicesByState = {};
+  const totals = { gross:0, net:0, tax:0, taxable:0, nontaxable:0, ccFee:0 };
+
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'draft' || inv.status === 'cancelled') return;
+    if (filters.clientId  && inv.clientId  !== filters.clientId)  return;
+    if (filters.projectId && inv.projectId !== filters.projectId) return;
+
+    (inv.payments || []).forEach(p => {
+      if (!p.date) return;
+      const d = new Date(p.date + 'T12:00:00');
+      if (d < from || d > to) return;
+
+      const state = getInvoiceStateName(inv);
+      const alloc = allocatePaymentToBuckets(p, inv);
+
+      if (!stateData[state]) {
+        const ts = (S.taxStates || []).find(s => (s.name || '').toLowerCase() === state.toLowerCase());
+        stateData[state] = {
+          state,
+          canonicalRate: ts ? Number(ts.taxRate) || 0 : null,
+          gross:0, net:0, tax:0, taxable:0, nontaxable:0, ccFee:0,
+          invoiceIds: new Set(),
+        };
+        invoicesByState[state] = [];
+      }
+      const s = stateData[state];
+      s.gross       += alloc.grossPaid;
+      s.net         += alloc.netPaid;
+      s.tax         += alloc.taxPaid;
+      s.taxable     += alloc.taxablePaid;
+      s.nontaxable  += alloc.nontaxablePaid;
+      s.ccFee       += alloc.ccFeePaid;
+      s.invoiceIds.add(inv.id);
+      invoicesByState[state].push({ invoice: inv, payment: p, alloc });
+
+      totals.gross      += alloc.grossPaid;
+      totals.net        += alloc.netPaid;
+      totals.tax        += alloc.taxPaid;
+      totals.taxable    += alloc.taxablePaid;
+      totals.nontaxable += alloc.nontaxablePaid;
+      totals.ccFee      += alloc.ccFeePaid;
+    });
+  });
+
+  // "Sales delivered outside [state]" = total net across all states − this state's net.
+  Object.values(stateData).forEach(s => {
+    s.outsideNet = Math.max(0, totals.net - s.net);
+    s.effectiveRate = s.taxable > 0 ? (s.tax / s.taxable) * 100 : 0;
+  });
+
+  return { stateData, totals, invoicesByState };
+}
+
 function renderDashboard() {
   const body = $c('dashboard-body');
   if (!body) return;
@@ -25592,6 +25887,9 @@ function renderDashboard() {
   }
 
   const { from, to, clientId, projectId } = dashGetFilters();
+
+  // Tax tab routes to its own renderer (cash-basis, payment-date filtered).
+  if (_dashTab === 'tax') { renderDashboardTax(from, to, clientId, projectId); return; }
 
   // Filter invoices (by sentDate or created)
   const allInvoices = (S.invoices||[]).filter(inv => {
@@ -26261,7 +26559,247 @@ function renderReportContent(from, to) {
   container.innerHTML = html;
 }
 
-// ─── TIME TRACKER ─────────────────────────────────────
+// ─── Dashboard · Tax tab ──────────────────────────────────
+// Cash-basis sales tax report. Filtered by payment date (not invoice date),
+// grouped by project state, normalized through S.taxStates when possible.
+// Builds the same numbers your monthly nontaxable calculator computes —
+// directly from the line-item taxable flags, with a drill-down per state.
+function renderDashboardTax(from, to, clientId, projectId) {
+  const body = $c('dashboard-body');
+  if (!body) return;
+
+  // Repopulate client/project filter dropdowns (same as Overview)
+  const clientFilter = $c('dash-client');
+  if (clientFilter) {
+    const cur = clientFilter.value;
+    clientFilter.innerHTML = '<option value="">All Clients</option>' +
+      (S.clients||[]).map(c => `<option value="${c.id}" ${c.id===cur?'selected':''}>${escH(c.name)}</option>`).join('');
+  }
+  const projectFilter = $c('dash-project');
+  if (projectFilter) {
+    const cur = projectFilter.value;
+    const scoped = (S.projects||[]).filter(p => !clientId || p.clientId === clientId);
+    projectFilter.innerHTML = '<option value="">All Projects</option>' +
+      scoped.map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
+  }
+
+  const report = buildSalesTaxReport(from, to, { clientId, projectId });
+  const { stateData, totals, invoicesByState } = report;
+  const states = Object.values(stateData).sort((a,b) => b.gross - a.gross);
+
+  const cardStyle  = 'background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)';
+  const statNum    = 'font-family:var(--font-h);font-weight:800;font-size:24px;line-height:1';
+  const statLabel  = 'font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-b);margin-top:4px';
+  const statSub    = 'font-size:10px;color:var(--text-mid);font-family:var(--font-b);margin-top:4px;line-height:1.4';
+  const tblStyle   = 'width:100%;font-size:12px;font-family:var(--font-b);border-collapse:collapse';
+  const thStyle    = 'text-align:left;padding:8px 10px;font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);border-bottom:2px solid var(--border)';
+  const tdStyle    = 'padding:8px 10px;border-bottom:1px solid var(--border)';
+
+  let html = '<div style="padding:20px 30px 40px">';
+
+  html += `<div style="background:rgba(var(--text-rgb),0.04);border-left:3px solid var(--pecan);padding:10px 14px;border-radius:0 8px 8px 0;font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-bottom:18px;line-height:1.5">
+    <strong style="color:var(--text-dark)">Cash basis · payment-date filtered.</strong>
+    An invoice contributes to the period its payment lands in — not when it was sent or created.
+    Partial payments split proportionally across taxable, nontaxable, and tax buckets.
+  </div>`;
+
+  // ── KPI cards
+  html += `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px">
+    <div style="${cardStyle}">
+      <div style="${statNum};color:var(--pecan)">${fmt(totals.gross)}</div>
+      <div style="${statLabel}">Total Gross Revenue</div>
+      <div style="${statSub}">Payments received (incl. tax & CC fee)</div>
+    </div>
+    <div style="${cardStyle}">
+      <div style="${statNum};color:#1a6e3a">${fmt(totals.net)}</div>
+      <div style="${statLabel}">Total Net Revenue</div>
+      <div style="${statSub}">Ex-tax, ex-CC-fee</div>
+    </div>
+    <div style="${cardStyle}">
+      <div style="${statNum};color:var(--mahogany)">${fmt(totals.tax)}</div>
+      <div style="${statLabel}">Tax Collected</div>
+      <div style="${statSub}">All states combined</div>
+    </div>
+    <div style="${cardStyle}">
+      <div style="${statNum};color:var(--text-mid)">${fmt(totals.nontaxable)}</div>
+      <div style="${statLabel}">Nontaxable Sales</div>
+      <div style="${statSub}">All states combined</div>
+    </div>
+  </div>`;
+
+  // ── Per-state table + drill-down
+  html += `<div style="${cardStyle};margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Sales Tax Report by State</div>
+      <button class="btn btn-ghost btn-sm" onclick="exportTaxReportCSV()" style="font-size:11px">⤓ Export CSV</button>
+    </div>`;
+
+  if (!states.length) {
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic;padding:10px 0">No paid invoices in this period.</div>';
+  } else {
+    html += `<table style="${tblStyle}">
+      <thead><tr>
+        <th style="${thStyle}">State</th>
+        <th style="${thStyle}">Rate</th>
+        <th style="${thStyle};text-align:right">Gross Revenue</th>
+        <th style="${thStyle};text-align:right">Net Revenue</th>
+        <th style="${thStyle};text-align:right">Taxable</th>
+        <th style="${thStyle};text-align:right">Nontaxable</th>
+        <th style="${thStyle};text-align:right">Tax Collected</th>
+        <th style="${thStyle};text-align:right">Sales Outside</th>
+        <th style="${thStyle};text-align:center">·</th>
+      </tr></thead>
+      <tbody>`;
+    states.forEach(s => {
+      const rateDisp = s.canonicalRate != null ? s.canonicalRate.toFixed(2) + '%' : s.effectiveRate.toFixed(2) + '%';
+      const safeId = s.state.replace(/[^a-zA-Z0-9]/g, '_');
+      html += `<tr style="cursor:pointer" onclick="toggleStateDrilldown('${safeId}')">
+        <td style="${tdStyle};font-weight:600">${escH(s.state)}</td>
+        <td style="${tdStyle}">${rateDisp}</td>
+        <td style="${tdStyle};text-align:right">${fmt(s.gross)}</td>
+        <td style="${tdStyle};text-align:right;font-weight:600;color:#1a6e3a">${fmt(s.net)}</td>
+        <td style="${tdStyle};text-align:right">${fmt(s.taxable)}</td>
+        <td style="${tdStyle};text-align:right;color:var(--text-mid)">${fmt(s.nontaxable)}</td>
+        <td style="${tdStyle};text-align:right;font-weight:700;color:var(--mahogany)">${fmt(s.tax)}</td>
+        <td style="${tdStyle};text-align:right">${fmt(s.outsideNet)}</td>
+        <td style="${tdStyle};text-align:center;font-size:10px;color:var(--text-light)" id="drill-toggle-${safeId}">▸</td>
+      </tr>
+      <tr id="drill-row-${safeId}" style="display:none">
+        <td colspan="9" style="padding:0;border-bottom:1px solid var(--border)">
+          <div style="background:rgba(var(--text-rgb),0.03);padding:10px 14px">
+            ${renderTaxDrilldown(invoicesByState[s.state])}
+          </div>
+        </td>
+      </tr>`;
+    });
+    html += `<tr style="background:rgba(var(--text-rgb),0.05)">
+      <td style="${tdStyle};font-weight:800" colspan="2">Total</td>
+      <td style="${tdStyle};text-align:right;font-weight:800">${fmt(totals.gross)}</td>
+      <td style="${tdStyle};text-align:right;font-weight:800;color:#1a6e3a">${fmt(totals.net)}</td>
+      <td style="${tdStyle};text-align:right;font-weight:800">${fmt(totals.taxable)}</td>
+      <td style="${tdStyle};text-align:right;font-weight:800">${fmt(totals.nontaxable)}</td>
+      <td style="${tdStyle};text-align:right;font-weight:800;color:var(--mahogany)">${fmt(totals.tax)}</td>
+      <td style="${tdStyle};text-align:right">—</td>
+      <td style="${tdStyle}"></td>
+    </tr>
+    </tbody></table>`;
+
+    html += `<div style="margin-top:14px;font-size:10px;color:var(--text-light);font-style:italic;line-height:1.6">
+      <strong>Gross Revenue</strong>: subtotal + tax + CC fee (what the customer actually paid).
+      &nbsp;·&nbsp; <strong>Net Revenue</strong>: Gross − tax − CC fee.
+      &nbsp;·&nbsp; <strong>Taxable</strong>: portion of Net Revenue subject to tax (= Tax Collected ÷ Rate).
+      &nbsp;·&nbsp; <strong>Nontaxable</strong>: Net Revenue − Taxable.
+      &nbsp;·&nbsp; <strong>Sales Outside</strong>: total Net Revenue from all OTHER states this period (for state forms that ask).
+    </div>`;
+  }
+  html += '</div>';
+
+  // Stash for CSV export
+  window._taxReportSnapshot = { states, totals, from, to };
+
+  body.innerHTML = html + '</div>';
+}
+
+function renderTaxDrilldown(records) {
+  if (!records || !records.length) {
+    return '<div style="font-size:11px;color:var(--text-light);font-style:italic">No records.</div>';
+  }
+  // One row per invoice (an invoice can have multiple payments in the period)
+  const byInvoice = {};
+  records.forEach(r => {
+    const id = r.invoice.id;
+    if (!byInvoice[id]) byInvoice[id] = {
+      invoice: r.invoice, payments: [],
+      grossPaid:0, taxablePaid:0, nontaxablePaid:0, taxPaid:0,
+    };
+    byInvoice[id].payments.push(r.payment);
+    byInvoice[id].grossPaid      += r.alloc.grossPaid;
+    byInvoice[id].taxablePaid    += r.alloc.taxablePaid;
+    byInvoice[id].nontaxablePaid += r.alloc.nontaxablePaid;
+    byInvoice[id].taxPaid        += r.alloc.taxPaid;
+  });
+  const thMini = 'text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);border-bottom:1px solid var(--border)';
+  const tdMini = 'padding:6px 8px;border-bottom:1px solid rgba(var(--text-rgb),0.06);font-size:11px;font-family:var(--font-b)';
+  let html = `<table style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <th style="${thMini}">Invoice</th>
+      <th style="${thMini}">Client</th>
+      <th style="${thMini}">Payment Date(s)</th>
+      <th style="${thMini};text-align:right">Paid in Period</th>
+      <th style="${thMini};text-align:right">Taxable</th>
+      <th style="${thMini};text-align:right">Nontaxable</th>
+      <th style="${thMini};text-align:right">Tax</th>
+    </tr></thead><tbody>`;
+  Object.values(byInvoice).forEach(b => {
+    const inv = b.invoice;
+    const client = (S.clients||[]).find(c => c.id === inv.clientId);
+    const dates = b.payments.map(p => p.date).filter(Boolean).sort().join(', ');
+    const invLabel = '#' + (inv.number || inv.id.slice(0,6));
+    html += `<tr>
+      <td style="${tdMini}"><a href="javascript:openInvoiceBuilder('${inv.id}')" style="color:var(--mahogany);font-weight:600;text-decoration:none">${escH(invLabel)}</a></td>
+      <td style="${tdMini}">${escH(client?.name || '—')}</td>
+      <td style="${tdMini};color:var(--text-mid)">${escH(dates)}</td>
+      <td style="${tdMini};text-align:right;font-weight:600">${fmt(b.grossPaid)}</td>
+      <td style="${tdMini};text-align:right">${fmt(b.taxablePaid)}</td>
+      <td style="${tdMini};text-align:right;color:var(--text-mid)">${fmt(b.nontaxablePaid)}</td>
+      <td style="${tdMini};text-align:right;color:var(--mahogany)">${fmt(b.taxPaid)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function toggleStateDrilldown(safeId) {
+  const row = $c('drill-row-' + safeId);
+  const tog = $c('drill-toggle-' + safeId);
+  if (!row || !tog) return;
+  if (row.style.display === 'none') { row.style.display = ''; tog.textContent = '▾'; }
+  else                              { row.style.display = 'none'; tog.textContent = '▸'; }
+}
+
+function exportTaxReportCSV() {
+  const snap = window._taxReportSnapshot;
+  if (!snap) { toast('Run the report first.'); return; }
+  const { states, totals, from, to } = snap;
+  const period = from.toISOString().slice(0,10) + ' to ' + to.toISOString().slice(0,10);
+  const rows = [];
+  rows.push(['Sales Tax Report (Cash Basis)']);
+  rows.push(['Period', period]);
+  rows.push([]);
+  rows.push(['State','Rate (%)','Gross Revenue','Net Revenue','Taxable Sales','Nontaxable Sales','Tax Collected','Sales Outside State']);
+  states.forEach(s => {
+    const rate = s.canonicalRate != null ? s.canonicalRate.toFixed(2) : s.effectiveRate.toFixed(2);
+    rows.push([
+      s.state, rate,
+      s.gross.toFixed(2), s.net.toFixed(2),
+      s.taxable.toFixed(2), s.nontaxable.toFixed(2),
+      s.tax.toFixed(2), s.outsideNet.toFixed(2),
+    ]);
+  });
+  rows.push([]);
+  rows.push(['TOTAL', '',
+    totals.gross.toFixed(2), totals.net.toFixed(2),
+    totals.taxable.toFixed(2), totals.nontaxable.toFixed(2),
+    totals.tax.toFixed(2), '',
+  ]);
+  const csv = rows.map(r => r.map(c => {
+    const s = String(c == null ? '' : c);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sales-tax-report-' + period.replace(/ /g, '') + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+  toast('CSV exported.');
+}
+
+// ═════════════════════════════════════════════════════════════
+// TIME TRACKER
+// ═════════════════════════════════════════════════════════════
  
 let _currentTimeTab  = 'summary';
 let _timeDetailProj  = null;   // projectId currently drilled into
@@ -27309,7 +27847,9 @@ function addSampleData() {
   save();
 }
  
-// ─── INIT ─────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// INIT
+// ═════════════════════════════════════════════════════════════
  
 async function init() {
   await load();
