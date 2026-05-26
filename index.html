@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BEEP HQ — Studio Management</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%233F151C'/%3E%3Ctext x='50' y='70' font-family='Barlow Condensed,Helvetica,Arial,sans-serif' font-size='72' font-weight='900' text-anchor='middle' fill='%23F3E8D6'%3EB%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -8433,6 +8434,25 @@ function initQRDragDrop(pid) {
   });
 }
 
+// Copies the visible text of a Quick Reference card to the clipboard.
+// Strips the "Copy" button itself, collapses to clean multi-line text.
+function copyQRCard(btn) {
+  const card = btn.closest('.qr-card');
+  if (!card) return;
+  const clone = card.cloneNode(true);
+  clone.querySelectorAll('.qr-copy-btn').forEach(b => b.remove());
+  const text = clone.innerText.replace(/\n\s*\n/g, '\n').trim();
+  navigator.clipboard.writeText(text).then(
+    () => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied';
+      btn.style.color = '#1a6e3a';
+      setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 1100);
+    },
+    () => toast('Copy failed.')
+  );
+}
+
 function renderPDOverview(proj, pid) {
   const client = (S.clients||[]).find(c => c.id === proj.clientId);
   const prop = S.proposals[pid];
@@ -8591,7 +8611,13 @@ function renderPDOverview(proj, pid) {
   if (ordered.length) {
     html += `<div id="qr-list" data-pid="${pid}">`;
     html += ordered.map(q => `
-      <div class="qr-card" draggable="true" data-qrkey="${q.key}" style="${qrCardStyle}">${q.html}</div>
+      <div class="qr-card" draggable="true" data-qrkey="${q.key}" style="${qrCardStyle};position:relative">
+        <button class="qr-copy-btn" onclick="event.stopPropagation();copyQRCard(this)" title="Copy to clipboard"
+          style="position:absolute;top:6px;right:6px;background:transparent;border:none;cursor:pointer;font-size:11px;color:var(--text-light);padding:3px 6px;border-radius:4px;font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase"
+          onmouseover="this.style.background='rgba(var(--text-rgb),0.06)';this.style.color='var(--mahogany)'"
+          onmouseout="this.style.background='transparent';this.style.color='var(--text-light)'">Copy</button>
+        ${q.html}
+      </div>
     `).join('');
     html += '</div>';
   } else {
@@ -9948,7 +9974,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       const hasExtra = (c.trackingNumbers||[]).length || (c.links||[]).length || (c.files||[]).length;
 
       return `
-      <div style="background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;margin-bottom:10px">
+      <div style="background:rgba(var(--text-rgb),0.025);border:2px solid rgba(var(--text-rgb),0.18);border-radius:var(--rl);padding:14px 16px;margin-bottom:16px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:6px">
             <span class="status-dot" style="background:${cStatusColor};width:7px;height:7px"></span>
@@ -15663,7 +15689,10 @@ let _propFilter = 'all'; // 'all' | 'allowances'
 function setPropFilter(filter) {
   _propFilter = filter;
   $a('[data-ptab]').forEach(b => b.classList.toggle('active', b.dataset.ptab === filter));
-  renderPropBody();
+  // The Allowances toggle lives both on the legacy proposal view AND the
+  // project detail "Proposal" tab. Re-render whichever the user is on.
+  if (S._detailProjectId && _projDetailTab === 'proposal') renderProjectDetail();
+  else if (S.currentPropProject) renderPropBody();
 }
 
 function toggleClientView() {
