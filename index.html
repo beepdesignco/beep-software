@@ -6008,6 +6008,7 @@ async function loadFromSupabase() {
   S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
   S.vendorTypes      = Array.isArray(studioSettings.vendor_types) ? studioSettings.vendor_types : [];
   S.taxStates        = Array.isArray(studioSettings.tax_states)   ? studioSettings.tax_states   : [];
+  S.taxFilings       = Array.isArray(studioSettings.tax_filings)  ? studioSettings.tax_filings  : [];
   S.studio       = AUTH.studio.studio_info || {};
 
   // One-time fold of legacy S.contacts → vendors + vendor_contacts. Runs on
@@ -7383,6 +7384,7 @@ async function syncToSupabase() {
       categories:    S.categories   || [],
       vendor_types:  S.vendorTypes  || [],
       tax_states:    S.taxStates    || [],
+      tax_filings:   S.taxFilings   || [],
     };
     const currentInfo = S.studio || {};
     if (!_deepEq(currentSettings, _sbShadow.studioSettings) || !_deepEq(currentInfo, _sbShadow.studioInfo)) {
@@ -7732,6 +7734,7 @@ let S = {
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
+  taxFilings: [],  // [{id, stateId, stateName, periodKey, periodLabel, filedDate, filedBy, notes}]
 };
  
 // ─── PERSISTENCE ──────────────────────────────────────────
@@ -26482,90 +26485,132 @@ function buildSalesTaxReport(from, to, filters) {
 }
 
 // ─── Filing deadlines ────────────────────────────────────────
-// Computes the next "soonest unfiled" deadline for a given filing frequency
-// using a 20th-of-period-after-end default. Each state has its own real
-// deadlines (some 15th, some 23rd); this is a reasonable starting point.
-// If today is past the natural deadline for the most-recent completed
-// period, we assume that period got filed and roll to the next deadline.
-function computeNextFilingDeadline(filingFrequency, today) {
-  const fq = (filingFrequency || '').toLowerCase();
-  if (!fq) return null;
+// Enumerates every period a state is responsible for filing, going back
+// far enough to surface recent unfiled work. Periods that have a matching
+// S.taxFilings record are filtered out by getUnfiledPeriodsForState.
+// Defaults to a 20th-of-period-after-end deadline; states vary in reality,
+// so the widget includes a "verify against your portal" disclaimer.
+function enumeratePeriodsForState(state, today) {
+  const fq = (state?.filingFrequency || '').toLowerCase();
+  if (!fq) return [];
   today = today || new Date();
   const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const y = t.getFullYear();
-  const m = t.getMonth();
-
-  let dueDate, periodLabel;
+  const periods = [];
 
   if (fq === 'monthly') {
-    // Period to file = last month; deadline = 20th of this month.
-    dueDate = new Date(y, m, 20);
-    if (t > dueDate) {
-      dueDate = new Date(y, m + 1, 20);
-      periodLabel = new Date(y, m, 1).toLocaleDateString('en-US', { month:'long', year:'numeric' });
-    } else {
-      periodLabel = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month:'long', year:'numeric' });
+    // 12 months back through the period currently being filed (last month).
+    for (let offset = 12; offset >= 0; offset--) {
+      const periodM = new Date(t.getFullYear(), t.getMonth() - offset - 1, 1);
+      const dueDate = new Date(t.getFullYear(), t.getMonth() - offset, 20);
+      periods.push({
+        periodKey:   `${periodM.getFullYear()}-${String(periodM.getMonth()+1).padStart(2,'0')}`,
+        periodLabel: periodM.toLocaleDateString('en-US', { month:'long', year:'numeric' }),
+        dueDate,
+      });
     }
   } else if (fq === 'quarterly') {
-    const currentQ = Math.floor(m / 3); // 0-3
-    const prevQ = currentQ - 1;
-    let prevQEndMonth, prevQY;
-    if (prevQ < 0) { prevQEndMonth = 11; prevQY = y - 1; }
-    else           { prevQEndMonth = prevQ * 3 + 2; prevQY = y; }
-    const dueY = prevQEndMonth === 11 ? prevQY + 1 : prevQY;
-    const dueM = prevQEndMonth === 11 ? 0 : prevQEndMonth + 1;
-    dueDate = new Date(dueY, dueM, 20);
-    periodLabel = `Q${prevQ < 0 ? 4 : prevQ + 1} ${prevQ < 0 ? y - 1 : y}`;
-    if (t > dueDate) {
-      const currQEndMonth = currentQ * 3 + 2;
-      const cDueY = currQEndMonth === 11 ? y + 1 : y;
-      const cDueM = currQEndMonth === 11 ? 0 : currQEndMonth + 1;
-      dueDate = new Date(cDueY, cDueM, 20);
-      periodLabel = `Q${currentQ + 1} ${y}`;
+    const currentQ = Math.floor(t.getMonth() / 3);
+    for (let offset = 4; offset >= 0; offset--) {
+      let q = currentQ - offset - 1;
+      let qY = t.getFullYear();
+      while (q < 0) { q += 4; qY -= 1; }
+      const qEndM = q * 3 + 2;
+      const dueY = qEndM === 11 ? qY + 1 : qY;
+      const dueM = qEndM === 11 ? 0 : qEndM + 1;
+      periods.push({
+        periodKey:   `${qY}-Q${q + 1}`,
+        periodLabel: `Q${q + 1} ${qY}`,
+        dueDate:     new Date(dueY, dueM, 20),
+      });
     }
   } else if (fq === 'bi-annually') {
-    const isH1 = m < 6;
-    if (isH1) {
-      dueDate = new Date(y, 0, 20);
-      periodLabel = `H2 ${y - 1}`;
-      if (t > dueDate) { dueDate = new Date(y, 6, 20); periodLabel = `H1 ${y}`; }
-    } else {
-      dueDate = new Date(y, 6, 20);
-      periodLabel = `H1 ${y}`;
-      if (t > dueDate) { dueDate = new Date(y + 1, 0, 20); periodLabel = `H2 ${y}`; }
+    const currentH = t.getMonth() < 6 ? 0 : 1;
+    for (let offset = 2; offset >= 0; offset--) {
+      let h = currentH - offset - 1;
+      let hY = t.getFullYear();
+      while (h < 0) { h += 2; hY -= 1; }
+      const dueY = h === 0 ? hY : hY + 1;
+      const dueM = h === 0 ? 6 : 0;
+      periods.push({
+        periodKey:   `${hY}-H${h + 1}`,
+        periodLabel: `H${h + 1} ${hY}`,
+        dueDate:     new Date(dueY, dueM, 20),
+      });
     }
   } else if (fq === 'annually') {
-    dueDate = new Date(y, 0, 20);
-    periodLabel = `${y - 1}`;
-    if (t > dueDate) { dueDate = new Date(y + 1, 0, 20); periodLabel = `${y}`; }
-  } else {
-    return null;
+    for (let offset = 2; offset >= 0; offset--) {
+      const yY = t.getFullYear() - offset - 1;
+      periods.push({
+        periodKey:   `${yY}`,
+        periodLabel: `${yY}`,
+        dueDate:     new Date(yY + 1, 0, 20),
+      });
+    }
   }
 
   const msPerDay = 1000 * 60 * 60 * 24;
-  const daysFromToday = Math.round((dueDate - t) / msPerDay);
-  let status = 'scheduled';
-  if (daysFromToday < 0) status = 'overdue';
-  else if (daysFromToday < 7) status = 'urgent';
-  else if (daysFromToday <= 14) status = 'soon';
-
-  return { dueDate, periodLabel, daysFromToday, status };
+  periods.forEach(p => {
+    p.daysFromToday = Math.round((p.dueDate - t) / msPerDay);
+    if (p.daysFromToday < 0)        p.status = 'overdue';
+    else if (p.daysFromToday < 7)   p.status = 'urgent';
+    else if (p.daysFromToday <= 14) p.status = 'soon';
+    else                            p.status = 'scheduled';
+  });
+  return periods;
 }
 
-// Renders the "Upcoming Tax Filings" widget. Pulls every tax state that has
-// filingFrequency set, computes its next deadline, sorts soonest-first, and
-// color-codes by urgency. Cards are clickable → opens the tax-state editor
-// so the user can adjust frequency or check notes.
+function getUnfiledPeriodsForState(state) {
+  const all = enumeratePeriodsForState(state);
+  const filings = S.taxFilings || [];
+  return all.filter(p => !filings.some(f => f.stateId === state.id && f.periodKey === p.periodKey));
+}
+
+function markFilingFiled(stateId, periodKey, periodLabel) {
+  const state = (S.taxStates || []).find(s => s.id === stateId);
+  if (!state) return;
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const dateStr = prompt('Filed date for ' + state.name + ' · ' + periodLabel + ' (YYYY-MM-DD):', todayISO);
+  if (dateStr == null) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) { toast('Invalid date — expected YYYY-MM-DD.'); return; }
+  S.taxFilings = S.taxFilings || [];
+  S.taxFilings.push({
+    id: uid(),
+    stateId,
+    stateName: state.name,
+    periodKey,
+    periodLabel,
+    filedDate: dateStr.trim(),
+    filedBy: AUTH.member?.display_name || AUTH.user?.email?.split('@')[0] || 'You',
+  });
+  save();
+  if (typeof renderDashboard === 'function') renderDashboard();
+}
+
+function unmarkFilingFiled(filingId) {
+  const f = (S.taxFilings || []).find(x => x.id === filingId);
+  if (!f) return;
+  if (!confirm('Remove the filing record for ' + f.stateName + ' · ' + f.periodLabel + '?')) return;
+  S.taxFilings = (S.taxFilings || []).filter(x => x.id !== filingId);
+  save();
+  if (typeof renderDashboard === 'function') renderDashboard();
+}
+
+// Renders the "Upcoming Tax Filings" widget. Lists every UNFILED period
+// across configured tax states + a collapsed Filing History below.
 function renderUpcomingFilings() {
   const states = (S.taxStates || []).filter(s => s.filingFrequency);
   if (!states.length) return '';
 
-  const today = new Date();
-  const items = states
-    .map(s => ({ state: s, deadline: computeNextFilingDeadline(s.filingFrequency, today) }))
-    .filter(i => i.deadline)
-    .sort((a, b) => a.deadline.dueDate - b.deadline.dueDate);
-  if (!items.length) return '';
+  // Outstanding: every unfiled period across all configured states
+  const outstanding = [];
+  states.forEach(state => {
+    getUnfiledPeriodsForState(state).forEach(p => outstanding.push({ state, ...p }));
+  });
+  outstanding.sort((a, b) => a.dueDate - b.dueDate);
+
+  const filings = (S.taxFilings || []).slice().sort((a, b) =>
+    (b.filedDate || '').localeCompare(a.filedDate || '')
+  );
 
   const palette = {
     overdue:   { bg:'rgba(179,51,51,0.10)',  border:'rgba(179,51,51,0.45)',  text:'#b33',    label:'Overdue'   },
@@ -26576,36 +26621,63 @@ function renderUpcomingFilings() {
 
   let html = `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:18px">
     <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px;gap:14px;flex-wrap:wrap">
-      <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Upcoming Tax Filings</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Tax Filings · Outstanding</div>
       <div style="font-size:10px;color:var(--text-light);font-style:italic;font-family:var(--font-b)">Default deadlines: 20th of period-after-end · verify against your state's portal</div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">`;
-
-  items.forEach(({ state, deadline }) => {
-    const c = palette[deadline.status];
-    const days = deadline.daysFromToday;
-    const daysLabel = days < 0
-      ? `${Math.abs(days)} day${Math.abs(days)!==1?'s':''} overdue`
-      : days === 0
-      ? 'Due today'
-      : `${days} day${days!==1?'s':''} remaining`;
-    const dueStr = deadline.dueDate.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
-    html += `<div style="background:${c.bg};border:1px solid ${c.border};border-radius:var(--r);padding:10px 12px;cursor:pointer;transition:var(--t)"
-      onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 2px 6px rgba(0,0,0,0.05)'"
-      onmouseout="this.style.transform='';this.style.boxShadow=''"
-      onclick="openTaxStateEditor('${state.id}')">
-      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px;gap:6px">
-        <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:${c.text};text-transform:uppercase;letter-spacing:0.04em">${escH(state.name)}</div>
-        <div style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${c.text};white-space:nowrap">${c.label}</div>
-      </div>
-      <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);line-height:1.5">
-        ${escH(deadline.periodLabel)} · due ${dueStr}<br>
-        <strong style="color:${c.text}">${daysLabel}</strong>
-      </div>
     </div>`;
-  });
 
-  html += '</div></div>';
+  if (!outstanding.length) {
+    html += '<div style="font-size:12px;color:#1a6e3a;font-family:var(--font-b);padding:6px 0">All caught up — no outstanding filings.</div>';
+  } else {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">';
+    outstanding.forEach(({ state, periodKey, periodLabel, dueDate, daysFromToday, status }) => {
+      const c = palette[status];
+      const daysLabel = daysFromToday < 0
+        ? `${Math.abs(daysFromToday)} day${Math.abs(daysFromToday)!==1?'s':''} overdue`
+        : daysFromToday === 0
+        ? 'Due today'
+        : `${daysFromToday} day${daysFromToday!==1?'s':''} remaining`;
+      const dueStr = dueDate.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+      const safePeriod = periodKey.replace(/'/g, '');
+      const safeLabel = periodLabel.replace(/'/g, "\\'");
+      html += `<div style="background:${c.bg};border:1px solid ${c.border};border-radius:var(--r);padding:10px 12px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px;gap:6px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:${c.text};text-transform:uppercase;letter-spacing:0.04em">${escH(state.name)}</div>
+          <div style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${c.text};white-space:nowrap">${c.label}</div>
+        </div>
+        <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);line-height:1.5;margin-bottom:8px">
+          ${escH(periodLabel)} · due ${dueStr}<br>
+          <strong style="color:${c.text}">${daysLabel}</strong>
+        </div>
+        <div style="display:flex;gap:6px;justify-content:flex-end">
+          <button class="btn btn-ghost btn-sm" onclick="openTaxStateEditor('${state.id}')" style="font-size:10px;padding:3px 8px">State Notes</button>
+          <button class="btn btn-secondary btn-sm" onclick="markFilingFiled('${state.id}','${safePeriod}','${safeLabel}')" style="font-size:10px;padding:3px 10px">Mark Filed</button>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // Filing history (collapsed)
+  if (filings.length) {
+    html += `<details style="margin-top:14px">
+      <summary style="cursor:pointer;font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);padding:4px 0">
+        Filing History (${filings.length})
+      </summary>
+      <div style="margin-top:8px;font-family:var(--font-b);font-size:11px">
+        ${filings.map(f => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;gap:10px">
+            <div>
+              <strong style="color:var(--mahogany);font-family:var(--font-h);font-weight:700;letter-spacing:0.04em;text-transform:uppercase">${escH(f.stateName)}</strong>
+              <span style="color:var(--text-mid)"> · ${escH(f.periodLabel)}</span>
+            </div>
+            <div style="color:var(--text-mid);font-size:10px">filed ${escH(f.filedDate)} by ${escH(f.filedBy || '—')}</div>
+            <button class="btn btn-ghost btn-sm" onclick="unmarkFilingFiled('${f.id}')" style="font-size:10px;padding:2px 8px;color:#b33">Unmark</button>
+          </div>`).join('')}
+      </div>
+    </details>`;
+  }
+
+  html += '</div>';
   return html;
 }
 
