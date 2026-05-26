@@ -1988,21 +1988,26 @@ tr:hover .row-btns { opacity:1; }
         </div>
         <div class="fg">
           <label class="fl">State (for tax)</label>
-          <input type="text" class="fi" id="np-state" placeholder="e.g. Louisiana">
+          <select class="fi fsel" id="np-state" onchange="onStateSelectChange('np-state','np-taxrate','np-taxfreight','np-timetaxable')"></select>
         </div>
       </div>
       <div class="frow">
-        <div class="fg">
+        <div class="fg" style="max-width:140px">
           <label class="fl">Tax Rate %</label>
           <input type="number" class="fi" id="np-taxrate" min="0" step="0.01" placeholder="0" value="0">
         </div>
-        <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+        <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px;flex-wrap:wrap;gap:14px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
             <input type="checkbox" id="np-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
-            Tax freight in this state
+            Tax freight
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <input type="checkbox" id="np-timetaxable" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+            Time is taxable
           </label>
         </div>
       </div>
+      <div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:-6px">Auto-filled from App Settings → Categories → Tax States when you pick a state.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-new')">Cancel</button>
@@ -2134,21 +2139,26 @@ tr:hover .row-btns { opacity:1; }
         </div>
         <div class="fg">
           <label class="fl">State (for tax)</label>
-          <input type="text" class="fi" id="ps-state" placeholder="e.g. Louisiana">
+          <select class="fi fsel" id="ps-state" onchange="onStateSelectChange('ps-state','ps-taxrate','ps-taxfreight','ps-timetaxable')"></select>
         </div>
       </div>
       <div class="frow">
-        <div class="fg">
+        <div class="fg" style="max-width:140px">
           <label class="fl">Tax Rate %</label>
           <input type="number" class="fi" id="ps-taxrate" min="0" step="0.01" placeholder="0">
         </div>
-        <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+        <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px;flex-wrap:wrap;gap:14px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
             <input type="checkbox" id="ps-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
-            Tax freight in this state
+            Tax freight
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <input type="checkbox" id="ps-timetaxable" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+            Time is taxable
           </label>
         </div>
       </div>
+      <div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:-6px">Tax settings flow from App Settings → Categories → Tax States. Changing the state here pulls in its defaults.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" onclick="deleteProject($c('ps-id').value)">Delete Project</button>
@@ -2235,15 +2245,13 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
 
-    <!-- ACTUAL COST PAID — readymade + openline only.
-         Constructed items capture actual cost per-component instead. -->
-    <div class="fg" id="ai-cost-actual-wrap">
-      <label class="fl">Actual Cost Paid <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— what you actually paid the vendor (leave blank to use proposal net)</span></label>
-      <input type="text" class="fi" id="ai-cost-actual" placeholder="$0.00">
-    </div>
+    <!-- Actual cost paid is captured on the Project Management page, not at
+         proposal time. The item-level input + per-component inputs were
+         removed; values stored on existing items/components are preserved
+         and remain editable from the PM detail panel. -->
 
     <!-- CONSTRUCTED ITEM ACTUAL-COST ROLLUP (sum of per-component costs).
-         Read-only; updates live as the user edits component cost paid. -->
+         Read-only; reflects values entered on the PM detail panel. -->
     <div id="ai-constructed-rollup" style="display:none;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-family:var(--font-b);font-size:12px;color:var(--text-mid)">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap">
         <span style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid)">Actuals</span>
@@ -3506,7 +3514,21 @@ tr:hover .row-btns { opacity:1; }
         <option value="annually">Annually</option>
       </select>
     </div>
-    <div class="fg">
+    <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Defaults for projects on this state</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="checkbox" id="ts-taxfreight" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+          Tax freight in this state
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="checkbox" id="ts-timetaxable" style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer">
+          Time is taxable in this state
+        </label>
+      </div>
+      <div style="font-size:10px;color:var(--text-light);font-style:italic;line-height:1.5">When a project is set to this state, these defaults apply automatically. Editing them here cascades to existing projects tagged to this state (you'll be asked).</div>
+    </div>
+    <div class="fg" style="margin-top:12px">
       <label class="fl">Notes</label>
       <textarea class="fi" id="ts-notes" style="resize:vertical;min-height:50px" placeholder="Filing portal URL, payment dates, anything useful at filing time…"></textarea>
     </div>
@@ -12484,30 +12506,27 @@ function renderPDSettings(proj, pid) {
         <input type="number" class="fi" id="pds-markup" min="0" step="1" value="${proj.markupPct != null ? proj.markupPct : 25}" onchange="savePDSetting('${pid}','markupPct',parseFloat(this.value)||25)">
       </div>
       <div class="fg">
-        <label class="fl">State <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(picks tax rate from App Settings → Categories → Tax States)</span></label>
-        <input type="text" class="fi" id="pds-state" value="${escH(proj.state||'')}" list="pds-state-list" onchange="onProjectStateChange('${pid}', this.value.trim())">
-        <datalist id="pds-state-list">${(S.taxStates||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(s => `<option value="${escH(s.name)}">`).join('')}</datalist>
+        <label class="fl">State <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(defaults pulled from App Settings → Categories → Tax States)</span></label>
+        <select class="fi fsel" id="pds-state" onchange="onPDStateChange('${pid}')">${buildStateSelectOptions(proj.state||'')}</select>
       </div>
     </div>
     <div class="frow">
-      <div class="fg">
+      <div class="fg" style="max-width:140px">
         <label class="fl">Tax Rate %</label>
         <input type="number" class="fi" id="pds-taxrate" min="0" step="0.01" value="${proj.taxRate||0}" onchange="savePDSetting('${pid}','taxRate',parseFloat(this.value)||0)">
       </div>
-      <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px">
+      <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px;flex-wrap:wrap;gap:14px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-          <input type="checkbox" ${proj.taxFreight?'checked':''} style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer" onchange="savePDSetting('${pid}','taxFreight',this.checked)">
-          Tax freight in this state
+          <input type="checkbox" id="pds-taxfreight" ${proj.taxFreight?'checked':''} style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer" onchange="savePDSetting('${pid}','taxFreight',this.checked)">
+          Tax freight
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+          <input type="checkbox" id="pds-timetaxable" ${proj.timeTaxable?'checked':''} style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer" onchange="savePDSetting('${pid}','timeTaxable',this.checked)">
+          Time is taxable
         </label>
       </div>
     </div>
-    <div class="fg">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-        <input type="checkbox" ${proj.timeTaxable?'checked':''} style="accent-color:var(--russet);width:15px;height:15px;cursor:pointer" onchange="savePDSetting('${pid}','timeTaxable',this.checked)">
-        Time is taxable in this state
-      </label>
-    </div>
-    <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:8px">Changes save automatically.</div>
+    <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:8px">Changes save automatically. Picking a state pulls in its tax rate + defaults; editing the state in App Settings cascades back here.</div>
   </div>`;
 }
 
@@ -12519,21 +12538,20 @@ function savePDSetting(pid, key, val) {
   toast('Setting updated.');
 }
 
-// State change on the project — if the typed state matches one in App Settings
-// → Tax States, auto-fill the project's tax rate from the matched entry.
-// Manual override still works: the user can edit Tax Rate % afterward.
-function onProjectStateChange(pid, name) {
-  const p = S.projects.find(x => x.id === pid);
-  if (!p) return;
-  p.state = name;
-  const matched = name ? getTaxState(name) : null;
-  if (matched) {
-    p.taxRate = Number(matched.taxRate) || 0;
-    const rateInput = $c('pds-taxrate');
-    if (rateInput) rateInput.value = p.taxRate;
-    toast('Tax rate filled from "' + matched.name + '" (' + p.taxRate + '%).');
-  }
-  save();
+// State change on the PD Settings tab. Uses the unified state-select flow:
+// picking a configured tax state pulls in its rate + taxFreight + timeTaxable
+// defaults; picking "+ Add New State" opens the tax state editor inline.
+function onPDStateChange(pid) {
+  onStateSelectChange('pds-state', 'pds-taxrate', 'pds-taxfreight', 'pds-timetaxable', (resolved) => {
+    const p = S.projects.find(x => x.id === pid);
+    if (!p) return;
+    p.state       = resolved || '';
+    p.taxRate     = parseFloat($c('pds-taxrate').value) || 0;
+    p.taxFreight  = $c('pds-taxfreight').checked;
+    p.timeTaxable = $c('pds-timetaxable').checked;
+    save();
+    if (resolved) toast('Tax settings filled from "' + resolved + '".');
+  });
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -12637,9 +12655,11 @@ function openNewProjModal(returnView, stagePreset) {
   $c('np-type').value  = 'residential';
   $c('np-stage').value = stagePreset || 'lead';
   $c('np-markup').value = 25;
+  $c('np-state').innerHTML = buildStateSelectOptions('');
   $c('np-state').value = '';
   $c('np-taxrate').value = 0;
   $c('np-taxfreight').checked = false;
+  $c('np-timetaxable').checked = false;
   $c('modal-new').classList.add('open');
   setTimeout(() => $c('np-name').focus(), 80);
 }
@@ -12659,9 +12679,10 @@ function createProject() {
     stage:   $c('np-stage').value,
     created: new Date().toISOString().slice(0,10),
     markupPct: parseFloat($c('np-markup').value) || 25,
-    state: $c('np-state').value.trim(),
+    state: ($c('np-state').value === '__new__' ? '' : $c('np-state').value).trim(),
     taxRate: parseFloat($c('np-taxrate').value) || 0,
     taxFreight: $c('np-taxfreight').checked,
+    timeTaxable: $c('np-timetaxable').checked,
   };
  
   S.projects.push(p);
@@ -12760,9 +12781,11 @@ function openProjectSettings(pid) {
   $c('ps-city').value = p.city || '';
   $c('ps-zip').value = p.zip || '';
   $c('ps-markup').value = p.markupPct != null ? p.markupPct : 25;
+  $c('ps-state').innerHTML = buildStateSelectOptions(p.state || '');
   $c('ps-state').value = p.state || '';
   $c('ps-taxrate').value = p.taxRate || 0;
   $c('ps-taxfreight').checked = !!p.taxFreight;
+  $c('ps-timetaxable').checked = !!p.timeTaxable;
   $c('modal-proj-settings').classList.add('open');
 }
 
@@ -12778,9 +12801,10 @@ function saveProjectSettings() {
   p.city = $c('ps-city').value.trim();
   p.zip = $c('ps-zip').value.trim();
   p.markupPct = parseFloat($c('ps-markup').value) || 25;
-  p.state = $c('ps-state').value.trim();
+  p.state = ($c('ps-state').value === '__new__' ? '' : $c('ps-state').value).trim();
   p.taxRate = parseFloat($c('ps-taxrate').value) || 0;
   p.taxFreight = $c('ps-taxfreight').checked;
+  p.timeTaxable = $c('ps-timetaxable').checked;
   save();
 
   closeModal('modal-proj-settings');
@@ -14576,10 +14600,9 @@ function setItemType(type) {
   if ($c('ai-contact-brand-row'))       $c('ai-contact-brand-row').style.display       = constructed ? 'none' : '';
   if ($c('ai-constructed-vendor-note')) $c('ai-constructed-vendor-note').style.display = constructed ? '' : 'none';
   if ($c('ai-charges-section'))         $c('ai-charges-section').style.display         = constructed ? 'none' : '';
-  // Actual Cost Paid lives at the item level for readymade/openline; for
-  // constructed it's per-component (each component row has its own input)
-  // and the item-level rollup shows the sum + invoices-billed total.
-  if ($c('ai-cost-actual-wrap'))        $c('ai-cost-actual-wrap').style.display        = constructed ? 'none' : '';
+  // Actual Cost Paid is captured on the PM detail panel, not here. The
+  // rollup display below still shows the sum of per-component actuals (read
+  // from stored data) + invoiced total for constructed items.
   if ($c('ai-constructed-rollup'))      $c('ai-constructed-rollup').style.display      = constructed ? '' : 'none';
   if (constructed) refreshConstructedRollup();
   // When switching INTO constructed mid-edit, drop any item-level freight
@@ -14676,9 +14699,6 @@ function renderModalComponents() {
       <div class="frow">
         <div class="fg"><label class="fl">Net Cost (each)</label>
           <input type="text" class="fi comp-net" value="${escH(c.netCost)}" placeholder="$0.00" oninput="refreshConstructedRollup()">
-        </div>
-        <div class="fg"><label class="fl">Cost Paid (each) <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— actual</span></label>
-          <input type="text" class="fi comp-cost-actual" value="${escH(c.costActual||'')}" placeholder="$0.00" oninput="refreshConstructedRollup()">
         </div>
         <div class="fg" style="max-width:70px"><label class="fl">Qty</label>
           <input type="number" class="fi comp-qty" value="${c.qty || 1}" min="0.25" step="0.25" style="text-align:center" oninput="refreshConstructedRollup()">
@@ -14807,7 +14827,8 @@ function readModalComponentsFromDOM() {
       // those mutate _modalComponents[i] directly via onChange callbacks,
       // so legacy `c.contact` is preserved in place — never read from DOM.
       _modalComponents[i].netCost = el.querySelector('.comp-net')?.value.trim() || '';
-      _modalComponents[i].costActual = el.querySelector('.comp-cost-actual')?.value.trim() || '';
+      // costActual is no longer editable from this modal — preserve whatever
+      // was loaded from the item (edited via the PM detail panel instead).
       _modalComponents[i].qty = parseFloat(el.querySelector('.comp-qty')?.value) || 1;
       _modalComponents[i].qtyUnit = el.querySelector('.comp-unit')?.value || '';
       _modalComponents[i].allowance = el.querySelector('.comp-allowance')?.checked || false;
@@ -15191,14 +15212,14 @@ function getItemBilledOnInvoices(itemId) {
 function refreshConstructedRollup() {
   const wrap = $c('ai-constructed-rollup');
   if (!wrap || wrap.style.display === 'none') return;
-  // Read live values from the DOM rather than _modalComponents — covers the
-  // case where the user is mid-edit and DOM is ahead of the in-memory copy.
+  // costActual is no longer editable in this modal — read it from the
+  // in-memory _modalComponents copy (loaded from the saved item). Net + qty
+  // remain in DOM since they ARE editable here.
   let actualTotal = 0;
-  $a('#ai-components-list .person-entry').forEach(el => {
-    const costEl = el.querySelector('.comp-cost-actual');
+  $a('#ai-components-list .person-entry').forEach((el, i) => {
     const netEl  = el.querySelector('.comp-net');
     const qtyEl  = el.querySelector('.comp-qty');
-    const cost = parse$(costEl?.value || '');
+    const cost = parse$(_modalComponents[i]?.costActual || '');
     const net  = parse$(netEl?.value || '');
     const qty  = parseFloat(qtyEl?.value) || 1;
     // If costPaid blank, treat as net (matches legacy "leave blank to use net" intent).
@@ -15616,7 +15637,6 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-name').value = item.name || '';
   $c('ai-itemcode').value = item.itemCode || '';
   $c('ai-net').value = item.netPrice || '';
-  $c('ai-cost-actual').value = item.costActual || '';
   $c('ai-qty').value = item.qty || '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions(item.qtyUnit || '');
   $c('ai-category').value = item.category || '';
@@ -15691,9 +15711,9 @@ function saveItem() {
     taxExempt: $c('ai-taxexempt').checked,
     billCostOnly: $c('ai-billcost').checked,
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
-    // Constructed items track actual cost per-component, not at the item
-    // level — clear the item-level field on save (the input is hidden).
-    costActual: type === 'constructed' ? '' : $c('ai-cost-actual').value.trim(),
+    // Actual cost paid is owned by the PM detail panel, not this proposal
+    // modal — preserve whatever value was already stored on the item.
+    costActual: existingItem?.costActual || '',
     itemTypeId: itemTypeId || getUndefinedItemTypeId(),
     vendorId: pickedVendorId,
     vendorContactId: pickedContactId,
@@ -18237,7 +18257,14 @@ function renderTaxStatesList() {
   }).join('');
 }
 
-function openTaxStateEditor(id) {
+// Optional callback fired with the saved state's name after a successful
+// save. Used by project create/settings flows when the user picks "+ Add
+// New State" from the inline dropdown — they get bounced into the editor,
+// and on save the dropdown re-renders with the new state pre-selected.
+let _taxStateSaveCallback = null;
+
+function openTaxStateEditor(id, callback) {
+  _taxStateSaveCallback = callback || null;
   const t = id ? (S.taxStates || []).find(x => x.id === id) : null;
   $c('ts-modal-title').textContent = t ? 'Edit Tax State' : 'New Tax State';
   $c('ts-id').value = t?.id || '';
@@ -18246,6 +18273,8 @@ function openTaxStateEditor(id) {
   $c('ts-resale').value = t?.resaleNumber || '';
   $c('ts-frequency').value = t?.filingFrequency || '';
   $c('ts-notes').value = t?.notes || '';
+  $c('ts-taxfreight').checked  = !!t?.taxFreight;
+  $c('ts-timetaxable').checked = !!t?.timeTaxable;
   $c('ts-delete-btn').style.display = t ? '' : 'none';
   $c('ts-error').style.display = 'none';
   $c('modal-tax-state').classList.add('open');
@@ -18264,12 +18293,14 @@ function saveTaxState() {
     resaleNumber: $c('ts-resale').value.trim(),
     filingFrequency: $c('ts-frequency').value,
     notes: $c('ts-notes').value.trim(),
+    taxFreight:  $c('ts-taxfreight').checked,
+    timeTaxable: $c('ts-timetaxable').checked,
   };
   if (id) {
     const t = (S.taxStates || []).find(x => x.id === id);
     if (t) Object.assign(t, fields);
-    // If the tax rate changed, prompt to cascade to existing projects on this state
-    cascadeTaxRateToProjects(name, fields.taxRate);
+    // Cascade rate + freight + time-taxable to existing projects on this state
+    cascadeTaxStateToProjects(name, fields);
   } else {
     if (!S.taxStates) S.taxStates = [];
     S.taxStates.push({ id: uid(), ...fields });
@@ -18278,15 +18309,99 @@ function saveTaxState() {
   closeModal('modal-tax-state');
   renderTaxStatesList();
   toast(id ? 'Tax state updated.' : 'Tax state added.');
+  // Fire callback after the rest so callers see the updated S.taxStates.
+  if (_taxStateSaveCallback) {
+    const cb = _taxStateSaveCallback;
+    _taxStateSaveCallback = null;
+    cb(name);
+  }
 }
 
-// When a state's rate changes, offer to update existing projects on that state.
-// Without this, projects keep their original rate even though the state moved.
-function cascadeTaxRateToProjects(stateName, newRate) {
-  const projs = projectsUsingTaxState(stateName).filter(p => Number(p.taxRate) !== Number(newRate));
-  if (projs.length === 0) return;
-  if (!confirm(projs.length + ' project' + (projs.length!==1?'s':'') + ' on "' + stateName + '" currently use a different tax rate. Update them all to ' + newRate + '%?')) return;
-  projs.forEach(p => { p.taxRate = newRate; });
+// When a tax state's settings change, update all projects tagged to it AND
+// re-compute any open draft invoices on those projects. The user is asked
+// once; if they decline, only the tax state row is updated. Issued invoices
+// (sent / partial / paid / cancelled) keep their snapshotted rate.
+function cascadeTaxStateToProjects(stateName, newFields) {
+  const projs = projectsUsingTaxState(stateName);
+  if (!projs.length) return;
+  const changed = projs.filter(p =>
+    Number(p.taxRate)   !== Number(newFields.taxRate) ||
+    !!p.taxFreight      !== !!newFields.taxFreight    ||
+    !!p.timeTaxable     !== !!newFields.timeTaxable
+  );
+  if (!changed.length) return;
+  const draftCount = (S.invoices||[]).filter(inv =>
+    inv.status === 'draft' && changed.some(p => p.id === inv.projectId)
+  ).length;
+  const msg = changed.length + ' project' + (changed.length!==1?'s':'') +
+    ' on "' + stateName + '" will be updated to match the new settings' +
+    (draftCount ? ' (and ' + draftCount + ' open draft invoice' + (draftCount!==1?'s':'') + ' recomputed)' : '') +
+    '. Continue?';
+  if (!confirm(msg)) return;
+  changed.forEach(p => {
+    p.taxRate     = Number(newFields.taxRate) || 0;
+    p.taxFreight  = !!newFields.taxFreight;
+    p.timeTaxable = !!newFields.timeTaxable;
+  });
+  // Recompute open drafts. Per-line .taxable flags are not retroactively
+  // flipped — they reflect the decision at the time the line was added.
+  // Only the invoice-level rate + freightTaxable snapshot move.
+  (S.invoices||[]).forEach(inv => {
+    if (inv.status !== 'draft') return;
+    if (!changed.some(p => p.id === inv.projectId)) return;
+    inv.taxRate        = Number(newFields.taxRate) || 0;
+    inv.freightTaxable = !!newFields.taxFreight;
+    if (typeof recalcStoredInvoiceTotals === 'function') recalcStoredInvoiceTotals(inv);
+  });
+}
+
+// Builds an <option> string list for state pickers from S.taxStates, with
+// a "+ Add New State…" option at the bottom. Preserves legacy free-text
+// state values that don't match a configured tax state.
+function buildStateSelectOptions(currentValue) {
+  const states = (S.taxStates || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const norm = (currentValue || '').toLowerCase();
+  let html = '<option value="">— Select a state —</option>';
+  states.forEach(s => {
+    const sel = (s.name || '').toLowerCase() === norm ? ' selected' : '';
+    html += `<option value="${escH(s.name)}"${sel}>${escH(s.name)} (${(Number(s.taxRate)||0).toFixed(2)}%)</option>`;
+  });
+  if (currentValue && !states.some(s => (s.name||'').toLowerCase() === norm)) {
+    html += `<option value="${escH(currentValue)}" selected>${escH(currentValue)} — not in App Settings</option>`;
+  }
+  html += '<option value="__new__" style="font-style:italic;color:var(--russet)">+ Add New State…</option>';
+  return html;
+}
+
+// Wired to <select> onchange for project create / settings / PD-settings.
+// Selecting "+ Add New State" opens the tax state editor; otherwise it
+// reads the matched state from S.taxStates and pushes its tax rate +
+// taxFreight + timeTaxable into the sibling inputs. `afterApply` (optional)
+// fires with the resolved state name after the inputs are updated — used
+// by PD-settings to persist immediately.
+function onStateSelectChange(selectId, taxRateId, taxFreightId, timeTaxableId, afterApply) {
+  const sel = $c(selectId);
+  if (!sel) return;
+  const val = sel.value;
+  if (val === '__new__') {
+    sel.value = '';
+    openTaxStateEditor(null, (savedName) => {
+      sel.innerHTML = buildStateSelectOptions(savedName);
+      sel.value = savedName;
+      _applyTaxStateToInputs(savedName, taxRateId, taxFreightId, timeTaxableId);
+      if (afterApply) afterApply(savedName);
+    });
+    return;
+  }
+  _applyTaxStateToInputs(val, taxRateId, taxFreightId, timeTaxableId);
+  if (afterApply) afterApply(val);
+}
+
+function _applyTaxStateToInputs(stateName, taxRateId, taxFreightId, timeTaxableId) {
+  const ts = stateName ? (S.taxStates||[]).find(s => (s.name||'').toLowerCase() === stateName.toLowerCase()) : null;
+  if (taxRateId      && $c(taxRateId))      $c(taxRateId).value      = ts ? (Number(ts.taxRate)||0) : 0;
+  if (taxFreightId   && $c(taxFreightId))   $c(taxFreightId).checked = ts ? !!ts.taxFreight  : false;
+  if (timeTaxableId  && $c(timeTaxableId))  $c(timeTaxableId).checked = ts ? !!ts.timeTaxable : false;
 }
 
 function deleteTaxState(id) {
