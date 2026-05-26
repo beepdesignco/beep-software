@@ -13612,10 +13612,51 @@ function calcProposalTotals(prop, pid) {
   };
 }
 
+// Pure-informational: sum of allowance items at their client price (and
+// component-level allowances inside non-allowance constructed items). Does
+// not feed into proposal totals — those already count allowance items as
+// regular line items. Surfaced separately so the studio can see "what's
+// still placeholder budget" at a glance.
+function calcProposalAllowanceTotal(prop, pid) {
+  let total = 0;
+  let count = 0;
+  (prop.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      if (item.allowance) {
+        count++;
+        if (item.type === 'constructed') {
+          (item.components || []).forEach(c => {
+            const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+            const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
+            total += cNet * (1 + cMarkup);
+          });
+        } else {
+          const qty = parseFloat(item.qty) || 1;
+          total += getItemClient(item, pid) * qty;
+        }
+      } else if (item.type === 'constructed') {
+        (item.components || []).forEach(c => {
+          if (!c.allowance) return;
+          count++;
+          const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+          const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
+          total += cNet * (1 + cMarkup);
+        });
+      }
+    });
+  });
+  return { total, count };
+}
+
 function renderTotals(prop, pid) {
   const proj = getProject(pid);
   const t = calcProposalTotals(prop, pid);
   const taxLabel = proj?.taxRate ? `Tax (${proj.taxRate}%)` : 'Tax (0%)';
+
+  const allow = calcProposalAllowanceTotal(prop, pid);
+  const allowRow = allow.count > 0
+    ? `<tr style="color:var(--text-light);font-style:italic"><td>Allowances <span style="font-style:normal;font-size:10px;text-transform:uppercase;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;color:var(--text-light);margin-left:6px">informational · ${allow.count} item${allow.count!==1?'s':''}</span></td><td id="t-allow">${fmt(allow.total)}</td></tr>`
+    : '';
 
   return `
     <div class="prop-totals">
@@ -13625,6 +13666,7 @@ function renderTotals(prop, pid) {
         ${t.adjacentCharges > 0 ? `<tr><td>Other associated charges</td><td id="t-adj">${fmt(t.adjacentCharges)}</td></tr>` : ''}
         ${t.tax > 0 ? `<tr><td>${taxLabel}</td><td id="t-tax">${fmt(t.tax)}</td></tr>` : ''}
         <tr class="ttl-row"><td>Total</td><td id="t-grd">${fmt(t.total)}</td></tr>
+        ${allowRow}
       </table>
     </div>
     `;
