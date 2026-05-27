@@ -6397,6 +6397,8 @@ function dbProjectToS(p) {
     settings: p.settings || {},
     notifications: p.notifications || [],
     files: p.files || [],
+    installDateValue: p.install_date_value || '',
+    installDatePrecision: p.install_date_precision || '',
     linkedContacts: (p.project_contacts || []).map(pc => ({
       contactId: pc.contact_id,
       role: pc.role || '',
@@ -6584,6 +6586,10 @@ function dbItemToS(it) {
     description: it.description || '',
     dueDate: it.due_date || '',
     invoicePhase: it.invoice_phase || '',
+    leadTimeWeeksMin:    it.lead_time_weeks_min    ?? null,
+    leadTimeWeeksMax:    it.lead_time_weeks_max    ?? null,
+    leadTimeStartManual: it.lead_time_start_manual || '',
+    orderedAt:           it.ordered_at             || '',
     allowance: !!it.allowance,
     taxExempt: !!it.tax_exempt,
     billCostOnly: !!it.bill_cost_only,
@@ -6632,6 +6638,10 @@ function dbCompToS(c) {
     status: c.status || 'proposed',
     dueDate: c.due_date || '',
     invoicePhase: c.invoice_phase || '',
+    leadTimeWeeksMin:    c.lead_time_weeks_min    ?? null,
+    leadTimeWeeksMax:    c.lead_time_weeks_max    ?? null,
+    leadTimeStage:       c.lead_time_stage        ?? null,
+    leadTimeStartManual: c.lead_time_start_manual || '',
     description: c.description || '',
     note: c.note || '',
     allowance: !!c.allowance,
@@ -6999,6 +7009,8 @@ function projectToDB(p, studioId) {
     settings: p.settings || {},
     notifications: p.notifications || [],
     files: p.files || [],
+    install_date_value:     p.installDateValue     || null,
+    install_date_precision: p.installDatePrecision || null,
     deleted_at: null,
   };
 }
@@ -7127,6 +7139,10 @@ function itemToDB(it) {
     net_price: _parseMoney(it.netPrice), qty: _parseMoney(it.qty) || 1, qty_unit: it.qtyUnit || null,
     category: it.category || null, notes: it.notes || null, description: it.description || null,
     due_date: it.dueDate || null, invoice_phase: it.invoicePhase || null,
+    lead_time_weeks_min:    it.leadTimeWeeksMin    ?? null,
+    lead_time_weeks_max:    it.leadTimeWeeksMax    ?? null,
+    lead_time_start_manual: it.leadTimeStartManual || null,
+    ordered_at:             it.orderedAt           || null,
     allowance: !!it.allowance, tax_exempt: !!it.taxExempt, bill_cost_only: !!it.billCostOnly,
     adjust_markup: it.adjustMarkup ?? null, group_components: !!it.groupComponents,
     additional_charges: it.additionalCharges || [],
@@ -7158,6 +7174,10 @@ function componentToDB(c) {
     brand_id:          c.brandId         || null,
     net_cost: _parseMoney(c.netCost), qty: Number(c.qty || 1), qty_unit: c.qtyUnit || null,
     status: c.status || 'proposed', due_date: c.dueDate || null, invoice_phase: c.invoicePhase || null,
+    lead_time_weeks_min:    c.leadTimeWeeksMin    ?? null,
+    lead_time_weeks_max:    c.leadTimeWeeksMax    ?? null,
+    lead_time_stage:        c.leadTimeStage       ?? null,
+    lead_time_start_manual: c.leadTimeStartManual || null,
     description: c.description || null, note: c.note || null,
     allowance: !!c.allowance, tax_exempt: !!c.taxExempt, bill_cost_only: !!c.billCostOnly,
     adjust_markup: c.adjustMarkup ?? null,
@@ -8544,6 +8564,37 @@ function renderPDOverview(proj, pid) {
     html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:18px;color:var(--text-light);font-style:italic;font-size:13px">No client linked. <button class="btn btn-ghost btn-sm" onclick="openProjectSettings('${pid}')">Edit project</button></div>`;
   }
 
+  // Install Date — the anchor every item's lead-time math is measured against.
+  // "day" shows exact, "week" shows "Week of ...", "month" shows "April 2026".
+  const precision = proj.installDatePrecision || '';
+  const installVal = proj.installDateValue || '';
+  let installLabel = '';
+  if (installVal) {
+    if (precision === 'week')       installLabel = `Week of ${fmtPrettyDate(weekOfISO(installVal), {withYear:true})}`;
+    else if (precision === 'month') installLabel = fmtMonthYear(installVal);
+    else                            installLabel = fmtPrettyDate(installVal, {withYear:true});
+  }
+  html += `
+  <div style="background:var(--white);border-radius:var(--rl);padding:14px 18px;border:1px solid var(--border);margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid)">Project Install Date</div>
+      ${installLabel ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--pecan);font-weight:600">${escH(installLabel)}</div>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select class="fi" style="font-size:12px;padding:6px 8px;max-width:120px" onchange="saveProjectField('${pid}','installDatePrecision',this.value); if(!this.value){saveProjectField('${pid}','installDateValue','')}">
+        <option value=""      ${!precision?'selected':''}>Not set</option>
+        <option value="day"   ${precision==='day'?'selected':''}>Exact day</option>
+        <option value="week"  ${precision==='week'?'selected':''}>Week of</option>
+        <option value="month" ${precision==='month'?'selected':''}>Month of</option>
+      </select>
+      ${precision === 'month' ? `
+        <input type="month" class="fi" style="font-size:12px;padding:6px 8px;max-width:160px" value="${escH(installVal ? installVal.slice(0,7) : '')}" onchange="saveProjectField('${pid}','installDateValue',this.value?this.value+'-01':'')">
+      ` : precision ? `
+        <input type="date" class="fi" style="font-size:12px;padding:6px 8px;max-width:160px" value="${escH(installVal)}" onchange="saveProjectField('${pid}','installDateValue',this.value)">
+      ` : '<span style="font-size:11px;color:var(--text-light);font-style:italic">Pick a precision to set a date.</span>'}
+    </div>
+  </div>`;
+
   // Quick stats
   html += `
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
@@ -9165,6 +9216,17 @@ function getItemMainImage(item) {
   return images[0];
 }
 
+// Inline-edit helper for project-level fields off the Overview page.
+// Mirrors savePMField's style (single field, save+rerender) so any onchange
+// handler in the project UI can wire up with one call.
+function saveProjectField(pid, key, val) {
+  const p = (S.projects || []).find(x => x.id === pid);
+  if (!p) return;
+  p[key] = val;
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+}
+
 function savePMField(pid, spId, itemId, key, val) {
   const item = _getItem(pid, spId, itemId);
   if (!item) return;
@@ -9172,6 +9234,11 @@ function savePMField(pid, spId, itemId, key, val) {
   item[key] = val;
   if (key === 'status' && val === 'pending_status') {
     autoEngageFlags(pid, spId, itemId, val);
+  }
+  // Stamp orderedAt the first time the item flips to "ordered". Never
+  // overwrite a prior stamp — re-ordering doesn't restart the clock.
+  if (key === 'status' && val === 'ordered' && !item.orderedAt) {
+    item.orderedAt = (typeof _todayISO === 'function') ? _todayISO() : new Date().toISOString().slice(0, 10);
   }
   if (key === 'status' && item.groupComponents) {
     (item.components||[]).forEach(c => {
@@ -9190,6 +9257,146 @@ function savePMField(pid, spId, itemId, key, val) {
       payload: { item_id: itemId, item_name: item.name || '', from: oldVal || null, to: val || null, project_id: pid },
     });
   }
+}
+
+// Renders the Lead Time card on item detail. For non-constructed items the
+// weeks inputs are user-editable; for constructed items they're derived from
+// component stages and shown read-only with a "set per component" hint.
+// Manual start date overrides the auto-trigger (status flip to Ordered).
+function renderItemLeadTimeCard(item, pid, spId, itemId) {
+  if (!item) return '';
+  const project = (S.projects || []).find(p => p.id === pid);
+  const isConstructed = item.type === 'constructed';
+  const { weeksMin, weeksMax } = itemLeadTimeWeeks(item);
+  const hasOwnWeeks = !isConstructed;
+  const arrival = expectedArrivalForItem(item);
+  const target = arrivalTargetForItem(item, project);
+  const cmp = arrival && target ? compareArrivalToTarget(arrival, target.iso, target.precision) : 'unknown';
+  const startInfo = effectiveLeadTimeStart(item);
+
+  // Status pill colors mirror existing palette: green for on-time, red-ish for late.
+  let statusPill = '';
+  if (arrival && target) {
+    if (cmp === 'on-time') {
+      statusPill = `<span style="display:inline-block;background:rgba(40,140,80,0.1);color:#287a4a;border:1px solid rgba(40,140,80,0.2);font-family:var(--font-b);font-size:9px;padding:2px 8px;border-radius:8px;margin-left:8px">ON TIME</span>`;
+    } else if (cmp === 'late') {
+      statusPill = `<span style="display:inline-block;background:rgba(180,50,50,0.1);color:#b33;border:1px solid rgba(180,50,50,0.2);font-family:var(--font-b);font-size:9px;padding:2px 8px;border-radius:8px;margin-left:8px">LATE</span>`;
+    }
+  }
+
+  // ETA presentation.
+  let etaLine = '';
+  if (arrival) {
+    const label = fmtWeekOfRange(arrival.isoMin, arrival.isoMax);
+    const prefix = arrival.isProjected ? 'Projected (if ordered today):' : 'Expected arrival:';
+    etaLine = `<div style="font-family:var(--font-b);font-size:13px;color:var(--pecan);font-weight:700;margin-top:4px">${escH(prefix)} ${escH(label)}${statusPill}</div>`;
+    if (arrival.isProjected) {
+      etaLine += `<div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">Lead-time clock starts when item is marked Ordered. Override below to anchor it sooner.</div>`;
+    } else if (startInfo.source === 'manual') {
+      etaLine += `<div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">Manual start: ${escH(fmtPrettyDate(startInfo.iso, {withYear:true}))}</div>`;
+    } else {
+      etaLine += `<div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">Ordered: ${escH(fmtPrettyDate(startInfo.iso, {withYear:true}))}</div>`;
+    }
+  } else {
+    etaLine = `<div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:4px">Set lead time below to see an expected arrival.</div>`;
+  }
+
+  // Inputs.
+  const minVal = item.leadTimeWeeksMin != null ? String(item.leadTimeWeeksMin) : '';
+  const maxVal = item.leadTimeWeeksMax != null && item.leadTimeWeeksMax !== item.leadTimeWeeksMin ? String(item.leadTimeWeeksMax) : '';
+  const manualVal = item.leadTimeStartManual || '';
+
+  // For constructed items, show the per-stage breakdown so users can verify
+  // the math (and spot a mis-staged component) without leaving the card.
+  let stageBreakdown = '';
+  if (isConstructed) {
+    const { stages } = stackedLeadTimeForItem(item);
+    if (stages.length) {
+      stageBreakdown = `
+        <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+          <div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b);margin-bottom:4px">Stage Breakdown</div>
+          ${stages.map(st => {
+            const comps = st.components.map(c => {
+              const cn = c.name || c.componentType || 'component';
+              const cm = Number(c.leadTimeWeeksMin) || 0;
+              const cx = Number(c.leadTimeWeeksMax) || cm;
+              const cw = cm === cx ? `${cm}` : `${cm}–${cx}`;
+              return `${escH(cn)} ${cw}w`;
+            }).join(', ');
+            const stW = st.weeksMin === st.weeksMax ? `${st.weeksMax}` : `${st.weeksMin}–${st.weeksMax}`;
+            return `<div style="font-size:11px;color:var(--text-mid);margin-bottom:2px"><strong style="color:var(--pecan)">Stage ${st.stage} · ${stW} wk</strong> <span style="color:var(--text-light)">(${comps || 'no components'})</span></div>`;
+          }).join('')}
+        </div>`;
+    }
+  }
+  const inputsBlock = isConstructed ? `
+    <div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);margin-bottom:6px">Lead time stacks from components:</div>
+    <div style="font-family:var(--font-h);font-weight:700;font-size:16px;color:var(--pecan)">${weeksMax > 0 ? (weeksMin === weeksMax ? `${weeksMin} weeks` : `${weeksMin}–${weeksMax} weeks`) : '—'}</div>
+    <div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">Set per-component lead time + stage below.</div>
+    ${stageBreakdown}
+  ` : `
+    <div class="frow" style="gap:8px;align-items:end">
+      <div class="fg" style="max-width:90px">
+        <label class="fl">Weeks</label>
+        <input type="number" min="0" step="1" class="fi" value="${escH(minVal)}" placeholder="e.g. 8" onchange="saveItemLeadTime('${pid}','${spId}','${itemId}','min',this.value)">
+      </div>
+      <div class="fg" style="max-width:90px">
+        <label class="fl" title="Optional — for a range like 13–16 weeks">to (max)</label>
+        <input type="number" min="0" step="1" class="fi" value="${escH(maxVal)}" placeholder="—" onchange="saveItemLeadTime('${pid}','${spId}','${itemId}','max',this.value)">
+      </div>
+    </div>
+  `;
+
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid)">Lead Time</div>
+      </div>
+      ${inputsBlock}
+      <div class="frow" style="gap:8px;margin-top:10px;align-items:end">
+        <div class="fg" style="max-width:170px">
+          <label class="fl" title="Overrides the auto-start from status flip">Start Date Override</label>
+          <input type="date" class="fi" value="${escH(manualVal)}" onchange="saveItemLeadTime('${pid}','${spId}','${itemId}','manual',this.value)">
+        </div>
+        <div class="fg" style="max-width:160px">
+          <label class="fl" title="Set automatically when the item flips to Ordered">Ordered On</label>
+          <input type="date" class="fi" value="${escH(item.orderedAt||'')}" onchange="saveItemLeadTime('${pid}','${spId}','${itemId}','orderedAt',this.value)" style="background:rgba(var(--text-rgb),0.02)">
+        </div>
+      </div>
+      ${etaLine}
+    </div>
+  `;
+}
+
+// Lead-time field saver. Numbers go through Number() with a 0-floor; date
+// strings pass through. min defaults max when max is blank so the simple
+// "8 weeks" case keeps producing a single-week ETA, not a range.
+function saveItemLeadTime(pid, spId, itemId, key, val) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  if (key === 'min') {
+    const n = val === '' ? null : Math.max(0, Math.floor(Number(val) || 0));
+    item.leadTimeWeeksMin = n;
+    // Keep max in sync when not explicitly set higher than min.
+    if (n != null && (item.leadTimeWeeksMax == null || item.leadTimeWeeksMax < n)) {
+      item.leadTimeWeeksMax = n;
+    }
+    if (n == null) item.leadTimeWeeksMax = null;
+  } else if (key === 'max') {
+    const n = val === '' ? null : Math.max(0, Math.floor(Number(val) || 0));
+    // If max is blank, collapse to min (no-range mode).
+    if (n == null) {
+      item.leadTimeWeeksMax = item.leadTimeWeeksMin;
+    } else {
+      item.leadTimeWeeksMax = Math.max(n, item.leadTimeWeeksMin || 0);
+    }
+  } else if (key === 'manual') {
+    item.leadTimeStartManual = val || '';
+  } else if (key === 'orderedAt') {
+    item.orderedAt = val || '';
+  }
+  save();
+  renderProjectDetail();
 }
 
 function toggleGroupComponents(pid, spId, itemId) {
@@ -9228,6 +9435,39 @@ function saveCompField(pid, spId, itemId, compId, key, val) {
       payload: { item_id: itemId, component_id: compId, component_name: comp.name || '', from: oldVal || null, to: val || null, project_id: pid },
     });
   }
+}
+
+// Keep a component's lead-time max in sync with its min when the max field
+// is left blank or set lower than min. Called after a min-change so the
+// "single value" UX keeps producing a non-range ETA.
+function saveCompLeadTimeMaxSync(pid, spId, itemId, compId) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const comp = (item.components || []).find(c => c.id === compId);
+  if (!comp) return;
+  const min = comp.leadTimeWeeksMin;
+  if (min == null) { comp.leadTimeWeeksMax = null; }
+  else if (comp.leadTimeWeeksMax == null || comp.leadTimeWeeksMax < min) {
+    comp.leadTimeWeeksMax = min;
+  }
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
+}
+
+// Handle the max-weeks input directly: blank → collapse to min (non-range).
+function saveCompLeadTimeMax(pid, spId, itemId, compId, val) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const comp = (item.components || []).find(c => c.id === compId);
+  if (!comp) return;
+  if (val === '') {
+    comp.leadTimeWeeksMax = comp.leadTimeWeeksMin;
+  } else {
+    const n = Math.max(0, Math.floor(Number(val) || 0));
+    comp.leadTimeWeeksMax = Math.max(n, comp.leadTimeWeeksMin || 0);
+  }
+  save();
+  if (S.currentView === 'project-detail') renderProjectDetail();
 }
 
 // ── Additional actual costs (item + component) ──
@@ -9758,7 +9998,21 @@ function renderPMItemCard(item, sp, pid) {
           <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
         </div>
         ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
-        ${item.dueDate ? `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Due: ${escH(item.dueDate)}</div>` : ''}
+        ${item.dueDate ? `<div style="font-size:10px;color:var(--text-mid);margin-top:2px">Needed: ${escH(item.dueDate)}</div>` : ''}
+        ${(() => {
+          const _proj = (S.projects||[]).find(p=>p.id===pid);
+          const _arr = expectedArrivalForItem(item);
+          if (!_arr) return '';
+          const _tgt = arrivalTargetForItem(item, _proj);
+          const _cmp = _tgt ? compareArrivalToTarget(_arr, _tgt.iso, _tgt.precision) : 'unknown';
+          const _pill = _cmp === 'on-time'
+            ? '<span style="display:inline-block;background:rgba(40,140,80,0.1);color:#287a4a;border:1px solid rgba(40,140,80,0.2);font-family:var(--font-b);font-size:8px;padding:1px 6px;border-radius:6px;margin-left:5px">ON TIME</span>'
+            : _cmp === 'late'
+              ? '<span style="display:inline-block;background:rgba(180,50,50,0.1);color:#b33;border:1px solid rgba(180,50,50,0.2);font-family:var(--font-b);font-size:8px;padding:1px 6px;border-radius:6px;margin-left:5px">LATE</span>'
+              : '';
+          const _prefix = _arr.isProjected ? 'Projected:' : 'Expected:';
+          return `<div style="font-size:10px;color:var(--text-mid);margin-top:2px"><span style="${_arr.isProjected?'font-style:italic':''}">${_prefix} ${escH(fmtWeekOfRange(_arr.isoMin,_arr.isoMax))}</span>${_pill}</div>`;
+        })()}
       </div>
     </div>
     ${!isAllowance ? `
@@ -10280,12 +10534,29 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
             <select class="fi fsel" style="font-size:11px;padding:5px 7px${cGrouped?';opacity:0.5':''}" ${cGrouped?'disabled':''} onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','status',this.value)">${cStatusOpts}</select>
           </div>
           <div>
-            <label class="fl">Due Date</label>
+            <label class="fl" title="When this component must be on site, if earlier than the project install date">Needed On Site</label>
             <input type="date" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.dueDate||'')}" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','dueDate',this.value)">
           </div>
           <div>
             <label class="fl">Invoice Phase</label>
             <input type="text" class="fi" style="font-size:11px;padding:5px 7px" value="${escH(c.invoicePhase||'')}" placeholder="Phase" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','invoicePhase',this.value)">
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;padding-top:8px;border-top:1px dashed var(--border)">
+          <div>
+            <label class="fl" title="Weeks from order date or manual start to expected arrival">Lead Time (wks)</label>
+            <input type="number" min="0" step="1" class="fi" style="font-size:11px;padding:5px 7px" value="${c.leadTimeWeeksMin != null ? c.leadTimeWeeksMin : ''}" placeholder="e.g. 6" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','leadTimeWeeksMin',this.value===''?null:Math.max(0,Math.floor(Number(this.value)||0))); saveCompLeadTimeMaxSync('${pid}','${spId}','${itemId}','${c.id}')">
+          </div>
+          <div>
+            <label class="fl" title="Optional — for a range like 13–16 weeks">to (max)</label>
+            <input type="number" min="0" step="1" class="fi" style="font-size:11px;padding:5px 7px" value="${c.leadTimeWeeksMax != null && c.leadTimeWeeksMax !== c.leadTimeWeeksMin ? c.leadTimeWeeksMax : ''}" placeholder="—" onchange="saveCompLeadTimeMax('${pid}','${spId}','${itemId}','${c.id}',this.value)">
+          </div>
+          <div>
+            <label class="fl" title="Stage 1 components run in parallel. Stage 2+ starts only after every stage-1 component arrives. Use stage 2 for labor that needs the materials, etc.">Stage</label>
+            <select class="fi fsel" style="font-size:11px;padding:5px 7px" onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','leadTimeStage',this.value===''?null:Math.max(1,Math.floor(Number(this.value)||1)))">
+              ${[1,2,3,4,5].map(n => `<option value="${n}" ${(c.leadTimeStage||1)===n?'selected':''}>Stage ${n}</option>`).join('')}
+            </select>
           </div>
         </div>
 
@@ -10465,7 +10736,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
           <div class="frow">
             <div class="fg">
-              <label class="fl">Due Date</label>
+              <label class="fl" title="When this item must be on site, if earlier than the project install date (e.g. wallpaper, plumbing, lighting that gets installed before furniture day)">Date Needed On Site</label>
               <input type="date" class="fi" value="${escH(item.dueDate||'')}" onchange="savePMField('${pid}','${spId}','${itemId}','dueDate',this.value)">
             </div>
             <div class="fg">
@@ -10474,6 +10745,8 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
             </div>
           </div>
         </div>
+
+        ${renderItemLeadTimeCard(item, pid, spId, itemId)}
 
         ${!isAllowance ? renderCostTrackingCard(pid, spId, itemId, item) : ''}
 
@@ -20083,7 +20356,178 @@ function fmtDurationFromHours(decimalHours) {
 // that used to pass `parseFloat(e.hours)`). For seconds-typed values prefer
 // fmtDurationFromSeconds() directly.
 function fmtDuration(decimalHours) { return fmtDurationFromHours(decimalHours); }
- 
+
+// ─────────── LEAD TIME HELPERS ───────────
+// All date inputs are 'YYYY-MM-DD' strings; outputs are the same shape.
+// Constructed-item lead time stacks via per-component stages (1-indexed):
+// components in the same stage run in parallel; total = sum of (max per stage).
+
+const _MS_PER_DAY = 86400000;
+
+function _parseISODate(s) {
+  if (!s || typeof s !== 'string') return null;
+  // Strip any time component a value picked up from a DB column.
+  const m = s.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+}
+function _isoFromDate(d) {
+  if (!(d instanceof Date) || isNaN(d)) return '';
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function _todayISO() { return _isoFromDate(new Date()); }
+function addWeeksToISO(iso, weeks) {
+  const d = _parseISODate(iso);
+  if (!d || !Number.isFinite(weeks)) return '';
+  d.setUTCDate(d.getUTCDate() + Math.round(weeks * 7));
+  return _isoFromDate(d);
+}
+// Snap an ISO date to the Monday of that calendar week (UTC).
+function weekOfISO(iso) {
+  const d = _parseISODate(iso);
+  if (!d) return '';
+  const dow = d.getUTCDay(); // 0=Sun .. 6=Sat
+  const delta = dow === 0 ? -6 : 1 - dow;
+  d.setUTCDate(d.getUTCDate() + delta);
+  return _isoFromDate(d);
+}
+// Human label "Week of MMM D" or "MMM D, YYYY" for a precise day.
+function fmtPrettyDate(iso, opts = {}) {
+  const { withYear = false } = opts;
+  const d = _parseISODate(iso);
+  if (!d) return '';
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const label = `${monthNames[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return withYear ? `${label}, ${d.getUTCFullYear()}` : label;
+}
+function fmtWeekOfRange(isoMin, isoMax) {
+  if (!isoMin && !isoMax) return '';
+  const a = weekOfISO(isoMin || isoMax);
+  const b = weekOfISO(isoMax || isoMin);
+  if (a === b) return `Week of ${fmtPrettyDate(a)}`;
+  return `Week of ${fmtPrettyDate(a)} – Week of ${fmtPrettyDate(b)}`;
+}
+function fmtMonthYear(iso) {
+  const d = _parseISODate(iso);
+  if (!d) return '';
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${monthNames[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+// Effective lead-time start for an item.
+// Manual override > orderedAt timestamp. Returns { iso, isProjected, source }
+// where isProjected=true means we substituted today() so the user can preview.
+function effectiveLeadTimeStart(item) {
+  if (item?.leadTimeStartManual) {
+    return { iso: item.leadTimeStartManual, isProjected: false, source: 'manual' };
+  }
+  if (item?.orderedAt) {
+    return { iso: item.orderedAt, isProjected: false, source: 'ordered' };
+  }
+  return { iso: _todayISO(), isProjected: true, source: 'today' };
+}
+
+// Stacked lead time for a constructed item. Returns { weeksMin, weeksMax,
+// stages: [{stage, weeksMin, weeksMax, components:[...]}, ...] }.
+// Components without a stage default to stage 1. Components without a lead
+// time contribute 0 to their stage (the user just hasn't filled it in yet).
+function stackedLeadTimeForItem(item) {
+  if (!item || item.type !== 'constructed' || !Array.isArray(item.components)) {
+    return { weeksMin: 0, weeksMax: 0, stages: [] };
+  }
+  const byStage = new Map();
+  item.components.forEach(c => {
+    const s = Number(c.leadTimeStage) >= 1 ? Math.floor(Number(c.leadTimeStage)) : 1;
+    if (!byStage.has(s)) byStage.set(s, []);
+    byStage.get(s).push(c);
+  });
+  const stages = [...byStage.keys()].sort((a,b) => a - b).map(s => {
+    const comps = byStage.get(s);
+    let wMin = 0, wMax = 0;
+    comps.forEach(c => {
+      const cMin = Number(c.leadTimeWeeksMin) || 0;
+      const cMax = Number(c.leadTimeWeeksMax) || cMin;
+      if (cMin > wMin) wMin = cMin;
+      if (cMax > wMax) wMax = cMax;
+    });
+    return { stage: s, weeksMin: wMin, weeksMax: wMax, components: comps };
+  });
+  const weeksMin = stages.reduce((s, st) => s + st.weeksMin, 0);
+  const weeksMax = stages.reduce((s, st) => s + st.weeksMax, 0);
+  return { weeksMin, weeksMax, stages };
+}
+
+// The item's own lead-time window. For constructed items, derives from
+// stages; for everything else, reads off the item's own fields.
+function itemLeadTimeWeeks(item) {
+  if (item?.type === 'constructed') {
+    const { weeksMin, weeksMax } = stackedLeadTimeForItem(item);
+    return { weeksMin, weeksMax };
+  }
+  const min = Number(item?.leadTimeWeeksMin) || 0;
+  const max = Number(item?.leadTimeWeeksMax) || min;
+  return { weeksMin: min, weeksMax: max };
+}
+
+// Computed expected arrival window for an item. Returns null when there's
+// no lead time set. isProjected=true means the start date is "today" because
+// the item hasn't been Ordered yet and has no manual start override.
+function expectedArrivalForItem(item) {
+  const { weeksMin, weeksMax } = itemLeadTimeWeeks(item);
+  if (!weeksMin && !weeksMax) return null;
+  const start = effectiveLeadTimeStart(item);
+  return {
+    isoMin: addWeeksToISO(start.iso, weeksMin),
+    isoMax: addWeeksToISO(start.iso, weeksMax),
+    weeksMin, weeksMax,
+    startISO: start.iso,
+    isProjected: start.isProjected,
+    startSource: start.source,
+  };
+}
+
+// Compare arrival to a target date (the item's dueDate / "needed on site",
+// or the project's install date as a fallback). Returns one of:
+//   'on-time' | 'late' | 'unknown'
+// For a range, "late" requires the EARLIEST arrival to miss — the cautious
+// read is that the latest end of a range is the realistic worst case.
+function compareArrivalToTarget(arrival, targetISO, precision) {
+  if (!arrival || !targetISO) return 'unknown';
+  // For 'week' precision, allow arrival anywhere in the same calendar week.
+  // For 'month' precision, allow anywhere in the same month.
+  const targetD = _parseISODate(targetISO);
+  if (!targetD) return 'unknown';
+  let cutoff = targetD;
+  if (precision === 'week') {
+    // Sunday of target's week (anywhere in same week is fine)
+    const dow = targetD.getUTCDay();
+    cutoff = new Date(targetD); cutoff.setUTCDate(targetD.getUTCDate() + (6 - dow));
+  } else if (precision === 'month') {
+    // Last day of target's month
+    cutoff = new Date(Date.UTC(targetD.getUTCFullYear(), targetD.getUTCMonth() + 1, 0));
+  }
+  const cutoffISO = _isoFromDate(cutoff);
+  const worstISO = arrival.isoMax || arrival.isoMin;
+  return worstISO <= cutoffISO ? 'on-time' : 'late';
+}
+
+// Pick the right target date for an item: prefer the item's own dueDate
+// ("needed on site"), fall back to the project's install date.
+function arrivalTargetForItem(item, project) {
+  if (item?.dueDate) return { iso: item.dueDate, precision: 'day', source: 'item' };
+  if (project?.installDateValue) {
+    return {
+      iso: project.installDateValue,
+      precision: project.installDatePrecision || 'day',
+      source: 'project',
+    };
+  }
+  return null;
+}
+
 function startTimer() {
   // Project optional at start — user can pick it before stopping (the
   // proj dropdown stays interactive while running) or set it in the
