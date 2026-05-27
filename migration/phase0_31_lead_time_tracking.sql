@@ -33,38 +33,38 @@ alter table projects
   check (install_date_precision is null or install_date_precision in ('day','week','month'));
 
 -- Items: lead-time window + start-date trigger.
-alter table items
+alter table proposal_items
   add column if not exists lead_time_weeks_min    integer,
   add column if not exists lead_time_weeks_max    integer,
   add column if not exists lead_time_start_manual date,
   add column if not exists ordered_at             date;
 
-alter table items drop constraint if exists items_lead_time_weeks_chk;
-alter table items
-  add constraint items_lead_time_weeks_chk
+alter table proposal_items drop constraint if exists proposal_items_lead_time_weeks_chk;
+alter table proposal_items
+  add constraint proposal_items_lead_time_weeks_chk
   check (
     (lead_time_weeks_min is null and lead_time_weeks_max is null)
     or (lead_time_weeks_min >= 0 and lead_time_weeks_max >= lead_time_weeks_min)
   );
 
 -- Components: lead-time window + stage assignment (1-indexed; 1 = first phase).
-alter table components
+alter table proposal_components
   add column if not exists lead_time_weeks_min    integer,
   add column if not exists lead_time_weeks_max    integer,
   add column if not exists lead_time_stage        integer,
   add column if not exists lead_time_start_manual date;
 
-alter table components drop constraint if exists components_lead_time_weeks_chk;
-alter table components
-  add constraint components_lead_time_weeks_chk
+alter table proposal_components drop constraint if exists proposal_components_lead_time_weeks_chk;
+alter table proposal_components
+  add constraint proposal_components_lead_time_weeks_chk
   check (
     (lead_time_weeks_min is null and lead_time_weeks_max is null)
     or (lead_time_weeks_min >= 0 and lead_time_weeks_max >= lead_time_weeks_min)
   );
 
-alter table components drop constraint if exists components_lead_time_stage_chk;
-alter table components
-  add constraint components_lead_time_stage_chk
+alter table proposal_components drop constraint if exists proposal_components_lead_time_stage_chk;
+alter table proposal_components
+  add constraint proposal_components_lead_time_stage_chk
   check (lead_time_stage is null or lead_time_stage >= 1);
 
 commit;
@@ -74,13 +74,13 @@ select column_name, data_type, is_nullable from information_schema.columns
   where (table_name, column_name) in (
     ('projects', 'install_date_value'),
     ('projects', 'install_date_precision'),
-    ('items',    'lead_time_weeks_min'),
-    ('items',    'lead_time_weeks_max'),
-    ('items',    'lead_time_start_manual'),
-    ('items',    'ordered_at'),
-    ('components', 'lead_time_weeks_min'),
-    ('components', 'lead_time_weeks_max'),
-    ('components', 'lead_time_stage'),
-    ('components', 'lead_time_start_manual')
+    ('proposal_items',      'lead_time_weeks_min'),
+    ('proposal_items',      'lead_time_weeks_max'),
+    ('proposal_items',      'lead_time_start_manual'),
+    ('proposal_items',      'ordered_at'),
+    ('proposal_components', 'lead_time_weeks_min'),
+    ('proposal_components', 'lead_time_weeks_max'),
+    ('proposal_components', 'lead_time_stage'),
+    ('proposal_components', 'lead_time_start_manual')
   )
   order by table_name, column_name;
