@@ -1153,6 +1153,8 @@ tr:hover .row-btns { opacity:1; }
 .tt-log-table tr.is-billed td { opacity:0.55; }
 .tt-billed-pill { display:inline-block; font-size:9px; font-family:var(--font-b); padding:1px 7px; border-radius:8px; background:rgba(40,140,80,0.1); color:#287a4a; border:1px solid rgba(40,140,80,0.2); }
 .tt-unbilled-pill { display:inline-block; font-size:9px; font-family:var(--font-b); padding:1px 7px; border-radius:8px; background:rgba(150,61,39,0.1); color:var(--russet); border:1px solid rgba(150,61,39,0.2); }
+.tt-queued-pill { display:inline-block; font-size:9px; font-family:var(--font-b); padding:1px 7px; border-radius:8px; background:rgba(200,140,30,0.1); color:#a87600; border:1px solid rgba(200,140,30,0.25); }
+.tt-last-billed { margin-top:6px; font-size:10px; font-family:var(--font-b); color:var(--text-mid); }
 .tt-edit-btn { background:none; border:none; cursor:pointer; color:rgba(var(--text-rgb),0.3); font-size:12px; padding:2px 5px; border-radius:3px; transition:var(--t); }
 .tt-edit-btn:hover { color:var(--russet); background:rgba(150,61,39,0.08); }
 .tt-total-row td { font-weight:700; background:rgba(var(--text-rgb),0.04); border-top:2px solid var(--border); color:var(--pecan); }
@@ -1455,15 +1457,21 @@ tr:hover .row-btns { opacity:1; }
             <option value="support">Support Staff</option>
           </select>
           <select class="fi" id="tt-filter-billed" onchange="renderTime()" style="font-size:12px;padding:6px 10px">
-            <option value="">All Entries</option>
+            <option value="">All Statuses</option>
             <option value="unbilled">Unbilled Only</option>
+            <option value="queued">Queued on Draft</option>
             <option value="billed">Billed Only</option>
+          </select>
+          <select class="fi" id="tt-filter-cycle" onchange="renderTime()" title="Date scope" style="font-size:12px;padding:6px 10px">
+            <option value="since">Since Last Billing</option>
+            <option value="all">All Time</option>
+            <option value="custom">Custom Range…</option>
           </select>
           <select class="fi" id="tt-filter-invoice" onchange="renderTime()" style="font-size:12px;padding:6px 10px;max-width:180px">
             <option value="">All Invoices</option>
           </select>
-          <input type="date" class="fi" id="tt-filter-from" onchange="renderTime()" title="From date" style="font-size:12px;padding:6px 10px;width:140px">
-          <input type="date" class="fi" id="tt-filter-to" onchange="renderTime()" title="To date" style="font-size:12px;padding:6px 10px;width:140px">
+          <input type="date" class="fi" id="tt-filter-from" onchange="renderTime()" title="From date" style="font-size:12px;padding:6px 10px;width:140px;display:none">
+          <input type="date" class="fi" id="tt-filter-to" onchange="renderTime()" title="To date" style="font-size:12px;padding:6px 10px;width:140px;display:none">
           <button class="btn btn-ghost btn-sm" onclick="clearTimeFilters()" style="font-size:11px" title="Reset all filters">Clear</button>
           <button class="btn btn-secondary btn-sm" onclick="exportTimeCsv()" style="font-size:11px" title="Download the filtered entries as CSV">Export CSV</button>
           <button class="btn btn-primary" id="tt-new-entry-btn" onclick="openNewTimeModal()">+ Log Time</button>
@@ -27707,7 +27715,7 @@ function exportTaxReportCSV() {
  
 let _currentTimeTab  = 'summary';
 let _timeDetailProj  = null;   // projectId currently drilled into
-let _timeDetailFilter = 'all'; // 'all' | 'billed' | 'unbilled'
+let _timeDetailFilter = 'all'; // 'all' | 'billed' | 'queued' | 'unbilled'
  
 function setTimeTab(tab) {
   _currentTimeTab = tab;
@@ -27717,6 +27725,43 @@ function setTimeTab(tab) {
 }
  
 // Set of invoice ids that have at least one time entry billed against any of
+// Real billing state for a time entry: 'billed' (invoice sent/partial/paid),
+// 'queued' (attached to a draft invoice), or 'unbilled' (no live invoice link).
+// We can't trust e.billed alone because that flag flips to true on draft save —
+// the user's mental model of "billed" requires the invoice to actually be sent.
+const _SENT_INVOICE_STATUSES = new Set(['sent', 'partial', 'paid']);
+function _billingStateForEntry(e) {
+  if (!e?.invoiceLineItemId) return 'unbilled';
+  const inv = invoiceForTimeEntry(e);
+  if (!inv) return 'unbilled';
+  if (_SENT_INVOICE_STATUSES.has(inv.status)) return 'billed';
+  if (inv.status === 'draft') return 'queued';
+  return 'unbilled';
+}
+
+// Per-project "last billing" date: max(sentDate||created) of sent/partial/paid
+// invoices for the project that carried at least one time entry. Returns a
+// Map<projectId, YYYY-MM-DD>. Projects never billed are absent from the map.
+function _projectBillingCutoffs() {
+  const cutoffs = new Map();
+  const lineToInv = new Map();
+  (S.invoices || []).forEach(inv => {
+    if (!_SENT_INVOICE_STATUSES.has(inv.status)) return;
+    (inv.lineItems || []).forEach(l => lineToInv.set(l.id, inv));
+  });
+  (S.timeEntries || []).forEach(e => {
+    if (!e.invoiceLineItemId) return;
+    const inv = lineToInv.get(e.invoiceLineItemId);
+    if (!inv) return;
+    const raw = inv.sentDate || inv.created || '';
+    const d = String(raw).slice(0, 10);
+    if (!d) return;
+    const cur = cutoffs.get(e.projectId);
+    if (!cur || d > cur) cutoffs.set(e.projectId, d);
+  });
+  return cutoffs;
+}
+
 // their line items. Used to populate the invoice filter dropdown so users only
 // see invoices that actually carry time work.
 function invoicesWithTime() {
@@ -27740,6 +27785,9 @@ function clearTimeFilters() {
   ['tt-filter-proj','tt-filter-person','tt-filter-billed','tt-filter-invoice','tt-filter-from','tt-filter-to'].forEach(id => {
     const el = $c(id); if (el) el.value = '';
   });
+  // Reset cycle to the default ("Since Last Billing"), not blank.
+  const cycle = $c('tt-filter-cycle');
+  if (cycle) cycle.value = 'since';
   renderTime();
 }
 
@@ -27771,7 +27819,7 @@ function exportTimeCsv() {
       hours.toFixed(4),
       rate.toFixed(2),
       (hours * rate).toFixed(2),
-      e.billed ? 'Billed' : 'Unbilled',
+      _billingStateForEntry(e).replace(/^./, c => c.toUpperCase()),
       inv?.number || '',
       e.notes || e.description || '',
     ]);
@@ -27796,19 +27844,30 @@ function collectFilteredTimeEntries() {
   const fPerson  = $c('tt-filter-person')?.value  || '';
   const fBilled  = $c('tt-filter-billed')?.value  || '';
   const fInvoice = $c('tt-filter-invoice')?.value || '';
+  const fCycle   = $c('tt-filter-cycle')?.value   || 'since';
   const fFrom    = $c('tt-filter-from')?.value    || '';
   const fTo      = $c('tt-filter-to')?.value      || '';
   if (fProj)   entries = entries.filter(e => e.projectId === fProj);
   if (fPerson) entries = entries.filter(e => e.person === fPerson);
-  if (fBilled === 'billed')   entries = entries.filter(e => e.billed);
-  if (fBilled === 'unbilled') entries = entries.filter(e => !e.billed);
+  if (fBilled === 'billed')   entries = entries.filter(e => _billingStateForEntry(e) === 'billed');
+  if (fBilled === 'queued')   entries = entries.filter(e => _billingStateForEntry(e) === 'queued');
+  if (fBilled === 'unbilled') entries = entries.filter(e => _billingStateForEntry(e) === 'unbilled');
   if (fInvoice) {
     const inv = (S.invoices || []).find(i => i.id === fInvoice);
     const lineIds = new Set((inv?.lineItems || []).map(l => l.id));
     entries = entries.filter(e => e.invoiceLineItemId && lineIds.has(e.invoiceLineItemId));
   }
-  if (fFrom) entries = entries.filter(e => entryDateLabel(e) >= fFrom);
-  if (fTo)   entries = entries.filter(e => entryDateLabel(e) <= fTo);
+  if (fCycle === 'since') {
+    const cutoffs = _projectBillingCutoffs();
+    entries = entries.filter(e => {
+      const cut = cutoffs.get(e.projectId);
+      if (!cut) return true; // project never billed → all entries qualify
+      return entryDateLabel(e) > cut;
+    });
+  } else if (fCycle === 'custom') {
+    if (fFrom) entries = entries.filter(e => entryDateLabel(e) >= fFrom);
+    if (fTo)   entries = entries.filter(e => entryDateLabel(e) <= fTo);
+  }
   return entries.sort((a,b) => (entryDateLabel(b) || '').localeCompare(entryDateLabel(a) || ''));
 }
 
@@ -27847,7 +27906,14 @@ function renderTime() {
       (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===curT?'selected':''}>${escH(p.name)}</option>`).join('');
   }
 
-  let entries = [...(S.timeEntries||[])];
+  // Toggle visibility of from/to inputs based on cycle filter.
+  const fCycle = $c('tt-filter-cycle')?.value || 'since';
+  const fromEl = $c('tt-filter-from');
+  const toEl   = $c('tt-filter-to');
+  if (fromEl) fromEl.style.display = fCycle === 'custom' ? '' : 'none';
+  if (toEl)   toEl.style.display   = fCycle === 'custom' ? '' : 'none';
+
+  const entries = collectFilteredTimeEntries();
   const fProj    = $c('tt-filter-proj')?.value    || '';
   const fPerson  = $c('tt-filter-person')?.value  || '';
   const fBilled  = $c('tt-filter-billed')?.value  || '';
@@ -27855,21 +27921,14 @@ function renderTime() {
   const fFrom    = $c('tt-filter-from')?.value    || '';
   const fTo      = $c('tt-filter-to')?.value      || '';
 
-  if (fProj)   entries = entries.filter(e => e.projectId === fProj);
-  if (fPerson) entries = entries.filter(e => e.person === fPerson);
-  if (fBilled === 'billed')   entries = entries.filter(e => e.billed);
-  if (fBilled === 'unbilled') entries = entries.filter(e => !e.billed);
-  if (fInvoice) {
-    const inv = (S.invoices || []).find(i => i.id === fInvoice);
-    const lineIds = new Set((inv?.lineItems || []).map(l => l.id));
-    entries = entries.filter(e => e.invoiceLineItemId && lineIds.has(e.invoiceLineItemId));
-  }
-  if (fFrom) entries = entries.filter(e => entryDateLabel(e) >= fFrom);
-  if (fTo)   entries = entries.filter(e => entryDateLabel(e) <= fTo);
-
-  const filtered = !!(fProj || fPerson || fBilled || fInvoice || fFrom || fTo);
+  const filtered = !!(fProj || fPerson || fBilled || fInvoice || (fCycle === 'custom' && (fFrom || fTo)));
+  const total = (S.timeEntries || []).length;
   if (!entries.length) {
-    body.innerHTML = `<div class="no-results">${filtered ? 'No entries match those filters.' : 'No time entries yet. Hit + Log Time to start the clock.'}</div>`;
+    let msg;
+    if (!total) msg = 'No time entries yet. Hit + Log Time to start the clock.';
+    else if (fCycle === 'since' && !filtered) msg = '✓ All caught up — every project\'s tracked time is on a sent invoice.';
+    else msg = 'No entries match those filters.';
+    body.innerHTML = `<div class="no-results">${msg}</div>`;
     return;
   }
  
@@ -27885,21 +27944,41 @@ function renderTimeSummary(entries) {
     if (!byProj[e.projectId]) byProj[e.projectId] = [];
     byProj[e.projectId].push(e);
   });
+  const cutoffs = _projectBillingCutoffs();
+  const hrsFmt = h => h % 1 === 0 ? String(h) : h.toFixed(2);
   const cards = Object.entries(byProj).map(([pid, ents]) => {
     const proj = (S.projects||[]).find(p => p.id === pid);
     const name = proj ? proj.name : 'Unknown Project';
     const client = proj ? getClientName(proj.clientId) : '';
-    const totalHrs  = ents.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
-    const totalFee  = ents.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
-    const unbilledFee = ents.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
-    const unbilledHrs = ents.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+    let totalHrs = 0, totalFee = 0;
+    let unbilledHrs = 0, unbilledFee = 0;
+    let queuedHrs = 0, queuedFee = 0;
+    let billedHrs = 0, billedFee = 0;
+    ents.forEach(e => {
+      const h = parseFloat(e.hours) || 0;
+      const fee = h * (parseFloat(e.rate) || 0);
+      totalHrs += h; totalFee += fee;
+      const st = _billingStateForEntry(e);
+      if (st === 'unbilled') { unbilledHrs += h; unbilledFee += fee; }
+      else if (st === 'queued') { queuedHrs += h; queuedFee += fee; }
+      else { billedHrs += h; billedFee += fee; }
+    });
+    const lastBilled = cutoffs.get(pid);
+    let statusBadge = '';
+    if (unbilledHrs > 0) {
+      statusBadge = `<div class="tt-unbilled-badge">⚑ ${hrsFmt(unbilledHrs)} hrs unbilled</div>`;
+    } else if (queuedHrs > 0) {
+      statusBadge = `<div class="tt-unbilled-badge" style="background:rgba(200,140,30,0.1);color:#a87600;border-color:rgba(200,140,30,0.25)">◷ ${hrsFmt(queuedHrs)} hrs queued on draft</div>`;
+    } else {
+      statusBadge = '<div style="margin-top:8px;font-size:10px;color:#287a4a;font-family:var(--font-b)">✓ All billed</div>';
+    }
     return `
       <div class="tt-proj-card" onclick="showTimeDetail('${pid}')" style="cursor:pointer">
         <div class="tt-proj-name">${escH(name)}</div>
         ${client ? `<div class="tt-proj-client">${escH(client)}</div>` : ''}
         <div class="tt-stat-row">
           <div class="tt-stat">
-            <div class="tt-stat-val">${totalHrs % 1 === 0 ? totalHrs : totalHrs.toFixed(2)}</div>
+            <div class="tt-stat-val">${hrsFmt(totalHrs)}</div>
             <div class="tt-stat-lbl">Total Hrs</div>
           </div>
           <div class="tt-stat">
@@ -27911,8 +27990,14 @@ function renderTimeSummary(entries) {
             <div class="tt-stat-val" style="color:var(--russet)">${fmt(unbilledFee)}</div>
             <div class="tt-stat-lbl">Unbilled</div>
           </div>` : ''}
+          ${queuedFee > 0 ? `
+          <div class="tt-stat">
+            <div class="tt-stat-val" style="color:#a87600">${fmt(queuedFee)}</div>
+            <div class="tt-stat-lbl">Queued</div>
+          </div>` : ''}
         </div>
-        ${unbilledHrs > 0 ? `<div class="tt-unbilled-badge">⚑ ${unbilledHrs % 1 === 0 ? unbilledHrs : unbilledHrs.toFixed(2)} hrs unbilled</div>` : '<div style="margin-top:8px;font-size:10px;color:#287a4a;font-family:var(--font-b)">✓ All billed</div>'}
+        ${statusBadge}
+        <div class="tt-last-billed">${lastBilled ? 'Last billed: ' + lastBilled : 'Never billed'}</div>
       </div>`;
   }).join('');
   return `<div class="tt-summary-grid">${cards}</div>`;
@@ -27930,15 +28015,19 @@ function renderTimeLog(entries) {
     const invCell = inv
       ? `<a href="#" onclick="event.preventDefault(); event.stopPropagation(); openInvoiceBuilder('${inv.id}')" style="color:var(--russet);text-decoration:none;font-family:var(--font-b);font-weight:700">${escH(inv.number || '')}</a>`
       : '<span style="color:var(--text-light)">—</span>';
+    const billState = _billingStateForEntry(e);
+    const statusPill = billState === 'billed' ? '<span class="tt-billed-pill">Billed</span>'
+                     : billState === 'queued' ? '<span class="tt-queued-pill">Queued</span>'
+                     : '<span class="tt-unbilled-pill">Unbilled</span>';
     return `
-      <tr class="${e.billed?'is-billed':''}">
+      <tr class="${billState==='billed'?'is-billed':''}">
         <td>${escH(fmtEntryWhen(e))}</td>
         <td style="font-weight:600">${escH(proj?.name || 'Unknown')}</td>
         <td>${escH(personLabel)}</td>
         <td style="text-align:right;font-family:var(--font-b);white-space:nowrap">${escH(fmtDurationFromSeconds(e.durationSeconds ?? (parseFloat(e.hours) || 0) * 3600))}</td>
         <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
         <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
-        <td>${e.billed ? '<span class="tt-billed-pill">Billed</span>' : '<span class="tt-unbilled-pill">Unbilled</span>'}</td>
+        <td>${statusPill}</td>
         <td style="font-size:11px">${invCell}</td>
         <td style="color:var(--text-mid);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
         <td><button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button></td>
@@ -28011,22 +28100,32 @@ function renderTimeDetail(allEntries) {
   // Filter by project first
   const projEntries = allEntries.filter(e => e.projectId === _timeDetailProj);
  
-  // Apply billed/unbilled filter
+  // Apply billed/unbilled filter (uses real invoice status, not stale e.billed)
   let entries = projEntries;
-  if (_timeDetailFilter === 'billed')   entries = projEntries.filter(e => e.billed);
-  if (_timeDetailFilter === 'unbilled') entries = projEntries.filter(e => !e.billed);
- 
+  if (_timeDetailFilter === 'billed')   entries = projEntries.filter(e => _billingStateForEntry(e) === 'billed');
+  if (_timeDetailFilter === 'queued')   entries = projEntries.filter(e => _billingStateForEntry(e) === 'queued');
+  if (_timeDetailFilter === 'unbilled') entries = projEntries.filter(e => _billingStateForEntry(e) === 'unbilled');
+
   const fmt = v => '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
   const fmtHrs = h => (h % 1 === 0 ? h : h.toFixed(2));
- 
+
   // Totals (always from projEntries, not filtered, for the top bar)
-  const totalHrs      = projEntries.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
-  const totalFee      = projEntries.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
-  const billedHrs     = projEntries.filter(e=>e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
-  const billedFee     = projEntries.filter(e=>e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
-  const unbilledHrs   = projEntries.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
-  const unbilledFee   = projEntries.filter(e=>!e.billed).reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
- 
+  const _aggBy = (st) => projEntries.filter(e => _billingStateForEntry(e) === st)
+    .reduce((acc, e) => {
+      const h = parseFloat(e.hours) || 0;
+      acc.h += h;
+      acc.f += h * (parseFloat(e.rate) || 0);
+      return acc;
+    }, { h: 0, f: 0 });
+  const totalHrs    = projEntries.reduce((s,e) => s + (parseFloat(e.hours)||0), 0);
+  const totalFee    = projEntries.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
+  const billedAgg   = _aggBy('billed');
+  const queuedAgg   = _aggBy('queued');
+  const unbilledAgg = _aggBy('unbilled');
+  const billedHrs = billedAgg.h, billedFee = billedAgg.f;
+  const queuedHrs = queuedAgg.h, queuedFee = queuedAgg.f;
+  const unbilledHrs = unbilledAgg.h, unbilledFee = unbilledAgg.f;
+
   // Per-person summary — iterates the distinct persons that actually
   // logged time on this project (legacy TEAM ids OR studio_member uuids).
   const persons = _distinctPersons(projEntries);
@@ -28034,11 +28133,20 @@ function renderTimeDetail(allEntries) {
     const pEnts = projEntries.filter(e => e.person === pid);
     if (!pEnts.length) return '';
     const label = _timePersonLabel(pid);
+    const _pAgg = (st) => pEnts.filter(e => _billingStateForEntry(e) === st)
+      .reduce((acc, e) => {
+        const h = parseFloat(e.hours) || 0;
+        acc.h += h;
+        acc.f += h * (parseFloat(e.rate) || 0);
+        return acc;
+      }, { h: 0, f: 0 });
     const pH  = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
-    const pBH = pEnts.filter(e=>e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
-    const pUH = pEnts.filter(e=>!e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
-    const pBF = pEnts.filter(e=>e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
-    const pUF = pEnts.filter(e=>!e.billed).reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
+    const pBilled = _pAgg('billed');
+    const pQueued = _pAgg('queued');
+    const pUnbilled = _pAgg('unbilled');
+    const pBH = pBilled.h, pBF = pBilled.f;
+    const pUH = pUnbilled.h, pUF = pUnbilled.f;
+    const pQH = pQueued.h, pQF = pQueued.f;
     return `
       <div class="tt-person-card">
         <div class="tt-person-name">${escH(label)}</div>
@@ -28050,6 +28158,11 @@ function renderTimeDetail(allEntries) {
           <span class="lbl" style="color:#287a4a">Billed</span>
           <span class="val">${fmtHrs(pBH)} hrs &nbsp;·&nbsp; ${fmt(pBF)}</span>
         </div>
+        ${pQH > 0 ? `
+        <div class="tt-person-row">
+          <span class="lbl" style="color:#a87600">Queued</span>
+          <span class="val">${fmtHrs(pQH)} hrs &nbsp;·&nbsp; ${fmt(pQF)}</span>
+        </div>` : ''}
         <div class="tt-person-row">
           <span class="lbl" style="color:var(--russet)">Unbilled</span>
           <span class="val">${fmtHrs(pUH)} hrs &nbsp;·&nbsp; ${fmt(pUF)}</span>
@@ -28065,13 +28178,17 @@ function renderTimeDetail(allEntries) {
     const label = _timePersonLabel(pid);
     const rows = pEnts.map(e => {
       const fee = (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0);
+      const st = _billingStateForEntry(e);
+      const pill = st === 'billed' ? '<span class="tt-billed-pill">Billed</span>'
+                 : st === 'queued' ? '<span class="tt-queued-pill">Queued</span>'
+                 : '<span class="tt-unbilled-pill">Unbilled</span>';
       return `
-        <tr class="${e.billed?'is-billed':''}">
+        <tr class="${st==='billed'?'is-billed':''}">
           <td>${e.date||'—'}</td>
           <td style="text-align:right">${fmtHrs(parseFloat(e.hours)||0)}</td>
           <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
           <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
-          <td>${e.billed?'<span class="tt-billed-pill">Billed</span>':'<span class="tt-unbilled-pill">Unbilled</span>'}</td>
+          <td>${pill}</td>
           <td style="color:var(--text-mid);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
           <td><button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button></td>
         </tr>`;
@@ -28123,6 +28240,11 @@ function renderTimeDetail(allEntries) {
         <div class="tt-stat-val" style="color:#287a4a">${fmtHrs(billedHrs)} hrs</div>
         <div class="tt-stat-lbl">Billed (${fmt(billedFee)})</div>
       </div>
+      ${queuedHrs > 0 ? `
+      <div class="tt-stat">
+        <div class="tt-stat-val" style="color:#a87600">${fmtHrs(queuedHrs)} hrs</div>
+        <div class="tt-stat-lbl">Queued (${fmt(queuedFee)})</div>
+      </div>` : ''}
       <div class="tt-stat">
         <div class="tt-stat-val" style="color:var(--russet)">${fmtHrs(unbilledHrs)} hrs</div>
         <div class="tt-stat-lbl">Unbilled (${fmt(unbilledFee)})</div>
@@ -28134,8 +28256,9 @@ function renderTimeDetail(allEntries) {
     <div style="display:flex;align-items:center;gap:8px;margin:24px 0 12px">
       <span style="font-family:var(--font-h);font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid)">Show:</span>
       ${filterBtn('all','All')}
-      ${filterBtn('billed','Billed Only')}
-      ${filterBtn('unbilled','Unbilled Only')}
+      ${filterBtn('billed','Billed')}
+      ${filterBtn('queued','Queued')}
+      ${filterBtn('unbilled','Unbilled')}
     </div>
  
     ${logSections || '<p style="color:var(--text-mid);font-size:13px;font-family:var(--font-b)">No entries match this filter.</p>'}`;
