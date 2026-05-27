@@ -6466,6 +6466,7 @@ function dbInvoiceToS(inv) {
       amount: Number(p.amount || 0),
       method: p.method || '',
       notes: p.notes || '',
+      receiptPath: p.receipt_path || '',
     })),
   };
 }
@@ -7072,6 +7073,7 @@ function invPaymentToDB(p) {
     date: p.date || new Date().toISOString().slice(0, 10),
     amount: Number(p.amount || 0),
     method: p.method || null, notes: p.notes || null,
+    receipt_path: p.receiptPath || null,
   };
 }
 function documentToDB(d, studioId) {
