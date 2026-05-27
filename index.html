@@ -6732,7 +6732,12 @@ function captureSbShadow() {
   _sbShadow.estimates.clear();
   Object.entries(S.proposals || {}).forEach(([projectId, prop]) => {
     (prop.estimates || []).forEach(est => {
-      _sbShadow.estimates.set(est.id, { ...snap(est), _projectId: projectId });
+      // Shape MUST match what syncToSupabase builds for current.estimates
+      // (see the same loop in syncToSupabase). A divergent key like
+      // _projectId vs projectId makes _deepEq always report a diff, which
+      // tries to upsert every estimate on every save — fine for drafts,
+      // but locked estimates correctly reject the update at the trigger.
+      _sbShadow.estimates.set(est.id, { ...snap(est), projectId: est.projectId || projectId });
     });
     (prop.spaces || []).forEach((sp, sIdx) => {
       _sbShadow.spaces.set(sp.id, { ...snap(sp), _projectId: projectId, _sortOrder: sIdx });
