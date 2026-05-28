@@ -24470,21 +24470,12 @@ function renderInvoiceBuilder() {
   // ── Left: line items ──
   html += '<div>';
 
-  // Freight banner — always shown when proposal items are on the invoice.
-  // Includes the "Bill Freight as Retainer" action plus any unsettled
-  // credits / overages / unbilled deferred actuals carried from prior actuals.
+  // Freight reconciliation banner — surfaces unsettled credits, overages,
+  // and unbilled deferred actuals at invoice creation time. Each line is
+  // independent; multiple may show. Hidden when nothing's outstanding.
   if (inv.projectId) {
     const recon = getProjectFreightReconState(inv.projectId);
     const lines = [];
-    if (_invSelectedProposalItems && _invSelectedProposalItems.size > 0) {
-      lines.push(`
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
-          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-            <strong>Bill freight as a retainer</strong> — apply a single % across selected items.
-          </div>
-          <button class="btn btn-secondary btn-sm" onclick="openFreightRetainerModal()" style="font-size:11px;border-color:var(--russet);color:var(--russet)">Bill Freight as Retainer</button>
-        </div>`);
-    }
     if (recon.projectNetCredit > 0.5) {
       lines.push(`
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
@@ -24515,7 +24506,7 @@ function renderInvoiceBuilder() {
     if (lines.length) {
       html += `
         <div style="background:rgba(45,90,138,0.04);border:1px solid rgba(45,90,138,0.20);border-radius:var(--rl);padding:6px 18px;margin-bottom:16px">
-          <div style="font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);padding:10px 0 4px;border-bottom:1px solid rgba(45,90,138,0.15);margin-bottom:4px">Freight</div>
+          <div style="font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);padding:10px 0 4px;border-bottom:1px solid rgba(45,90,138,0.15);margin-bottom:4px">Freight reconciliation</div>
           ${lines.join('<div style="height:1px;background:rgba(45,90,138,0.10)"></div>')}
         </div>`;
     }
@@ -24650,10 +24641,14 @@ function renderInvoiceBuilder() {
   // when the user toggles items in/out — manual adjacent overrides keep
   // it frozen at the last auto-fill value).
   _invAdjacentTaxableAmount = adjTaxableAuto;
+  const hasInvItems = !!(_invSelectedProposalItems && _invSelectedProposalItems.size > 0);
   html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div class="frow" style="align-items:flex-end">
       <div class="fg" style="flex:1">
-        <label class="fl">Freight</label>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+          <label class="fl" style="margin-bottom:0">Freight</label>
+          ${hasInvItems ? `<button class="btn btn-ghost btn-sm" onclick="openFreightRetainerModal()" style="font-size:10px;padding:3px 8px;border:1px solid var(--russet);color:var(--russet);background:transparent">Bill as Retainer (%)</button>` : ''}
+        </div>
         <input type="text" class="fi" id="inv-freight" value="${inv.freight||''}" placeholder="$0.00" onchange="recalcInvoice()">
       </div>
       <div style="padding-bottom:12px">
