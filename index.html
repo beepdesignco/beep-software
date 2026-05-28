@@ -24350,6 +24350,28 @@ function toggleInvLineTrack(idx, checked) {
   toast(checked ? 'Tracking in PM.' : 'Untracked from PM.');
 }
 
+// Inline edit handler for the builder header strip (Sent Date / Due Date /
+// Phase). Writes to the invoice in S, persists, and refreshes the page title
+// + subtitle in place. No full re-render — keeps the user's cursor and any
+// in-flight inputs untouched.
+function saveInvBuilderField(field, value) {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const v = (value || '').trim();
+  if (inv[field] === v) return;
+  inv[field] = v;
+  save();
+  // Refresh page title + subtitle so the phase / number stays in sync.
+  const proj = S.projects.find(p => p.id === inv.projectId);
+  const client = (S.clients || []).find(c => c.id === inv.clientId);
+  const typeLabels = { phased:'Phased', monthly:'Monthly Charges', standalone:'Standalone', design_fee:'Design Fee' };
+  const titleEl = $c('invb-title');
+  const subEl = $c('invb-subtitle');
+  if (titleEl) titleEl.textContent = inv.number + ' — ' + (typeLabels[inv.type] || inv.type);
+  if (subEl) subEl.textContent = [proj?.name, client?.name, inv.phase].filter(Boolean).join(' · ');
+  toast('Saved.');
+}
+
 function recalcInvoice() {
   // The `inv-project` select only exists inside the New Invoice modal. Inside the
   // invoice builder we have to read the project id off the current invoice itself
@@ -24548,6 +24570,28 @@ function renderInvoiceBuilder() {
 
   // ── Left: line items ──
   html += '<div>';
+
+  // Editable header strip — Sent Date / Due Date / Phase (Label). Mirror of
+  // the Step 1 modal fields so users don't have to back out to adjust them
+  // after the builder has opened. Each onchange writes to inv directly and
+  // refreshes the page title/subtitle in-place (no full re-render needed).
+  html += `
+    <div style="background:var(--white);border-radius:var(--rl);padding:14px 18px;border:1px solid var(--border);margin-bottom:16px">
+      <div class="frow" style="margin-bottom:0">
+        <div class="fg" style="margin-bottom:0">
+          <label class="fl">Sent Date</label>
+          <input type="date" class="fi" id="invb-sent-date" value="${escH(inv.sentDate || '')}" onchange="saveInvBuilderField('sentDate', this.value)">
+        </div>
+        <div class="fg" style="margin-bottom:0">
+          <label class="fl">Due Date</label>
+          <input type="date" class="fi" id="invb-due-date" value="${escH(inv.dueDate || '')}" onchange="saveInvBuilderField('dueDate', this.value)">
+        </div>
+        <div class="fg" style="margin-bottom:0;flex:1.5">
+          <label class="fl">Phase / Label</label>
+          <input type="text" class="fi" id="invb-phase" value="${escH(inv.phase || '')}" placeholder="e.g. Phase 1, January 2026" onchange="saveInvBuilderField('phase', this.value)">
+        </div>
+      </div>
+    </div>`;
 
   // Freight reconciliation banner — surfaces unsettled credits, overages,
   // and unbilled deferred actuals at invoice creation time. Each line is
