@@ -13043,6 +13043,7 @@ function openFreightRetainerModal() {
 
   if (!rows.length) { toast('Add proposal items to the invoice first.'); return; }
   _freightRetainerRows = rows;
+  _freightRetainerNonRetainerExpanded = false;
   renderFreightRetainerList();
   renderFreightRetainerPreview();
   $c('modal-freight-retainer').classList.add('open');
@@ -13097,10 +13098,18 @@ function freightRetainerToggleAll(checked) {
   renderFreightRetainerPreview();
 }
 
+let _freightRetainerNonRetainerExpanded = false;
+
+function toggleFreightRetainerNonRetainerDetail() {
+  _freightRetainerNonRetainerExpanded = !_freightRetainerNonRetainerExpanded;
+  renderFreightRetainerPreview();
+}
+
 function renderFreightRetainerPreview() {
   const pct = parseFloat($c('fret-pct')?.value) || 0;
   let retainerTotal = 0, retainerCount = 0;
   let nonRetainerTotal = 0;
+  const nonRetainerSources = []; // { name, space, amount, kind }
   _freightRetainerRows.forEach((r, i) => {
     let amt = 0;
     if (r.selected) {
@@ -13109,13 +13118,25 @@ function renderFreightRetainerPreview() {
       const retainerAmt = r.subtotal * (pct / 100);
       amt = retainerAmt + (r.componentFreight || 0);
       retainerTotal += retainerAmt;
-      nonRetainerTotal += (r.componentFreight || 0);
+      if ((r.componentFreight || 0) > 0) {
+        nonRetainerTotal += r.componentFreight;
+        nonRetainerSources.push({ name: r.itemName, space: r.spaceName, amount: r.componentFreight, kind: 'component freight (constructed item)' });
+      }
       retainerCount++;
     } else {
       // Unselected items keep whatever freight they have now — matches
       // exactly what flows into inv.freight via getItemFreightForInvoice.
       amt = r.existingFreight || 0;
-      nonRetainerTotal += amt;
+      if (amt > 0) {
+        nonRetainerTotal += amt;
+        let kind = 'existing freight';
+        if (r.existing && r.existing.value != null && r.existing.value !== '') {
+          const v = r.existing.valueType === 'percent' ? `${r.existing.value}%` : `$${Number(r.existing.value).toFixed(2)}`;
+          if (r.existing.state === 'allowance') kind = `${v} allowance (proposal)`;
+          else if (r.existing.state === 'known') kind = `${v} known (proposal, marked up)`;
+        }
+        nonRetainerSources.push({ name: r.itemName, space: r.spaceName, amount: amt, kind });
+      }
     }
     const cell = document.querySelector(`.fret-row-amt[data-i="${i}"]`);
     if (cell) cell.textContent = amt > 0 ? fmt(amt) : (r.selected ? fmt(0) : '—');
@@ -13123,9 +13144,24 @@ function renderFreightRetainerPreview() {
   const total = retainerTotal + nonRetainerTotal;
   const preview = $c('fret-preview');
   if (preview) {
+    const chev = _freightRetainerNonRetainerExpanded ? '▾' : '▸';
+    const sourcesHTML = (_freightRetainerNonRetainerExpanded && nonRetainerSources.length)
+      ? `<div style="margin-top:6px;padding:6px 0 2px 14px;border-left:2px solid rgba(45,90,138,0.20);margin-left:2px">
+          ${nonRetainerSources.map(s => `
+            <div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+              <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                <span style="color:var(--text-dark)">${escH(s.name)}</span>
+                <span style="color:var(--text-light)"> · ${escH(s.space)}</span>
+                <span style="color:var(--text-light);font-style:italic"> — ${escH(s.kind)}</span>
+              </div>
+              <div style="font-family:var(--font-h);font-weight:700;color:var(--pecan);flex-shrink:0">${fmt(s.amount)}</div>
+            </div>`).join('')}
+        </div>`
+      : '';
+    const nonRetainerClickable = nonRetainerSources.length > 0;
     const parts = [];
     parts.push(`Retainer (${retainerCount} item${retainerCount === 1 ? '' : 's'} @ ${pct}%): <strong style="color:var(--pecan)">${fmt(retainerTotal)}</strong>`);
-    parts.push(`Non-retainer freight to add: <strong style="color:var(--pecan)">${fmt(nonRetainerTotal)}</strong>`);
+    parts.push(`<span ${nonRetainerClickable ? `onclick="toggleFreightRetainerNonRetainerDetail()" style="cursor:pointer;user-select:none"` : ''}>${nonRetainerClickable ? `<span style="color:var(--text-light);margin-right:4px">${chev}</span>` : ''}Non-retainer freight to add: <strong style="color:var(--pecan)">${fmt(nonRetainerTotal)}</strong></span>${sourcesHTML}`);
     parts.push(`<div style="border-top:1px solid rgba(45,90,138,0.20);margin-top:6px;padding-top:6px">Total freight on invoice: <strong style="color:var(--text-dark);font-size:13px">${fmt(total)}</strong></div>`);
     preview.innerHTML = parts.join('<br>');
   }
