@@ -2960,7 +2960,7 @@ tr:hover .row-btns { opacity:1; }
 <div class="overlay" id="modal-estimate">
   <div class="modal" style="width:620px">
     <button class="modal-x" onclick="closeModal('modal-estimate')">✕</button>
-    <div class="modal-title">Save Proposal as Estimate</div>
+    <div class="modal-title">Save Estimate</div>
     <div class="frow">
       <div class="fg" style="flex:2">
         <label class="fl">Estimate Name</label>
@@ -2970,6 +2970,21 @@ tr:hover .row-btns { opacity:1; }
         <label class="fl">Date</label>
         <input type="date" class="fi" id="est-date">
       </div>
+    </div>
+
+    <!-- Scope picker — drives which items are included in the snapshot + calc.
+         'proposal' = entire proposal (default).
+         'space'    = a chosen set of spaces (e.g. "upstairs" = pick Living Room + Bedroom).
+         'item'     = a chosen set of individual items (e.g. "just a new rug"). -->
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Estimate Scope</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px" id="est-scope-picker">
+        <label class="est-scope-opt" data-scope="proposal" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="proposal" checked onchange="setEstScope('proposal')" style="accent-color:var(--russet);width:13px;height:13px"> Whole Proposal</label>
+        <label class="est-scope-opt" data-scope="space" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="space" onchange="setEstScope('space')" style="accent-color:var(--russet);width:13px;height:13px"> Specific Spaces</label>
+        <label class="est-scope-opt" data-scope="item" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="item" onchange="setEstScope('item')" style="accent-color:var(--russet);width:13px;height:13px"> Specific Items</label>
+      </div>
+      <div id="est-scope-targets" style="display:none"></div>
+      <div id="est-scope-summary" style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px"></div>
     </div>
 
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
@@ -14300,6 +14315,12 @@ function openEstimateWizard() {
   _estCustomLines = [];
   _estFreightExclude = new Set();
   _estRecvExclude = new Set();
+  _estScope = 'proposal';
+  _estTargetIds = new Set();
+  _estItemSearch = '';
+  // Reset radio buttons to "Whole Proposal"
+  document.querySelectorAll('input[name="est-scope"]').forEach(r => { r.checked = (r.value === 'proposal'); });
+  renderEstScopeTargets();
 
   updateExclCounts();
 
@@ -14332,9 +14353,13 @@ function openExclusionPicker(type) {
 
   $c('excl-title').textContent = type === 'freight' ? 'Freight — Select Exclusions' : 'Receiving — Select Exclusions';
 
+  // Only show items that are in-scope for the current estimate. For space/item
+  // scope, items not in scope shouldn't be excludable (they're already excluded
+  // by virtue of being out-of-scope). Group by space for readability.
+  const inScopeIds = new Set(_estInScopeItems(prop).map(({ item }) => item.id));
   let html = '';
   (prop.spaces||[]).forEach(sp => {
-    const items = sp.items||[];
+    const items = (sp.items||[]).filter(it => inScopeIds.has(it.id));
     if (!items.length) return;
     html += `<div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:4px">${escH(sp.name||'Unnamed Space')}</div>`;
     items.forEach(item => {
@@ -14349,7 +14374,7 @@ function openExclusionPicker(type) {
     });
   });
 
-  $c('excl-list').innerHTML = html;
+  $c('excl-list').innerHTML = html || '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No items in scope.</div>';
   $c('modal-exclusions').classList.add('open');
 }
 
@@ -14402,13 +14427,151 @@ function renderEstCustomLines() {
   `).join('');
 }
 
+// ── Estimate scope state ──
+// _estScope: 'proposal' | 'space' | 'item'
+// _estTargetIds: Set of space ids (when scope='space') or item ids (when scope='item')
+let _estScope = 'proposal';
+let _estTargetIds = new Set();
+
+function setEstScope(scope) {
+  _estScope = scope;
+  // Reset targets when scope changes (avoids stale ids from prior choices).
+  _estTargetIds = new Set();
+  renderEstScopeTargets();
+  // Reset exclusions too — they're scoped semantics within the chosen items.
+  _estFreightExclude = new Set();
+  _estRecvExclude = new Set();
+  updateExclCounts();
+  recalcEstimate();
+}
+
+// Items in scope for the currently-open estimate wizard. Applies _estScope +
+// _estTargetIds; the freight/recv exclusion sets are layered on top by the
+// individual section calcs (so an excluded item is still in-scope but skipped
+// for that one calc — same semantics as today).
+function _estInScopeItems(prop) {
+  const out = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    if (_estScope === 'proposal') { out.push({ sp, item }); return; }
+    if (_estScope === 'space' && _estTargetIds.has(sp.id)) { out.push({ sp, item }); return; }
+    if (_estScope === 'item' && _estTargetIds.has(item.id)) { out.push({ sp, item }); return; }
+  }));
+  return out;
+}
+
+function renderEstScopeTargets() {
+  const host = $c('est-scope-targets');
+  const summary = $c('est-scope-summary');
+  if (!host || !summary) return;
+  const pid = S.currentPropProject || S._detailProjectId;
+  const prop = S.proposals[pid];
+  // Highlight the selected scope option visually.
+  document.querySelectorAll('.est-scope-opt').forEach(el => {
+    const isOn = el.dataset.scope === _estScope;
+    el.style.background = isOn ? 'rgba(150,61,39,0.08)' : 'transparent';
+    el.style.borderColor = isOn ? 'var(--russet)' : 'var(--border)';
+  });
+
+  if (_estScope === 'proposal') {
+    host.style.display = 'none';
+    host.innerHTML = '';
+    summary.textContent = 'Snapshots every item in the proposal.';
+    return;
+  }
+
+  host.style.display = '';
+  if (_estScope === 'space') {
+    // Multi-select chip list of spaces.
+    const spaces = (prop?.spaces || []).filter(sp => (sp.items || []).length);
+    if (!spaces.length) {
+      host.innerHTML = '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">No spaces with items.</div>';
+      summary.textContent = '';
+      return;
+    }
+    host.innerHTML = `
+      <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 0">
+        ${spaces.map(sp => {
+          const sel = _estTargetIds.has(sp.id);
+          const itemCount = (sp.items || []).length;
+          return `<label style="display:flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid ${sel ? 'var(--russet)' : 'var(--border)'};background:${sel ? 'rgba(150,61,39,0.08)' : 'var(--white)'};border-radius:999px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
+            <input type="checkbox" ${sel ? 'checked' : ''} onchange="toggleEstSpaceTarget('${sp.id}', this.checked)" style="accent-color:var(--russet);width:12px;height:12px">
+            ${escH(sp.name || 'Unnamed Space')} <span style="color:var(--text-light)">· ${itemCount}</span>
+          </label>`;
+        }).join('')}
+      </div>`;
+    const selCount = _estTargetIds.size;
+    const items = _estInScopeItems(prop).length;
+    summary.textContent = selCount ? `${selCount} space${selCount === 1 ? '' : 's'} · ${items} item${items === 1 ? '' : 's'} in scope.` : 'Pick at least one space.';
+    return;
+  }
+
+  if (_estScope === 'item') {
+    // Search + grouped checklist of items, grouped by space.
+    const spaces = (prop?.spaces || []).filter(sp => (sp.items || []).length);
+    const search = ((_estItemSearch || '') + '').toLowerCase().trim();
+    let groupsHTML = '';
+    spaces.forEach(sp => {
+      const matches = (sp.items || []).filter(it => !search || (it.name || '').toLowerCase().includes(search));
+      if (!matches.length) return;
+      groupsHTML += `<div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);padding:6px 0 2px;border-bottom:1px solid var(--border);margin-top:6px">${escH(sp.name || 'Unnamed Space')}</div>`;
+      matches.forEach(item => {
+        const sel = _estTargetIds.has(item.id);
+        const qty = parseFloat(item.qty) || 1;
+        const qtyLabel = qty > 1 ? ' ×' + qty + (item.qtyUnit ? ' ' + escH(item.qtyUnit) : '') : (item.qtyUnit ? ' — ' + escH(item.qtyUnit) : '');
+        groupsHTML += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${sel ? 'checked' : ''} onchange="toggleEstItemTarget('${item.id}', this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name || '—')}</span>
+          <span style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">${qtyLabel}</span>
+        </label>`;
+      });
+    });
+    host.innerHTML = `
+      <input type="text" class="fi" placeholder="Search items…" id="est-item-search" value="${escH(_estItemSearch || '')}" oninput="_estItemSearch = this.value; renderEstScopeTargets()" style="margin-bottom:4px">
+      <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rs);padding:4px 8px;background:var(--white)">
+        ${groupsHTML || '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No items match.</div>'}
+      </div>`;
+    const selCount = _estTargetIds.size;
+    summary.textContent = selCount ? `${selCount} item${selCount === 1 ? '' : 's'} in scope.` : 'Pick at least one item.';
+    return;
+  }
+}
+
+let _estItemSearch = '';
+
+function toggleEstSpaceTarget(spId, checked) {
+  if (checked) _estTargetIds.add(spId); else _estTargetIds.delete(spId);
+  renderEstScopeTargets();
+  recalcEstimate();
+}
+
+function toggleEstItemTarget(itemId, checked) {
+  if (checked) _estTargetIds.add(itemId); else _estTargetIds.delete(itemId);
+  renderEstScopeTargets();
+  recalcEstimate();
+}
+
 function recalcEstimate() {
   const pid = S.currentPropProject || S._detailProjectId;
   if (!pid) return;
   const prop = S.proposals[pid];
   const proj = S.projects.find(p => p.id === pid);
   const taxRate = (proj?.taxRate || 0) / 100;
-  const t = calcProposalTotals(prop, pid);
+  // Scope-aware base. For proposal-scope this is calcProposalTotals; for
+  // narrower scopes we sum just the in-scope items so estimate-grand-total
+  // reflects the chosen subset.
+  const inScope = _estInScopeItems(prop);
+  let baseSub = 0;
+  let baseTaxable = 0;
+  inScope.forEach(({ item }) => {
+    const line = item.type === 'constructed' ? getItemClient(item, pid) : getItemClient(item, pid) * (parseFloat(item.qty) || 1);
+    baseSub += line;
+    if (!item.taxExempt) baseTaxable += line;
+  });
+  // For proposal-scope, fall back to the canonical totals (includes freight/
+  // adjacent baked into proposal — same as before).
+  const t = (_estScope === 'proposal')
+    ? calcProposalTotals(prop, pid)
+    : { subtotal: baseSub, freight: 0, adjacentCharges: 0, tax: baseTaxable * taxRate, total: baseSub + (baseTaxable * taxRate) };
   let estLinesTotal = 0;
   let estLinesTax = 0;
 
@@ -14416,11 +14579,9 @@ function recalcEstimate() {
   if ($c('est-freight-on').checked) {
     const pct = parseFloat($c('est-freight-pct').value) || 0;
     let inclSub = 0;
-    (prop.spaces||[]).forEach(sp => {
-      (sp.items||[]).forEach(item => {
-        if (_estFreightExclude.has(item.id)) return;
-        inclSub += item.type === 'constructed' ? getItemClient(item, pid) : getItemClient(item, pid) * (parseFloat(item.qty)||1);
-      });
+    inScope.forEach(({ item }) => {
+      if (_estFreightExclude.has(item.id)) return;
+      inclSub += item.type === 'constructed' ? getItemClient(item, pid) : getItemClient(item, pid) * (parseFloat(item.qty)||1);
     });
     const freightEst = inclSub * (pct / 100);
     $c('est-freight-total').textContent = fmt(freightEst);
@@ -14447,11 +14608,9 @@ function recalcEstimate() {
   if ($c('est-recv-on').checked) {
     const fee = parseFloat($c('est-recv-fee').value) || 0;
     let itemCount = 0;
-    (prop.spaces||[]).forEach(sp => {
-      (sp.items||[]).forEach(item => {
-        if (_estRecvExclude.has(item.id)) return;
-        itemCount += parseFloat(item.qty) || 1;
-      });
+    inScope.forEach(({ item }) => {
+      if (_estRecvExclude.has(item.id)) return;
+      itemCount += parseFloat(item.qty) || 1;
     });
     const recvEst = fee * itemCount;
     $c('est-recv-total').textContent = fmt(recvEst) + ` (${itemCount} items)`;
@@ -14486,10 +14645,33 @@ function recalcEstimate() {
 function saveEstimate() {
   const pid = S.currentPropProject || S._detailProjectId;
   if (!pid) return;
+  // Scope validation — for space/item scope, require at least one target.
+  if (_estScope !== 'proposal' && _estTargetIds.size === 0) {
+    toast(_estScope === 'space' ? 'Pick at least one space.' : 'Pick at least one item.');
+    return;
+  }
   const name = $c('est-name').value.trim() || 'Untitled Estimate';
   const date = $c('est-date').value || new Date().toISOString().slice(0,10);
   const prop = S.proposals[pid];
-  const t = calcProposalTotals(prop, pid);
+  const proj_for_t = S.projects.find(p => p.id === pid);
+  const taxRate_for_t = (proj_for_t?.taxRate || 0) / 100;
+  // Scope-aware totals — for narrower scopes, "Proposal Subtotal" on the
+  // saved estimate should reflect just the in-scope items, not the whole
+  // proposal. Mirrors the same logic in recalcEstimate.
+  let t;
+  if (_estScope === 'proposal') {
+    t = calcProposalTotals(prop, pid);
+  } else {
+    const inScope_for_t = _estInScopeItems(prop);
+    let sub = 0, taxableSub = 0;
+    inScope_for_t.forEach(({ item }) => {
+      const line = item.type === 'constructed' ? getItemClient(item, pid) : getItemClient(item, pid) * (parseFloat(item.qty) || 1);
+      sub += line;
+      if (!item.taxExempt) taxableSub += line;
+    });
+    const tax_for_t = taxableSub * taxRate_for_t;
+    t = { subtotal: sub, freight: 0, adjacentCharges: 0, tax: tax_for_t, total: sub + tax_for_t };
+  }
 
   // Gather estimation lines
   const proj = S.projects.find(p => p.id === pid);
@@ -14536,7 +14718,23 @@ function saveEstimate() {
     }
   });
 
-  // Snapshot the proposal
+  // Snapshot the proposal — filtered by scope so the saved estimate is a
+  // literal record of "what was quoted." For proposal-scope this is every
+  // space/item; for space-scope only the targeted spaces; for item-scope
+  // only the targeted items (with their parent spaces preserved as carriers).
+  let snapshotSpaces;
+  if (_estScope === 'proposal') {
+    snapshotSpaces = JSON.parse(JSON.stringify(prop.spaces));
+  } else if (_estScope === 'space') {
+    snapshotSpaces = JSON.parse(JSON.stringify((prop.spaces || []).filter(sp => _estTargetIds.has(sp.id))));
+  } else {
+    // item scope — keep parent spaces but strip non-targeted items, then
+    // drop spaces that have no remaining items.
+    snapshotSpaces = JSON.parse(JSON.stringify(prop.spaces || []))
+      .map(sp => { sp.items = (sp.items || []).filter(it => _estTargetIds.has(it.id)); return sp; })
+      .filter(sp => (sp.items || []).length);
+  }
+
   const snapshot = {
     id: uid(),
     projectId: pid,
@@ -14549,7 +14747,15 @@ function saveEstimate() {
     estimationLines: lines,
     estimationTax: estLinesTax,
     estimateTotal: parseFloat($c('est-grand-total').textContent.replace(/[^0-9.-]/g,''))||0,
-    spaces: JSON.parse(JSON.stringify(prop.spaces)),
+    spaces: snapshotSpaces,
+    // Scope metadata so editEstimate can restore the wizard state, and so
+    // saved-estimate cards can display the scope badge.
+    scope: _estScope,
+    targetIds: Array.from(_estTargetIds),
+    exclusions: {
+      freight: Array.from(_estFreightExclude),
+      recv: Array.from(_estRecvExclude),
+    },
   };
 
   if (!prop.estimates) prop.estimates = [];
@@ -14609,9 +14815,16 @@ function editEstimate(pid, estId) {
   $c('est-storage-on').checked = false;
   $c('est-storage-tax').checked = false;
   $c('est-storage-amt').value = 0;
-  _estFreightExclude = new Set();
-  _estRecvExclude = new Set();
+  _estFreightExclude = new Set(Array.isArray(est.exclusions?.freight) ? est.exclusions.freight : []);
+  _estRecvExclude = new Set(Array.isArray(est.exclusions?.recv) ? est.exclusions.recv : []);
   _estCustomLines = [];
+  // Restore scope state (default to proposal-scope for legacy estimates
+  // saved before the scope picker existed).
+  _estScope = est.scope === 'space' || est.scope === 'item' ? est.scope : 'proposal';
+  _estTargetIds = new Set(Array.isArray(est.targetIds) ? est.targetIds : []);
+  _estItemSearch = '';
+  document.querySelectorAll('input[name="est-scope"]').forEach(r => { r.checked = (r.value === _estScope); });
+  renderEstScopeTargets();
 
   // Rebuild hours rows first
   $c('est-hours-rows').innerHTML = TEAM.map(t => `
@@ -15096,12 +15309,28 @@ function renderEstimatesSection(pid) {
         <button class="btn btn-primary btn-sm" onclick="markEstimateAsProposed('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Mark as Proposed</button>
         <button class="btn btn-primary btn-sm" onclick="markEstimateAsApproved('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px;background:#2d7a4a">Mark as Approved</button>
         <button class="btn btn-danger btn-sm" onclick="deleteEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Delete</button>`;
+    // Scope badge — shows what the estimate covers (Whole proposal / a set of
+    // spaces / a set of items). Legacy estimates without scope metadata are
+    // implicitly proposal-scope and get no badge to avoid clutter.
+    let scopePill = '';
+    if (est.scope === 'space') {
+      const names = (est.spaces || []).map(sp => sp.name || 'Unnamed').filter(Boolean);
+      const shown = names.slice(0, 2).join(', ');
+      const rest  = names.length > 2 ? ` +${names.length - 2}` : '';
+      scopePill = `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(45,90,138,0.12);color:#2d5a8a">Space · ${escH(shown)}${rest}</span>`;
+    } else if (est.scope === 'item') {
+      const items = (est.spaces || []).flatMap(sp => (sp.items || []).map(it => it.name || ''));
+      const shown = items.slice(0, 2).join(', ');
+      const rest  = items.length > 2 ? ` +${items.length - 2}` : '';
+      scopePill = `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(150,61,39,0.12);color:var(--russet)">Item · ${escH(shown)}${rest}</span>`;
+    }
     html += `
     <details style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px">
       <summary style="padding:14px 18px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;gap:10px">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-family:var(--font-h);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(est.name)}</span>
           ${statusPill}
+          ${scopePill}
           <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(est.date || '')}</span>
           ${proposedLabel}
         </div>
