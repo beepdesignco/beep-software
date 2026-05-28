@@ -6476,6 +6476,13 @@ function dbInvoiceToS(inv) {
     reminderOverride: inv.reminder_override || null,
     noteSelections: Array.isArray(inv.note_selections) ? inv.note_selections : [],
     files: inv.files || [],
+    // Invoice-side freight retainer override (Phase 0_33). Shape:
+    //   { pct: Number, item_ids: [proposal_item_id, ...] }
+    // When present, recalcInvFreight bills (item subtotal × pct/100) for
+    // each covered item INSTEAD of reading the proposal's freight_charges.
+    // Items not in item_ids keep their proposal freight as-is. This keeps
+    // the proposal pristine while letting the invoice charge differently.
+    freightRetainer: inv.freight_retainer || null,
     created: inv.created_at,
     lineItems: (inv.invoice_line_items || []).slice().sort((a,b) => (a.sort_order||0) - (b.sort_order||0)).map(l => ({
       id: l.id,
@@ -7086,6 +7093,7 @@ function invoiceToDB(inv, studioId) {
     watermark_mode: inv.watermarkMode || 'default',
     reminder_override: inv.reminderOverride || null,
     note_selections: Array.isArray(inv.noteSelections) ? inv.noteSelections : [],
+    freight_retainer: inv.freightRetainer || null,
     deleted_at: null,
   };
 }
@@ -13009,6 +13017,14 @@ function openFreightRetainerModal() {
   const primaryId = getPrimaryFreightCategoryId();
   if (!primaryId) { toast('Primary Freight category missing — check App Settings.'); return; }
 
+  // Pre-fill from any existing retainer on this invoice. If none, default
+  // all items selected at 10% (matches the prior UX).
+  const existingRetainer = inv.freightRetainer || null;
+  const existingItemIds = existingRetainer && Array.isArray(existingRetainer.item_ids)
+    ? new Set(existingRetainer.item_ids) : null;
+  const existingPct = existingRetainer && existingRetainer.pct != null
+    ? Number(existingRetainer.pct) : null;
+
   const rows = [];
   (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
     if (!_invSelectedProposalItems.has(item.id)) return;
@@ -13019,35 +13035,42 @@ function openFreightRetainerModal() {
       c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryId
     );
     // Component-level freight on constructed items is preserved when the
-    // retainer is applied (retainer only overwrites the item-level row).
+    // retainer is applied (retainer only overrides the item-level row).
     // Cache it so per-row + total previews stay accurate.
     const componentFreight = (item.type === 'constructed') ? getFreightFromComponents(item, pid) : 0;
-    // What this item bills NOW (full item-level + component-level primary freight).
-    // Used for unselected rows — matches what flows into inv.freight unchanged.
-    const existingFreight = getItemFreightForInvoice(item, pid);
+    // What this item bills NOW WITHOUT the retainer override — i.e. the
+    // proposal's freight as-quoted. Used for unselected rows so the preview
+    // matches inv.freight when the retainer doesn't cover them.
+    const proposalFreight = getItemFreightForInvoice(item, pid);
+    // Default-selected behavior: if there's already a retainer saved, only
+    // its items are pre-checked. Otherwise everything's pre-checked.
+    const selected = existingItemIds ? existingItemIds.has(item.id) : true;
     rows.push({
       itemId: item.id,
       spaceName: sp.name || 'Unassigned',
       itemName: item.name || '(unnamed)',
       subtotal,
       componentFreight,
-      existingFreight,
+      existingFreight: proposalFreight,
       existing: existing ? {
         state: existing.state || '',
         valueType: existing.valueType || 'amount',
         value: existing.value,
       } : null,
-      selected: true,
+      selected,
     });
   }));
 
   if (!rows.length) { toast('Add proposal items to the invoice first.'); return; }
   _freightRetainerRows = rows;
   _freightRetainerNonRetainerExpanded = false;
+  // Pre-fill the % input from the saved retainer if any.
+  const pctEl = $c('fret-pct');
+  if (pctEl) pctEl.value = existingPct != null ? existingPct : 10;
   renderFreightRetainerList();
   renderFreightRetainerPreview();
   $c('modal-freight-retainer').classList.add('open');
-  setTimeout(() => $c('fret-pct')?.focus(), 80);
+  setTimeout(() => pctEl?.focus(), 80);
 }
 
 function renderFreightRetainerList() {
@@ -13073,17 +13096,20 @@ function renderFreightRetainerList() {
 function _freightRetainerBadge(r) {
   if (!r.existing || !r.existing.state || r.existing.state === 'none') return null;
   const e = r.existing;
+  // Retainer is an INVOICE-side override now — proposal data is not mutated.
+  // "Selecting overrides on this invoice" means: bill the retainer % here,
+  // leave the proposal quote alone.
   if (e.state === 'allowance' && e.valueType === 'amount' && e.value != null && e.value !== '') {
-    return { text: `Has $${Number(e.value).toFixed(2)} manual allowance on proposal — selecting overrides it`, color: '#b35a00' };
+    return { text: `Proposal has $${Number(e.value).toFixed(2)} manual allowance — selecting bills the retainer % here instead (proposal unchanged)`, color: '#b35a00' };
   }
   if (e.state === 'allowance' && e.valueType === 'percent' && e.value != null && e.value !== '') {
-    return { text: `Has ${Number(e.value)}% allowance — selecting overwrites with new %`, color: '#6a6a6a' };
+    return { text: `Proposal has ${Number(e.value)}% allowance — selecting bills the retainer % here instead (proposal unchanged)`, color: '#6a6a6a' };
   }
   if (e.state === 'known' && e.value != null && e.value !== '') {
     const v = e.valueType === 'percent' ? `${e.value}%` : `$${Number(e.value).toFixed(2)}`;
-    return { text: `Has known freight (${v}) on proposal — selecting overrides; unchecking keeps it (marked up)`, color: '#b35a00' };
+    return { text: `Proposal has known freight (${v}) — selecting bills the retainer % here instead (proposal unchanged)`, color: '#b35a00' };
   }
-  if (e.state === 'deferred') return { text: 'Currently deferred — selecting switches to retainer', color: '#6a6a6a' };
+  if (e.state === 'deferred') return { text: 'Proposal: deferred — selecting bills the retainer % here', color: '#6a6a6a' };
   return null;
 }
 
@@ -13172,39 +13198,26 @@ function applyFreightRetainer() {
   if (pct <= 0) { toast('Enter a retainer % greater than 0.'); return; }
   const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
-  const primaryId = getPrimaryFreightCategoryId();
-  if (!primaryId) return;
 
-  if (!S.freightCharges) S.freightCharges = [];
-  let written = 0;
-  _freightRetainerRows.forEach(r => {
-    if (!r.selected) return;
-    // Drop any existing primary freight row for this item, then push the new one.
-    const existingIdx = S.freightCharges.findIndex(c =>
-      c.parentType === 'item' && c.parentId === r.itemId && c.categoryId === primaryId
-    );
-    const keepId = existingIdx >= 0 ? S.freightCharges[existingIdx].id : uid();
-    if (existingIdx >= 0) S.freightCharges.splice(existingIdx, 1);
-    S.freightCharges.push({
-      id: keepId,
-      parentType: 'item',
-      parentId: r.itemId,
-      categoryId: primaryId,
-      state: 'allowance',
-      valueType: 'percent',
-      value: pct,
-      markupPctOverride: 0, // % entered is what the client sees — no extra markup
-      notes: '',
-    });
-    written++;
-  });
+  // Invoice-side override only — DO NOT mutate proposal freight_charges.
+  // Stored as { pct, item_ids: [...] } so PM/financial reporting can compare
+  // proposal-side quote vs invoice-side charged vs vendor actual independently.
+  const itemIds = _freightRetainerRows.filter(r => r.selected).map(r => r.itemId);
+  if (!itemIds.length) {
+    // No selected items = clear the retainer override (revert to proposal freight).
+    inv.freightRetainer = null;
+  } else {
+    inv.freightRetainer = { pct, item_ids: itemIds };
+  }
 
   save();
   closeModal('modal-freight-retainer');
   recalcInvFreight();
   renderInvoiceBuilder();
   recalcInvoice();
-  toast(`Freight retainer applied to ${written} item${written === 1 ? '' : 's'}.`);
+  toast(itemIds.length
+    ? `Freight retainer applied to ${itemIds.length} item${itemIds.length === 1 ? '' : 's'}.`
+    : 'Freight retainer cleared.');
 }
 
 function renderPDSettings(proj, pid) {
@@ -24102,11 +24115,29 @@ function recalcInvFreight() {
   if (!pid) return;
   const prop = S.proposals[pid];
   if (!prop) return;
+  // Invoice-side freight retainer override (Phase 0_33). For items in
+  // retainer.item_ids, bill (item subtotal × pct/100) at the item level
+  // INSTEAD of reading the proposal's item-level primary freight_charges.
+  // Component-level freight on constructed items is left untouched and
+  // still bills (so retainer % stacks on top of component freight).
+  // Adjacent (non-primary) charges always pull from the proposal — the
+  // retainer only overrides primary item-level freight.
+  const retainer = inv?.freightRetainer || null;
+  const retainerPct = retainer ? Number(retainer.pct) || 0 : 0;
+  const retainerSet = retainer && Array.isArray(retainer.item_ids) ? new Set(retainer.item_ids) : null;
   let totalFreight = 0, totalAdjacent = 0, totalAdjacentTaxable = 0;
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
       if (!_invSelectedProposalItems.has(item.id)) return;
-      totalFreight  += getItemFreightForInvoice(item, pid);
+      if (retainerSet && retainerSet.has(item.id) && !isFreightItem(item)) {
+        const qty = parseFloat(item.qty) || 1;
+        const subtotal = getItemClient(item, pid) * qty;
+        let itemFreight = subtotal * (retainerPct / 100);
+        if (item.type === 'constructed') itemFreight += getFreightFromComponents(item, pid);
+        totalFreight += itemFreight;
+      } else {
+        totalFreight  += getItemFreightForInvoice(item, pid);
+      }
       totalAdjacent += getItemAdjacentForInvoice(item, pid);
       totalAdjacentTaxable += getItemTaxableAdjacentForInvoice(item, pid);
     });
