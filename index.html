@@ -9934,13 +9934,32 @@ function findProposalItemById(itemId) {
   return null;
 }
 
+// Per-status display + color. Overdue is derived: sent / partial invoices
+// past their due date. Cancelled invoices are already filtered out by
+// getItemInvoiceRefs, so no entry here.
+function _invoiceStatusBadgeMeta(inv) {
+  const today = new Date().toISOString().slice(0, 10);
+  const isOverdue = (inv.status === 'sent' || inv.status === 'partial')
+    && inv.dueDate && inv.dueDate < today;
+  if (isOverdue) return { label: 'Overdue', color: '#b33', bg: 'rgba(187,51,51,0.10)' };
+  switch (inv.status) {
+    case 'draft':    return { label: 'Draft',   color: 'var(--text-mid)', bg: 'rgba(0,0,0,0.06)' };
+    case 'sent':     return { label: 'Sent',    color: 'var(--russet)',   bg: 'rgba(150,61,39,0.08)' };
+    case 'partial':  return { label: 'Partial', color: '#b35a00',         bg: 'rgba(179,90,0,0.10)' };
+    case 'paid':     return { label: 'Paid',    color: '#1a6e3a',         bg: 'rgba(26,110,58,0.10)' };
+    default:         return { label: inv.status || '—', color: 'var(--text-mid)', bg: 'rgba(0,0,0,0.06)' };
+  }
+}
+
 function renderInvoiceRefBadges(itemId, size) {
   const refs = getItemInvoiceRefs(itemId);
   if (!refs.length) return '';
   const s = size === 'sm' ? 'font-size:9px;padding:1px 6px;border-radius:6px;margin-right:3px' : 'font-size:10px;padding:2px 8px;border-radius:8px;margin-right:4px';
-  return '<div style="margin-top:3px">' + refs.map(inv =>
-    '<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-b);color:var(--russet);background:rgba(150,61,39,0.08);' + s + '">' + escH(inv.number) + (inv.phase && size !== 'sm' ? ' · ' + escH(inv.phase) : '') + '</span>'
-  ).join('') + '</div>';
+  return '<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:3px">' + refs.map(inv => {
+    const meta = _invoiceStatusBadgeMeta(inv);
+    const phasePart = inv.phase && size !== 'sm' ? ' · ' + escH(inv.phase) : '';
+    return `<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-b);color:${meta.color};background:${meta.bg};${s}">${escH(inv.number)}${phasePart} · ${escH(meta.label)}</span>`;
+  }).join('') + '</div>';
 }
 
 function dismissNotification(pid, notifId) {
