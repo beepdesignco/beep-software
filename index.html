@@ -2982,6 +2982,7 @@ tr:hover .row-btns { opacity:1; }
         <label class="est-scope-opt" data-scope="proposal" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="proposal" checked onchange="setEstScope('proposal')" style="accent-color:var(--russet);width:13px;height:13px"> Whole Proposal</label>
         <label class="est-scope-opt" data-scope="space" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="space" onchange="setEstScope('space')" style="accent-color:var(--russet);width:13px;height:13px"> Specific Spaces</label>
         <label class="est-scope-opt" data-scope="item" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="item" onchange="setEstScope('item')" style="accent-color:var(--russet);width:13px;height:13px"> Specific Items</label>
+        <label class="est-scope-opt" data-scope="status" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;font-family:var(--font-b);font-size:11px"><input type="radio" name="est-scope" value="status" onchange="setEstScope('status')" style="accent-color:var(--russet);width:13px;height:13px"> By Status</label>
       </div>
       <div id="est-scope-targets" style="display:none"></div>
       <div id="est-scope-summary" style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px"></div>
@@ -14455,6 +14456,15 @@ function _estInScopeItems(prop) {
     if (_estScope === 'proposal') { out.push({ sp, item }); return; }
     if (_estScope === 'space' && _estTargetIds.has(sp.id)) { out.push({ sp, item }); return; }
     if (_estScope === 'item' && _estTargetIds.has(item.id)) { out.push({ sp, item }); return; }
+    if (_estScope === 'status') {
+      // Match either a real status value or a status_flag pseudo-value
+      // ('__flag_needs_attention', '__flag_in_production'). An item is in
+      // scope if any of its status/flags matches the chosen target set.
+      const statusMatch = !!item.status && _estTargetIds.has(item.status);
+      const flagMatch = (item.statusFlags || []).some(f => _estTargetIds.has('__flag_' + f));
+      if (statusMatch || flagMatch) out.push({ sp, item });
+      return;
+    }
   }));
   return out;
 }
@@ -14505,6 +14515,39 @@ function renderEstScopeTargets() {
     return;
   }
 
+  if (_estScope === 'status') {
+    // Multi-select checklist of every real status + every status flag as
+    // a pseudo-status. The picker also shows a live count of how many
+    // items in this proposal currently match each, so the user can pick
+    // intelligently.
+    const items = (prop?.spaces || []).flatMap(sp => sp.items || []);
+    const statusCounts = {};
+    const flagCounts = {};
+    items.forEach(it => {
+      if (it.status) statusCounts[it.status] = (statusCounts[it.status] || 0) + 1;
+      (it.statusFlags || []).forEach(f => flagCounts[f] = (flagCounts[f] || 0) + 1);
+    });
+    const statusRow = (v, l, count, key) => {
+      const sel = _estTargetIds.has(key);
+      const dim = count === 0;
+      return `<label style="display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid ${sel ? 'var(--russet)' : 'var(--border)'};background:${sel ? 'rgba(150,61,39,0.08)' : 'var(--white)'};border-radius:999px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:${dim ? 'var(--text-light)' : 'var(--text-dark)'};opacity:${dim ? '0.55' : '1'}">
+        <input type="checkbox" ${sel ? 'checked' : ''} onchange="toggleEstStatusTarget('${key}', this.checked)" style="accent-color:var(--russet);width:12px;height:12px">
+        ${escH(l)} <span style="color:var(--text-light)">· ${count}</span>
+      </label>`;
+    };
+    let chipsHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 0">';
+    STATUSES.forEach(s => { chipsHTML += statusRow(s.v, s.l, statusCounts[s.v] || 0, s.v); });
+    chipsHTML += '</div>';
+    let flagsHTML = '<div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-top:6px">Flags</div><div style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0">';
+    STATUS_FLAGS.forEach(f => { flagsHTML += statusRow(f.v, f.l + ' (flag)', flagCounts[f.v] || 0, '__flag_' + f.v); });
+    flagsHTML += '</div>';
+    host.innerHTML = chipsHTML + flagsHTML;
+    const matched = _estInScopeItems(prop).length;
+    const selCount = _estTargetIds.size;
+    summary.textContent = selCount ? `${selCount} status${selCount === 1 ? '' : 'es/flags'} selected · ${matched} item${matched === 1 ? '' : 's'} match.` : 'Pick at least one status or flag.';
+    return;
+  }
+
   if (_estScope === 'item') {
     // Search + grouped checklist of items, grouped by space.
     const spaces = (prop?.spaces || []).filter(sp => (sp.items || []).length);
@@ -14546,6 +14589,12 @@ function toggleEstSpaceTarget(spId, checked) {
 
 function toggleEstItemTarget(itemId, checked) {
   if (checked) _estTargetIds.add(itemId); else _estTargetIds.delete(itemId);
+  renderEstScopeTargets();
+  recalcEstimate();
+}
+
+function toggleEstStatusTarget(key, checked) {
+  if (checked) _estTargetIds.add(key); else _estTargetIds.delete(key);
   renderEstScopeTargets();
   recalcEstimate();
 }
@@ -14645,9 +14694,12 @@ function recalcEstimate() {
 function saveEstimate() {
   const pid = S.currentPropProject || S._detailProjectId;
   if (!pid) return;
-  // Scope validation — for space/item scope, require at least one target.
+  // Scope validation — for narrower scopes, require at least one target.
   if (_estScope !== 'proposal' && _estTargetIds.size === 0) {
-    toast(_estScope === 'space' ? 'Pick at least one space.' : 'Pick at least one item.');
+    const msg = _estScope === 'space' ? 'Pick at least one space.'
+              : _estScope === 'item'  ? 'Pick at least one item.'
+              : 'Pick at least one status or flag.';
+    toast(msg);
     return;
   }
   const name = $c('est-name').value.trim() || 'Untitled Estimate';
@@ -14721,12 +14773,20 @@ function saveEstimate() {
   // Snapshot the proposal — filtered by scope so the saved estimate is a
   // literal record of "what was quoted." For proposal-scope this is every
   // space/item; for space-scope only the targeted spaces; for item-scope
-  // only the targeted items (with their parent spaces preserved as carriers).
+  // only the targeted items (with their parent spaces preserved as carriers);
+  // for status-scope only items whose status or status_flag matches the
+  // target set (snapshot freezes the items as-is — if their status changes
+  // later the saved estimate still shows them).
   let snapshotSpaces;
   if (_estScope === 'proposal') {
     snapshotSpaces = JSON.parse(JSON.stringify(prop.spaces));
   } else if (_estScope === 'space') {
     snapshotSpaces = JSON.parse(JSON.stringify((prop.spaces || []).filter(sp => _estTargetIds.has(sp.id))));
+  } else if (_estScope === 'status') {
+    const matchIds = new Set(_estInScopeItems(prop).map(({ item }) => item.id));
+    snapshotSpaces = JSON.parse(JSON.stringify(prop.spaces || []))
+      .map(sp => { sp.items = (sp.items || []).filter(it => matchIds.has(it.id)); return sp; })
+      .filter(sp => (sp.items || []).length);
   } else {
     // item scope — keep parent spaces but strip non-targeted items, then
     // drop spaces that have no remaining items.
@@ -14820,7 +14880,7 @@ function editEstimate(pid, estId) {
   _estCustomLines = [];
   // Restore scope state (default to proposal-scope for legacy estimates
   // saved before the scope picker existed).
-  _estScope = est.scope === 'space' || est.scope === 'item' ? est.scope : 'proposal';
+  _estScope = (est.scope === 'space' || est.scope === 'item' || est.scope === 'status') ? est.scope : 'proposal';
   _estTargetIds = new Set(Array.isArray(est.targetIds) ? est.targetIds : []);
   _estItemSearch = '';
   document.querySelectorAll('input[name="est-scope"]').forEach(r => { r.checked = (r.value === _estScope); });
@@ -15310,8 +15370,9 @@ function renderEstimatesSection(pid) {
         <button class="btn btn-primary btn-sm" onclick="markEstimateAsApproved('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px;background:#2d7a4a">Mark as Approved</button>
         <button class="btn btn-danger btn-sm" onclick="deleteEstimate('${pid}','${est.id}')" style="font-size:10px;padding:4px 10px">Delete</button>`;
     // Scope badge — shows what the estimate covers (Whole proposal / a set of
-    // spaces / a set of items). Legacy estimates without scope metadata are
-    // implicitly proposal-scope and get no badge to avoid clutter.
+    // spaces / a set of items / a set of statuses). Legacy estimates without
+    // scope metadata are implicitly proposal-scope and get no badge to avoid
+    // clutter.
     let scopePill = '';
     if (est.scope === 'space') {
       const names = (est.spaces || []).map(sp => sp.name || 'Unnamed').filter(Boolean);
@@ -15323,6 +15384,18 @@ function renderEstimatesSection(pid) {
       const shown = items.slice(0, 2).join(', ');
       const rest  = items.length > 2 ? ` +${items.length - 2}` : '';
       scopePill = `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(150,61,39,0.12);color:var(--russet)">Item · ${escH(shown)}${rest}</span>`;
+    } else if (est.scope === 'status') {
+      const labels = (est.targetIds || []).map(k => {
+        if (k.startsWith('__flag_')) {
+          const f = STATUS_FLAGS.find(x => x.v === k.slice(7));
+          return f ? f.l : k.slice(7);
+        }
+        const s = STATUSES.find(x => x.v === k);
+        return s ? s.l : k;
+      });
+      const shown = labels.slice(0, 2).join(', ');
+      const rest  = labels.length > 2 ? ` +${labels.length - 2}` : '';
+      scopePill = `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:rgba(45,122,74,0.14);color:#2d7a4a">Status · ${escH(shown)}${rest}</span>`;
     }
     html += `
     <details style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px">
