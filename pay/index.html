@@ -171,7 +171,10 @@ function render(d) {
   const creditSum = creditLines.reduce((s, c) => s + (Number(c.qty)||1) * (Number(c.price)||0), 0);
 
   const taxAmount = Number(invoice.tax || 0);
-  const subtotal = Number(invoice.subtotal || 0) + Number(invoice.freight || 0) + Number(invoice.adjacent_charges || 0) - Number(invoice.discount || 0) + creditSum;
+  // Subtotal here is line items only (matches the invoice builder). Freight,
+  // adjacent charges, discount, and credits each render as their own row
+  // below so the math from Subtotal → Total is transparent.
+  const subtotal = Number(invoice.subtotal || 0);
 
   let statusBanner = '';
   if (isPaid) statusBanner = '<div class="status-banner status-paid">✓ This invoice has been paid in full. Thank you.</div>';
@@ -269,6 +272,7 @@ function render(d) {
             ${invoice.freight ? `<div class="row"><span>Freight</span><span>${fmt(invoice.freight)}</span></div>` : ''}
             ${invoice.adjacent_charges ? `<div class="row"><span>Other associated charges</span><span>${fmt(invoice.adjacent_charges)}</span></div>` : ''}
             ${invoice.discount ? `<div class="row"><span>Discount</span><span>-${fmt(invoice.discount)}</span></div>` : ''}
+            ${creditSum < -0.005 ? `<div class="row"><span>Credit applied</span><span>-${fmt(Math.abs(creditSum))}</span></div>` : ''}
           </div>
           <div>
             <div class="col-label">Amount</div>
