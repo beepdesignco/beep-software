@@ -3366,6 +3366,42 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ FREIGHT RETAINER MODAL ═════════════════ -->
+<!-- Bulk-set primary freight on selected proposal items to allowance @ X%.
+     Writes back to each item's freight_charges row so the existing invoice
+     auto-fill, ledger, and reconciliation flow all work unchanged. Items
+     left unchecked keep whatever freight they already had ($ allowances
+     still pull over as normal). -->
+<div class="overlay" id="modal-freight-retainer">
+  <div class="modal" style="width:620px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-freight-retainer')">✕</button>
+    <div class="modal-title">Bill Freight as Retainer</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;line-height:1.5">
+      Apply a single freight retainer % across selected items. The % you enter is what the client sees (no markup is added on top). Unchecked items keep their existing freight — $ allowances on the proposal still pull through automatically.
+    </div>
+
+    <div class="fg" style="display:flex;align-items:center;gap:10px">
+      <label class="fl" style="margin-bottom:0;white-space:nowrap">Retainer %</label>
+      <input type="number" class="fi" id="fret-pct" value="10" min="0" step="0.5" style="width:100px" oninput="renderFreightRetainerPreview()">
+      <div style="flex:1;display:flex;justify-content:flex-end;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="freightRetainerToggleAll(true)" style="font-size:10px">Select all</button>
+        <button class="btn btn-ghost btn-sm" onclick="freightRetainerToggleAll(false)" style="font-size:10px">Deselect all</button>
+      </div>
+    </div>
+
+    <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:14px 0 6px">Items on this invoice</div>
+    <div id="fret-items-list" style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r);padding:4px;background:var(--white)"></div>
+
+    <div id="fret-preview" style="background:rgba(45,90,138,0.04);border:1px solid rgba(45,90,138,0.20);border-radius:var(--r);padding:10px 14px;margin-top:12px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);line-height:1.7"></div>
+
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-freight-retainer')">Cancel</button>
+      <button class="btn btn-primary" onclick="applyFreightRetainer()">Apply</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ INVITE MEMBER MODAL ═════════════════ -->
 <div class="overlay" id="modal-invite-member">
   <div class="modal" style="width:480px">
@@ -12950,6 +12986,177 @@ function confirmFreightReconciliation() {
   renderInvoiceBuilder();
   recalcInvoice();
   toast('Reconciliation line added.');
+}
+
+// ─── Freight Retainer modal ───────────────────────────────────
+// Bulk-set primary freight on each selected proposal item to allowance @ X%.
+// The % entered is what the client is billed (markup override = 0). Items
+// the user leaves checked have their existing primary freight overwritten;
+// items they uncheck keep whatever freight they already had. Writes to
+// S.freightCharges so the existing invoice freight auto-fill + ledger +
+// reconciliation flow all keep working unchanged.
+
+// Snapshot of the items in the modal — captured when openFreightRetainerModal
+// runs so subsequent line-item churn in the builder doesn't desync the list.
+let _freightRetainerRows = []; // [{ itemId, spaceName, itemName, subtotal, existing, selected }]
+
+function openFreightRetainerModal() {
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+  if (!prop) { toast('Pick a project first.'); return; }
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) { toast('Primary Freight category missing — check App Settings.'); return; }
+
+  const rows = [];
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    if (!_invSelectedProposalItems.has(item.id)) return;
+    if (isFreightItem(item)) return; // freight-typed line items aren't retainer-eligible
+    const qty = parseFloat(item.qty) || 1;
+    const subtotal = getItemClient(item, pid) * qty;
+    const existing = (S.freightCharges || []).find(c =>
+      c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryId
+    );
+    rows.push({
+      itemId: item.id,
+      spaceName: sp.name || 'Unassigned',
+      itemName: item.name || '(unnamed)',
+      subtotal,
+      existing: existing ? {
+        state: existing.state || '',
+        valueType: existing.valueType || 'amount',
+        value: existing.value,
+      } : null,
+      selected: true,
+    });
+  }));
+
+  if (!rows.length) { toast('Add proposal items to the invoice first.'); return; }
+  _freightRetainerRows = rows;
+  renderFreightRetainerList();
+  renderFreightRetainerPreview();
+  $c('modal-freight-retainer').classList.add('open');
+  setTimeout(() => $c('fret-pct')?.focus(), 80);
+}
+
+function renderFreightRetainerList() {
+  const host = $c('fret-items-list');
+  if (!host) return;
+  host.innerHTML = _freightRetainerRows.map((r, i) => {
+    const badge = _freightRetainerBadge(r);
+    return `
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer">
+        <input type="checkbox" ${r.selected ? 'checked' : ''} onchange="freightRetainerToggle(${i}, this.checked)" style="accent-color:var(--russet);width:14px;height:14px;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(r.itemName)} <span style="color:var(--text-light);font-size:11px">· ${escH(r.spaceName)}</span></div>
+          ${badge ? `<div style="font-family:var(--font-b);font-size:10px;color:${badge.color};font-style:italic;margin-top:2px">${badge.text}</div>` : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">subtotal ${fmt(r.subtotal)}</div>
+          <div class="fret-row-amt" data-i="${i}" style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--pecan)"></div>
+        </div>
+      </label>`;
+  }).join('') || '<div style="padding:20px;text-align:center;color:var(--text-mid);font-family:var(--font-b);font-size:12px;font-style:italic">No items.</div>';
+}
+
+function _freightRetainerBadge(r) {
+  if (!r.existing || !r.existing.state || r.existing.state === 'none') return null;
+  const e = r.existing;
+  if (e.state === 'allowance' && e.valueType === 'amount' && e.value != null && e.value !== '') {
+    return { text: `Has $${Number(e.value).toFixed(2)} manual allowance on proposal — selecting overrides it`, color: '#b35a00' };
+  }
+  if (e.state === 'allowance' && e.valueType === 'percent' && e.value != null && e.value !== '') {
+    return { text: `Has ${Number(e.value)}% allowance — selecting overwrites with new %`, color: '#6a6a6a' };
+  }
+  if (e.state === 'known' && e.value != null && e.value !== '') {
+    return { text: `Has known freight (${e.valueType === 'percent' ? `${e.value}%` : `$${Number(e.value).toFixed(2)}`}) — selecting overrides`, color: '#b35a00' };
+  }
+  if (e.state === 'deferred') return { text: 'Currently deferred — selecting switches to retainer', color: '#6a6a6a' };
+  return null;
+}
+
+function freightRetainerToggle(i, checked) {
+  if (_freightRetainerRows[i]) _freightRetainerRows[i].selected = checked;
+  renderFreightRetainerPreview();
+}
+
+function freightRetainerToggleAll(checked) {
+  _freightRetainerRows.forEach(r => r.selected = checked);
+  renderFreightRetainerList();
+  renderFreightRetainerPreview();
+}
+
+function renderFreightRetainerPreview() {
+  const pct = parseFloat($c('fret-pct')?.value) || 0;
+  let retainerTotal = 0, retainerCount = 0;
+  let keptDollarTotal = 0, keptDollarCount = 0;
+  _freightRetainerRows.forEach((r, i) => {
+    let amt = 0;
+    if (r.selected) {
+      amt = r.subtotal * (pct / 100);
+      retainerTotal += amt;
+      retainerCount++;
+    } else if (r.existing && r.existing.state === 'allowance' && r.existing.valueType === 'amount' && r.existing.value != null && r.existing.value !== '') {
+      const v = Number(r.existing.value) || 0;
+      keptDollarTotal += v;
+      keptDollarCount++;
+      amt = v;
+    }
+    const cell = document.querySelector(`.fret-row-amt[data-i="${i}"]`);
+    if (cell) cell.textContent = amt > 0 ? fmt(amt) : (r.selected ? fmt(0) : '—');
+  });
+  const total = retainerTotal + keptDollarTotal;
+  const preview = $c('fret-preview');
+  if (preview) {
+    const parts = [];
+    parts.push(`Retainer (${retainerCount} item${retainerCount === 1 ? '' : 's'} @ ${pct}%): <strong style="color:var(--pecan)">${fmt(retainerTotal)}</strong>`);
+    if (keptDollarCount > 0) {
+      parts.push(`+ Existing $ allowances (${keptDollarCount} unchecked item${keptDollarCount === 1 ? '' : 's'}): <strong style="color:var(--pecan)">${fmt(keptDollarTotal)}</strong>`);
+    }
+    parts.push(`<div style="border-top:1px solid rgba(45,90,138,0.20);margin-top:6px;padding-top:6px">Total freight on invoice: <strong style="color:var(--text-dark);font-size:13px">${fmt(total)}</strong></div>`);
+    preview.innerHTML = parts.join('<br>');
+  }
+}
+
+function applyFreightRetainer() {
+  const pct = parseFloat($c('fret-pct')?.value) || 0;
+  if (pct <= 0) { toast('Enter a retainer % greater than 0.'); return; }
+  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
+  if (!inv) return;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (!primaryId) return;
+
+  if (!S.freightCharges) S.freightCharges = [];
+  let written = 0;
+  _freightRetainerRows.forEach(r => {
+    if (!r.selected) return;
+    // Drop any existing primary freight row for this item, then push the new one.
+    const existingIdx = S.freightCharges.findIndex(c =>
+      c.parentType === 'item' && c.parentId === r.itemId && c.categoryId === primaryId
+    );
+    const keepId = existingIdx >= 0 ? S.freightCharges[existingIdx].id : uid();
+    if (existingIdx >= 0) S.freightCharges.splice(existingIdx, 1);
+    S.freightCharges.push({
+      id: keepId,
+      parentType: 'item',
+      parentId: r.itemId,
+      categoryId: primaryId,
+      state: 'allowance',
+      valueType: 'percent',
+      value: pct,
+      markupPctOverride: 0, // % entered is what the client sees — no extra markup
+      notes: '',
+    });
+    written++;
+  });
+
+  save();
+  closeModal('modal-freight-retainer');
+  recalcInvFreight();
+  renderInvoiceBuilder();
+  recalcInvoice();
+  toast(`Freight retainer applied to ${written} item${written === 1 ? '' : 's'}.`);
 }
 
 function renderPDSettings(proj, pid) {
@@ -24263,12 +24470,21 @@ function renderInvoiceBuilder() {
   // ── Left: line items ──
   html += '<div>';
 
-  // Freight reconciliation banner — surfaces unsettled credits, overages,
-  // and unbilled deferred actuals at invoice creation time. Each line is
-  // independent; multiple may show. Hidden when nothing's outstanding.
+  // Freight banner — always shown when proposal items are on the invoice.
+  // Includes the "Bill Freight as Retainer" action plus any unsettled
+  // credits / overages / unbilled deferred actuals carried from prior actuals.
   if (inv.projectId) {
     const recon = getProjectFreightReconState(inv.projectId);
     const lines = [];
+    if (_invSelectedProposalItems && _invSelectedProposalItems.size > 0) {
+      lines.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+            <strong>Bill freight as a retainer</strong> — apply a single % across selected items.
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="openFreightRetainerModal()" style="font-size:11px;border-color:var(--russet);color:var(--russet)">Bill Freight as Retainer</button>
+        </div>`);
+    }
     if (recon.projectNetCredit > 0.5) {
       lines.push(`
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
@@ -24299,7 +24515,7 @@ function renderInvoiceBuilder() {
     if (lines.length) {
       html += `
         <div style="background:rgba(45,90,138,0.04);border:1px solid rgba(45,90,138,0.20);border-radius:var(--rl);padding:6px 18px;margin-bottom:16px">
-          <div style="font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);padding:10px 0 4px;border-bottom:1px solid rgba(45,90,138,0.15);margin-bottom:4px">Freight reconciliation</div>
+          <div style="font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-mid);padding:10px 0 4px;border-bottom:1px solid rgba(45,90,138,0.15);margin-bottom:4px">Freight</div>
           ${lines.join('<div style="height:1px;background:rgba(45,90,138,0.10)"></div>')}
         </div>`;
     }
