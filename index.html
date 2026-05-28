@@ -13018,11 +13018,20 @@ function openFreightRetainerModal() {
     const existing = (S.freightCharges || []).find(c =>
       c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryId
     );
+    // Component-level freight on constructed items is preserved when the
+    // retainer is applied (retainer only overwrites the item-level row).
+    // Cache it so per-row + total previews stay accurate.
+    const componentFreight = (item.type === 'constructed') ? getFreightFromComponents(item, pid) : 0;
+    // What this item bills NOW (full item-level + component-level primary freight).
+    // Used for unselected rows — matches what flows into inv.freight unchanged.
+    const existingFreight = getItemFreightForInvoice(item, pid);
     rows.push({
       itemId: item.id,
       spaceName: sp.name || 'Unassigned',
       itemName: item.name || '(unnamed)',
       subtotal,
+      componentFreight,
+      existingFreight,
       existing: existing ? {
         state: existing.state || '',
         valueType: existing.valueType || 'amount',
@@ -13070,7 +13079,8 @@ function _freightRetainerBadge(r) {
     return { text: `Has ${Number(e.value)}% allowance — selecting overwrites with new %`, color: '#6a6a6a' };
   }
   if (e.state === 'known' && e.value != null && e.value !== '') {
-    return { text: `Has known freight (${e.valueType === 'percent' ? `${e.value}%` : `$${Number(e.value).toFixed(2)}`}) — selecting overrides`, color: '#b35a00' };
+    const v = e.valueType === 'percent' ? `${e.value}%` : `$${Number(e.value).toFixed(2)}`;
+    return { text: `Has known freight (${v}) on proposal — selecting overrides; unchecking keeps it (marked up)`, color: '#b35a00' };
   }
   if (e.state === 'deferred') return { text: 'Currently deferred — selecting switches to retainer', color: '#6a6a6a' };
   return null;
@@ -13090,30 +13100,32 @@ function freightRetainerToggleAll(checked) {
 function renderFreightRetainerPreview() {
   const pct = parseFloat($c('fret-pct')?.value) || 0;
   let retainerTotal = 0, retainerCount = 0;
-  let keptDollarTotal = 0, keptDollarCount = 0;
+  let nonRetainerTotal = 0;
   _freightRetainerRows.forEach((r, i) => {
     let amt = 0;
     if (r.selected) {
-      amt = r.subtotal * (pct / 100);
-      retainerTotal += amt;
+      // Retainer overwrites item-level primary freight. Component-level
+      // freight on constructed items is left untouched and still bills.
+      const retainerAmt = r.subtotal * (pct / 100);
+      amt = retainerAmt + (r.componentFreight || 0);
+      retainerTotal += retainerAmt;
+      nonRetainerTotal += (r.componentFreight || 0);
       retainerCount++;
-    } else if (r.existing && r.existing.state === 'allowance' && r.existing.valueType === 'amount' && r.existing.value != null && r.existing.value !== '') {
-      const v = Number(r.existing.value) || 0;
-      keptDollarTotal += v;
-      keptDollarCount++;
-      amt = v;
+    } else {
+      // Unselected items keep whatever freight they have now — matches
+      // exactly what flows into inv.freight via getItemFreightForInvoice.
+      amt = r.existingFreight || 0;
+      nonRetainerTotal += amt;
     }
     const cell = document.querySelector(`.fret-row-amt[data-i="${i}"]`);
     if (cell) cell.textContent = amt > 0 ? fmt(amt) : (r.selected ? fmt(0) : '—');
   });
-  const total = retainerTotal + keptDollarTotal;
+  const total = retainerTotal + nonRetainerTotal;
   const preview = $c('fret-preview');
   if (preview) {
     const parts = [];
     parts.push(`Retainer (${retainerCount} item${retainerCount === 1 ? '' : 's'} @ ${pct}%): <strong style="color:var(--pecan)">${fmt(retainerTotal)}</strong>`);
-    if (keptDollarCount > 0) {
-      parts.push(`+ Existing $ allowances (${keptDollarCount} unchecked item${keptDollarCount === 1 ? '' : 's'}): <strong style="color:var(--pecan)">${fmt(keptDollarTotal)}</strong>`);
-    }
+    parts.push(`Non-retainer freight to add: <strong style="color:var(--pecan)">${fmt(nonRetainerTotal)}</strong>`);
     parts.push(`<div style="border-top:1px solid rgba(45,90,138,0.20);margin-top:6px;padding-top:6px">Total freight on invoice: <strong style="color:var(--text-dark);font-size:13px">${fmt(total)}</strong></div>`);
     preview.innerHTML = parts.join('<br>');
   }
