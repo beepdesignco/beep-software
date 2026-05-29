@@ -24535,10 +24535,63 @@ function removeInvLine(idx) {
   renderInvoiceBuilder();
 }
 
+// For a proposal-linked line (whole item, NOT a component sub-line), compare
+// the stored line.price to the proposal item's current per-unit / total
+// client price. Returns a {expected, current, isTotal, perUnit} payload when
+// they differ by more than a penny, or null when in sync. Used by the
+// invoice builder to surface accidental price drift — including the 1/qty
+// bug that mis-stored the price for qty>1 readymade/openline lines prior
+// to commit bc4d778.
+function _invLineDiscrepancyWarn(l, pid) {
+  if (!l.proposalItemId || l.proposalComponentId || l._reconType) return null;
+  if (!pid) return null;
+  const item = findProposalItemById(l.proposalItemId);
+  if (!item) return null;
+  const expectedPerUnit = getItemClient(item, pid);
+  if (item.type === 'constructed') {
+    // Constructed items: stored as qty=1, price=TOTAL. expectedPerUnit IS
+    // the total for these (qty baked into components).
+    const lineTotal = (parseFloat(l.qty) || 1) * (parseFloat(l.price) || 0);
+    if (Math.abs(lineTotal - expectedPerUnit) < 0.01) return null;
+    return { expected: expectedPerUnit, current: lineTotal, isTotal: true, perUnit: expectedPerUnit };
+  }
+  // Readymade / openline: line.qty should track item.qty, line.price should
+  // be the per-unit marked-up value. Compare per-unit.
+  const currentUnit = parseFloat(l.price) || 0;
+  if (Math.abs(currentUnit - expectedPerUnit) < 0.01) return null;
+  return { expected: expectedPerUnit, current: currentUnit, isTotal: false, perUnit: expectedPerUnit };
+}
+
+// One-click corrector — pulls the proposal item's current per-unit / total
+// price into the line and recalcs. Lets the user dismiss a warning by
+// accepting the proposal value as truth.
+function fixInvLinePriceToProposal(i) {
+  const l = _invLineItems[i];
+  if (!l) return;
+  const inv = (S.invoices || []).find(x => x.id === _currentInvoiceId);
+  const pid = inv?.projectId;
+  if (!pid) return;
+  const item = findProposalItemById(l.proposalItemId);
+  if (!item) return;
+  const expected = getItemClient(item, pid);
+  _invLineItems[i].price = expected;
+  if (item.type !== 'constructed') {
+    // Also restore qty in case it was changed manually — keep what's there
+    // unless it's 0 / NaN. Most of the time the user wants the price fixed
+    // without touching qty.
+    if (!(parseFloat(l.qty) > 0)) _invLineItems[i].qty = parseFloat(item.qty) || 1;
+  }
+  renderInvLineItems();
+  recalcInvoice();
+  toast('Price reset to proposal value.');
+}
+
 function renderInvLineItems() {
   // Credit reconciliation lines render in the totals block (Credit row),
   // not in the line items list. Skipping here keeps original index `i` so
   // removeInvLine(idx) targets the right entry.
+  const _invForLines = (S.invoices || []).find(x => x.id === _currentInvoiceId);
+  const _pidForLines = _invForLines?.projectId || null;
   let firstShown = true;
   const html = _invLineItems.map((l, i) => {
     if (l._reconType === 'credit') return '';
@@ -24547,6 +24600,17 @@ function renderInvLineItems() {
     const showHeader = firstShown;
     firstShown = false;
     const headerPad = showHeader ? '10' : '2';
+    // Discrepancy warning for proposal-linked lines.
+    const warn = _invLineDiscrepancyWarn(l, _pidForLines);
+    const warnHTML = warn ? `
+      <div style="margin-top:4px;padding:6px 10px;background:rgba(187,51,51,0.08);border:1px solid rgba(187,51,51,0.30);border-radius:var(--rs);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-family:var(--font-b);font-size:11px;color:#b33;flex:1;min-width:0">
+          ⚠ ${warn.isTotal
+            ? `Line total <strong>${fmt(warn.current)}</strong> doesn't match the proposal item's <strong>${fmt(warn.expected)}</strong>.`
+            : `Price <strong>${fmt(warn.current)}</strong>/unit doesn't match the proposal item's <strong>${fmt(warn.perUnit)}</strong>/unit.`}
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="fixInvLinePriceToProposal(${i})" style="font-size:10px;padding:3px 9px;border:1px solid #b33;color:#b33;background:transparent;white-space:nowrap">Use proposal price</button>
+      </div>` : '';
     return `
     <div style="padding:8px 8px 4px;margin-bottom:6px;background:${isProposal?'rgba(var(--text-rgb),0.02)':'transparent'};border-radius:var(--rs)">
       <div style="display:flex;align-items:flex-end;gap:6px">
@@ -24578,6 +24642,7 @@ function renderInvLineItems() {
       <div style="padding:4px 0 2px;margin-top:4px">
         <textarea class="fi" placeholder="Description (optional, shown to client only if filled)" onchange="_invLineItems[${i}].description=this.value" style="font-size:11px;padding:5px 8px;width:100%;min-height:32px;resize:vertical">${escH(l.description||'')}</textarea>
       </div>` : ''}
+      ${warnHTML}
     </div>`;
   }).join('');
   $c('inv-line-items').innerHTML = html || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No line items yet.</div>';
