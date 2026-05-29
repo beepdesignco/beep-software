@@ -24354,6 +24354,14 @@ function toggleInvProposalItem(pid, spId, itemId, checked) {
     const sp = prop?.spaces.find(s => s.id === spId);
     const item = sp?.items?.find(i => i.id === itemId);
     if (item && !isFreightItem(item)) {
+      // getItemNonFreightClient returns:
+      //   constructed     → TOTAL marked-up price (qty is baked in via components)
+      //   readymade/openline → PER-UNIT marked-up price (qty applied at display time)
+      // The invoice line stores qty + price separately and renders qty × price,
+      // so price must be PER-UNIT for non-constructed. The previous formula
+      // divided by qty before storing, which when re-multiplied at display
+      // produced a 1× per-unit total — i.e. 1/qty of the real total. With
+      // qty=1 the divide was invisible; with qty>1 every invoice was wrong.
       const nonFreight = getItemNonFreightClient(item, pid);
       const qty = parseFloat(item.qty)||1;
       _invLineItems.push({
@@ -24363,7 +24371,7 @@ function toggleInvProposalItem(pid, spId, itemId, checked) {
         name: item.name,
         description: item.description || '',
         qty: item.type === 'constructed' ? 1 : qty,
-        price: item.type === 'constructed' ? nonFreight : nonFreight / qty,
+        price: nonFreight,
         taxable: !item.taxExempt,
         trackInPM: false,
       });
