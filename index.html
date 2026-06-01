@@ -1736,6 +1736,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab"        data-settab="statuses" onclick="setSettingsTab('statuses')" style="margin-bottom:-1px">Statuses</button>
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
         <button class="view-tab"        data-settab="emails"  onclick="setSettingsTab('emails')"  style="margin-bottom:-1px">Email Templates</button>
+        <button class="view-tab"        data-settab="email_design" onclick="setSettingsTab('email_design')" style="margin-bottom:-1px">Email Design</button>
         <button class="view-tab"        data-settab="notes"   onclick="setSettingsTab('notes')"   style="margin-bottom:-1px">Invoice Notes</button>
         <button class="view-tab"        data-settab="categories" onclick="setSettingsTab('categories')" style="margin-bottom:-1px">Categories</button>
         <button class="view-tab"        data-settab="reminders" onclick="setSettingsTab('reminders')" style="margin-bottom:-1px">Reminders</button>
@@ -1859,6 +1860,13 @@ tr:hover .row-btns { opacity:1; }
           </div>
           <div id="as-email-templates-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
           <button class="btn btn-primary btn-sm" onclick="addEmailTemplate()">+ Add Template</button>
+        </div>
+
+        <div id="settab-email_design" class="settings-panel" style="display:none;max-width:1100px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic;line-height:1.5">
+            Choose a theme and toggle which sections appear on every invoice / receipt email you send. Changes preview live and apply to the next email sent.
+          </div>
+          <div id="email-design-host"></div>
         </div>
 
         <div id="settab-notes" class="settings-panel" style="display:none;max-width:780px">
@@ -18774,6 +18782,154 @@ function setSettingsTab(tab) {
   if (tab === 'categories') { renderVendorTypesList(); renderBrandCategoriesList(); renderItemTypesList(); renderTaxStatesList(); renderSalesTaxTrackerToggle(); renderFreightCategoriesList(); }
   if (tab === 'reminders') renderRemindersPanel();
   if (tab === 'appearance') renderAppearanceSettings();
+  if (tab === 'email_design') renderEmailDesignSettings();
+}
+
+// ── Email Design settings ──
+// Two-column layout: controls on the left (theme cards + section toggles),
+// live preview on the right (desktop / mobile toggle). Edits persist to
+// studio.studio_info.emailLayout = { theme, sections: { id: bool } } via
+// save(). buildInvoiceEmailHtml reads this layout at send time, OR we pass
+// it explicitly here to drive the preview iframe.
+
+let _emailDesignPreviewMode = 'desktop'; // 'desktop' | 'mobile'
+
+function _getCurrentEmailLayout() {
+  const studio = getStudio() || {};
+  return getEmailLayout(studio);
+}
+
+function _saveEmailLayout(layout) {
+  const studio = getStudio();
+  if (!studio) return;
+  studio.emailLayout = {
+    theme: layout.theme,
+    sections: Object.fromEntries(EMAIL_SECTIONS.filter(s => !s.required).map(s => [s.id, !!layout.sections[s.id]])),
+  };
+  save();
+}
+
+function setEmailDesignTheme(themeId) {
+  const layout = _getCurrentEmailLayout();
+  layout.theme = themeId;
+  _saveEmailLayout(layout);
+  renderEmailDesignSettings();
+}
+
+function toggleEmailDesignSection(sectionId, enabled) {
+  const layout = _getCurrentEmailLayout();
+  layout.sections[sectionId] = !!enabled;
+  _saveEmailLayout(layout);
+  renderEmailDesignSettings();
+}
+
+function resetEmailDesignToDefaults() {
+  if (!confirm('Reset email design to defaults (Classic theme, all sections on)?')) return;
+  const studio = getStudio();
+  if (studio) delete studio.emailLayout;
+  save();
+  renderEmailDesignSettings();
+}
+
+function setEmailDesignPreviewMode(mode) {
+  _emailDesignPreviewMode = mode;
+  renderEmailDesignSettings();
+}
+
+// Sample data for the live preview iframe. We don't want to leak real
+// client data into the preview — and the preview should always look
+// "filled in" regardless of what real invoices exist.
+function _emailDesignSampleCtx() {
+  const studio = getStudio() || {};
+  const si = studio.studio_info || {};
+  return {
+    inv: {
+      number: 'BE-101', total: 2890.25, freight: 195, discount: 0, tax: 198.50,
+      adjacentCharges: 65, dueDate: '2026-06-15', due_date: '2026-06-15',
+      lineItems: [
+        { name: 'Howe Wallpaper', description: 'Custom roll, Living Room', qty: 10, price: 253.75, taxable: true },
+        { name: 'Velvet Side Chair', description: 'Per design specs', qty: 2, price: 412.50, taxable: true },
+      ],
+    },
+    studio: { ...si, name: studio.name || 'Your Studio' },
+    client: { name: 'Sample Client', email: 'client@example.com' },
+    project: { name: 'Sample Project' },
+    message: 'Thanks again for the chance to work on this. Pay button below — let me know if any questions!',
+    payUrl: 'https://hq.beepdesign.co/pay/?t=preview',
+    logoUrl: null,
+    isReceipt: false,
+    payments: null,
+    invoiceNotes: 'Payment due within 30 days. Bank transfer preferred — let us know if you need wire instructions.',
+  };
+}
+
+function renderEmailDesignSettings() {
+  const host = $c('email-design-host');
+  if (!host) return;
+  const layout = _getCurrentEmailLayout();
+  const themeCards = Object.entries(EMAIL_THEMES).map(([id, t]) => {
+    const isOn = layout.theme === id;
+    return `
+      <button onclick="setEmailDesignTheme('${id}')" style="
+        text-align:left;padding:12px 14px;cursor:pointer;
+        background:${isOn ? 'rgba(150,61,39,0.08)' : 'var(--white)'};
+        border:2px solid ${isOn ? 'var(--russet)' : 'var(--border)'};
+        border-radius:var(--rl);font-family:var(--font-b);
+        display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(t.label)}</div>
+        <div style="font-size:11px;color:var(--text-mid);line-height:1.4">${escH(t.description)}</div>
+      </button>`;
+  }).join('');
+
+  const sectionRows = EMAIL_SECTIONS.map(s => {
+    const isOn = !!layout.sections[s.id];
+    const disabled = !!s.required;
+    return `
+      <label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--rs);background:${isOn ? 'rgba(150,61,39,0.04)' : 'var(--white)'};cursor:${disabled ? 'not-allowed' : 'pointer'};opacity:${disabled ? '0.7' : '1'}">
+        <input type="checkbox" ${isOn ? 'checked' : ''} ${disabled ? 'disabled' : ''} onchange="toggleEmailDesignSection('${s.id}', this.checked)" style="accent-color:var(--russet);width:14px;height:14px;margin-top:2px;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700">${escH(s.label)}${disabled ? ' <span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-weight:400">always shown</span>' : ''}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:2px;line-height:1.4">${escH(s.desc)}</div>
+        </div>
+      </label>`;
+  }).join('');
+
+  // Build preview HTML and inject via srcdoc — keeps the preview fully
+  // isolated from app CSS so what you see is what the email client sees.
+  const previewHtml = buildInvoiceEmailHtml({ ..._emailDesignSampleCtx(), layout });
+  const isMobile = _emailDesignPreviewMode === 'mobile';
+  const previewWidth = isMobile ? '375px' : '640px';
+  const iframeWrap = `
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Live Preview</div>
+        <div style="display:flex;gap:4px;background:rgba(var(--text-rgb),0.06);padding:2px;border-radius:var(--rs)">
+          <button onclick="setEmailDesignPreviewMode('desktop')" style="padding:4px 12px;font-family:var(--font-b);font-size:11px;border:none;background:${!isMobile ? 'var(--white)' : 'transparent'};color:${!isMobile ? 'var(--text-dark)' : 'var(--text-mid)'};font-weight:${!isMobile ? '700' : '400'};border-radius:var(--rs);cursor:pointer">Desktop</button>
+          <button onclick="setEmailDesignPreviewMode('mobile')" style="padding:4px 12px;font-family:var(--font-b);font-size:11px;border:none;background:${isMobile ? 'var(--white)' : 'transparent'};color:${isMobile ? 'var(--text-dark)' : 'var(--text-mid)'};font-weight:${isMobile ? '700' : '400'};border-radius:var(--rs);cursor:pointer">Mobile</button>
+        </div>
+      </div>
+      <div style="background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--rs);padding:16px;display:flex;justify-content:center">
+        <iframe srcdoc="${previewHtml.replace(/"/g, '&quot;')}" style="width:${previewWidth};max-width:100%;height:720px;border:1px solid var(--border);background:#fff;border-radius:var(--rs)"></iframe>
+      </div>
+    </div>`;
+
+  host.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start">
+      <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Theme</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">${themeCards}</div>
+        </div>
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Sections</div>
+            <button class="btn btn-ghost btn-sm" onclick="resetEmailDesignToDefaults()" style="font-size:10px">Reset to defaults</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">${sectionRows}</div>
+        </div>
+      </div>
+      ${iframeWrap}
+    </div>`;
 }
 
 function renderAppearanceSettings() {
@@ -25802,54 +25958,146 @@ function formatPaymentMethodForEmail(p) {
 
 // Beep-branded invoice email HTML. Inline-styled so it renders in every major mail client.
 // When isReceipt is true, renders a PAID stamp, RECEIPT heading, payment breakdown, and drops the Pay CTA.
-function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl, isReceipt, payments, invoiceNotes }) {
+// Email theme tokens — each theme is a small color/font/spacing palette
+// that the renderer interpolates into the template. Classic is the original
+// design; Compact tightens padding and drops decorative dividers; Minimal
+// strips colors + heading fonts down to a clean monochrome layout.
+const EMAIL_THEMES = {
+  classic: {
+    label: 'Classic',
+    description: 'The original look. Cream + mahogany, monospace body, Oswald headings.',
+    bg:       '#FAF6EE',
+    cardBg:   '#FFFFFF',
+    mahogany: '#5B2D22',
+    pecan:    '#9F6640',
+    border:   '#bfb19a',
+    textDark: '#1a1108',
+    textMid:  '#4a3a2a',
+    paidGreen:'#567047',
+    fontBody: "'Courier New', Courier, monospace",
+    fontHead: "'Oswald', Arial, sans-serif",
+    bodyWeight: '700',
+    padX: '36px',
+    padY: '20px',
+    showDividers: true,
+  },
+  compact: {
+    label: 'Compact',
+    description: 'Same brand colors, tighter padding, fewer dividers. Better on mobile.',
+    bg:       '#FAF6EE',
+    cardBg:   '#FFFFFF',
+    mahogany: '#5B2D22',
+    pecan:    '#9F6640',
+    border:   '#bfb19a',
+    textDark: '#1a1108',
+    textMid:  '#4a3a2a',
+    paidGreen:'#567047',
+    fontBody: "'Courier New', Courier, monospace",
+    fontHead: "'Oswald', Arial, sans-serif",
+    bodyWeight: '700',
+    padX: '20px',
+    padY: '12px',
+    showDividers: false,
+  },
+  minimal: {
+    label: 'Minimal',
+    description: 'White background, system sans, monochrome. Ultra clean.',
+    bg:       '#FFFFFF',
+    cardBg:   '#FFFFFF',
+    mahogany: '#1a1108',
+    pecan:    '#1a1108',
+    border:   '#e6e2dc',
+    textDark: '#1a1108',
+    textMid:  '#5e5650',
+    paidGreen:'#2d7a4a',
+    fontBody: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+    fontHead: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+    bodyWeight: '400',
+    padX: '24px',
+    padY: '16px',
+    showDividers: false,
+  },
+};
+
+// Section toggles. Required sections (title, line_items, totals, action_block)
+// always render so the email is still functional even if everything else is
+// turned off. Sections appear in this declared order.
+const EMAIL_SECTIONS = [
+  { id: 'studio_header',  label: 'Studio header',      desc: 'Logo, studio name, address, contact info.',          defaultOn: true },
+  { id: 'title',          label: 'Invoice / Receipt title', desc: 'Big centered "INVOICE" or "RECEIPT" heading.', defaultOn: true, required: true },
+  { id: 'project_name',   label: 'Project name',       desc: 'Shows the project under the title.',                 defaultOn: true },
+  { id: 'message_box',    label: 'Personal message',   desc: 'The optional message you type when sending.',        defaultOn: true },
+  { id: 'invoice_meta',   label: 'Invoice number + Due date + Billed-to', desc: 'The metadata bar.',               defaultOn: true },
+  { id: 'line_items',     label: 'Line items table',   desc: 'The itemized list of what is being billed.',         defaultOn: true, required: true },
+  { id: 'totals',         label: 'Totals block',       desc: 'Freight, discount, tax, Total.',                     defaultOn: true, required: true },
+  { id: 'notes',          label: 'Notes block',        desc: 'The invoice notes section (if any notes are set).',  defaultOn: true },
+  { id: 'action_block',   label: 'Pay button / Payment details', desc: 'Pay button (invoices) or payment table (receipts).', defaultOn: true, required: true },
+  { id: 'footer',         label: 'Footer',             desc: 'The "Questions? Reply to this email…" line at the bottom.', defaultOn: true },
+];
+
+function getEmailLayout(studio) {
+  const si = studio?.studio_info || studio || {};
+  const layout = si.emailLayout || {};
+  const theme = EMAIL_THEMES[layout.theme] ? layout.theme : 'classic';
+  const sections = {};
+  EMAIL_SECTIONS.forEach(s => {
+    sections[s.id] = s.required ? true : (layout.sections && typeof layout.sections[s.id] === 'boolean' ? layout.sections[s.id] : s.defaultOn);
+  });
+  return { theme, sections };
+}
+
+function buildInvoiceEmailHtml({ inv, studio, client, project, message, payUrl, logoUrl, isReceipt, payments, invoiceNotes, layout }) {
   const si = studio || {};
   const clientName = client?.name || '';
   const esc = s => String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmtInner = (n) => '$' + (Number(n)||0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const mahogany = '#5B2D22';
-  const pecan   = '#9F6640';
-  const border  = '#bfb19a';
-  const bg      = '#FAF6EE';
-  const textDark = '#1a1108';
-  const textMid  = '#4a3a2a';
-  const paidGreen = '#567047';
+  // Resolve layout — caller can pass one in (for preview), otherwise we read
+  // from the studio config (or default to Classic if no studio).
+  const _layout = layout || getEmailLayout(studio);
+  const theme = EMAIL_THEMES[_layout.theme] || EMAIL_THEMES.classic;
+  const on = (id) => !!_layout.sections[id];
+  const mahogany = theme.mahogany;
+  const pecan   = theme.pecan;
+  const border  = theme.border;
+  const bg      = theme.bg;
+  const textDark = theme.textDark;
+  const textMid  = theme.textMid;
+  const paidGreen = theme.paidGreen;
+  const fontBody = theme.fontBody;
+  const fontHead = theme.fontHead;
+  const bodyWeight = theme.bodyWeight;
+  const padX = theme.padX;
 
-  const line = `<tr><td style="border-top:1px solid ${border};height:1px;line-height:1px;font-size:0">&nbsp;</td></tr>`;
+  // Divider — themes that don't want one render an empty 0-height row.
+  const line = theme.showDividers
+    ? `<tr><td style="border-top:1px solid ${border};height:1px;line-height:1px;font-size:0">&nbsp;</td></tr>`
+    : '';
   const heading = isReceipt ? 'R E C E I P T' : 'I N V O I C E';
   const pays = Array.isArray(payments) ? payments.slice().sort((a,b) => (a.date||'').localeCompare(b.date||'')) : [];
   const totalPaid = pays.reduce((s,p) => s + Number(p.amount || 0), 0);
 
-  return `
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Invoice ${esc(inv.number)}</title>
-</head>
-<body style="margin:0;padding:0;background:${bg};font-family:'Courier New',Courier,monospace;font-weight:700;color:${textDark}">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:${bg};padding:32px 0">
-<tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:var(--white);border:1px solid ${border}">
-
-<tr><td style="padding:32px 36px 20px">
+  // Conditional fragments — empty string when section is off so the layout
+  // collapses cleanly. Required sections (title / line_items / totals /
+  // action_block) always render.
+  const sec_studio_header = on('studio_header') ? `
+<tr><td style="padding:32px ${padX} 20px">
   ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(si.name||'')}" style="max-height:56px;max-width:200px;display:block;margin-bottom:14px">` : ''}
-  <div style="font-family:'Oswald',sans-serif;font-weight:600;font-size:20px;letter-spacing:0.08em;color:${mahogany};text-transform:uppercase">${esc(si.name || 'Studio')}</div>
-  <div style="font-size:11px;color:${textMid};margin-top:4px;line-height:1.6;white-space:pre-wrap;font-weight:700">${[si.address1, si.address2, si.phone, si.email, si.website].filter(Boolean).map(esc).join('\n')}</div>
+  <div style="font-family:${fontHead};font-weight:600;font-size:20px;letter-spacing:0.08em;color:${mahogany};text-transform:uppercase">${esc(si.name || 'Studio')}</div>
+  <div style="font-size:11px;color:${textMid};margin-top:4px;line-height:1.6;white-space:pre-wrap;font-weight:${bodyWeight}">${[si.address1, si.address2, si.phone, si.email, si.website].filter(Boolean).map(esc).join('\n')}</div>
 </td></tr>
+${line}` : '';
 
-${line}
-
-<tr><td style="padding:20px 36px">
-  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:22px;letter-spacing:.14em;color:${textDark};text-align:center">${heading}</div>
-  ${project ? `<div style="font-family:'Courier New',monospace;font-size:12px;color:${textDark};text-align:center;margin-top:6px;letter-spacing:.05em;text-transform:uppercase;font-weight:700">${esc(project.name||'')}</div>` : ''}
-  ${isReceipt ? `<div style="text-align:center;margin-top:14px"><span style="display:inline-block;border:3px solid ${paidGreen};color:${paidGreen};font-family:'Oswald',sans-serif;font-weight:700;font-size:26px;letter-spacing:0.22em;padding:6px 22px;background:var(--white)">PAID</span></div>` : ''}
-  ${message ? `<div style="background:${bg};border:1px solid ${border};padding:14px 18px;margin-top:18px;font-family:'Courier New',monospace;font-weight:700;font-size:13px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(message)}</div>` : ''}
+  const sec_title = `
+<tr><td style="padding:20px ${padX}">
+  <div style="font-family:${fontHead};font-weight:700;font-size:22px;letter-spacing:.14em;color:${textDark};text-align:center">${heading}</div>
+  ${(on('project_name') && project) ? `<div style="font-family:${fontBody};font-size:12px;color:${textDark};text-align:center;margin-top:6px;letter-spacing:.05em;text-transform:uppercase;font-weight:${bodyWeight}">${esc(project.name||'')}</div>` : ''}
+  ${isReceipt ? `<div style="text-align:center;margin-top:14px"><span style="display:inline-block;border:3px solid ${paidGreen};color:${paidGreen};font-family:${fontHead};font-weight:700;font-size:26px;letter-spacing:0.22em;padding:6px 22px;background:${theme.cardBg}">PAID</span></div>` : ''}
+  ${(on('message_box') && message) ? `<div style="background:${bg};border:1px solid ${border};padding:14px 18px;margin-top:18px;font-family:${fontBody};font-weight:${bodyWeight};font-size:13px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(message)}</div>` : ''}
 </td></tr>
+${line}`;
 
-${line}
-
-<tr><td style="padding:18px 36px">
+  const sec_invoice_meta = on('invoice_meta') ? `
+<tr><td style="padding:18px ${padX}">
   <table width="100%" cellpadding="0" cellspacing="0">
     <tr>
       <td style="font-size:11px;color:${textMid};text-transform:uppercase;letter-spacing:.1em"><strong style="color:${textDark}">Invoice</strong> ${esc(inv.number)}</td>
@@ -25861,15 +26109,31 @@ ${line}
     </tr>
     ${clientName ? `<tr><td colspan="2" style="font-size:12px;color:${textMid};padding-top:8px">Billed to: <strong style="color:${textDark}">${esc(clientName)}</strong></td></tr>` : ''}
   </table>
-</td></tr>
+</td></tr>` : '';
 
-<tr><td style="padding:4px 36px 18px">
+  return `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Invoice ${esc(inv.number)}</title>
+</head>
+<body style="margin:0;padding:0;background:${bg};font-family:${fontBody};font-weight:${bodyWeight};color:${textDark}">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:${bg};padding:32px 0">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:${theme.cardBg};border:1px solid ${border}">
+
+${sec_studio_header}
+${sec_title}
+${sec_invoice_meta}
+
+<tr><td style="padding:4px ${padX} 18px">
   <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse:collapse">
     <thead>
       <tr>
-        <th align="left"  style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Description</th>
-        <th align="right" style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Qty</th>
-        <th align="right" style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Amount</th>
+        <th align="left"  style="font-family:${fontHead};font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Description</th>
+        <th align="right" style="font-family:${fontHead};font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Qty</th>
+        <th align="right" style="font-family:${fontHead};font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:10px 6px">Amount</th>
       </tr>
     </thead>
     <tbody>
@@ -25885,36 +26149,36 @@ ${line}
   </table>
 </td></tr>
 
-<tr><td style="padding:8px 36px 18px">
+<tr><td style="padding:8px ${padX} 18px">
   <table width="100%" cellpadding="0" cellspacing="0">
     ${inv.freight ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Freight</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.freight)}</td></tr>` : ''}
     ${inv.adjacentCharges ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Other associated charges</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.adjacentCharges)}</td></tr>` : ''}
     ${(inv.lineItems||[]).filter(l => l._reconType === 'credit').map(c => `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Credit · ${esc(c.name||'')}</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</td></tr>`).join('')}
     ${inv.discount ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Discount</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">-${fmtInner(inv.discount)}</td></tr>` : ''}
     ${inv.tax ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Tax</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.tax)}</td></tr>` : ''}
-    <tr><td style="font-family:'Oswald',sans-serif;font-size:14px;color:${mahogany};text-transform:uppercase;letter-spacing:.1em;padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">Total</td>
-        <td align="right" style="font-family:'Oswald',sans-serif;font-size:18px;color:${mahogany};padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">${fmtInner(inv.total)}</td></tr>
+    <tr><td style="font-family:${fontHead};font-size:14px;color:${mahogany};text-transform:uppercase;letter-spacing:.1em;padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">Total</td>
+        <td align="right" style="font-family:${fontHead};font-size:18px;color:${mahogany};padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">${fmtInner(inv.total)}</td></tr>
   </table>
 </td></tr>
 
 ${line}
 
-${invoiceNotes ? `
-<tr><td style="padding:8px 36px 20px">
-  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${mahogany};margin-bottom:8px">Notes</div>
-  <div style="font-family:'Courier New',monospace;font-weight:700;font-size:12px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(invoiceNotes)}</div>
+${(on('notes') && invoiceNotes) ? `
+<tr><td style="padding:8px ${padX} 20px">
+  <div style="font-family:${fontHead};font-weight:700;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${mahogany};margin-bottom:8px">Notes</div>
+  <div style="font-family:${fontBody};font-weight:${bodyWeight};font-size:12px;line-height:1.6;color:${textDark};white-space:pre-wrap">${esc(invoiceNotes)}</div>
 </td></tr>
 ${line}` : ''}
 
 ${isReceipt ? `
-<tr><td style="padding:8px 36px 24px">
-  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${mahogany};margin-bottom:8px;text-align:center">Payment Details</div>
+<tr><td style="padding:8px ${padX} 24px">
+  <div style="font-family:${fontHead};font-weight:700;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${mahogany};margin-bottom:8px;text-align:center">Payment Details</div>
   <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
     <thead>
       <tr>
-        <th align="left"  style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Date</th>
-        <th align="left"  style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Method</th>
-        <th align="right" style="font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Amount</th>
+        <th align="left"  style="font-family:${fontHead};font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Date</th>
+        <th align="left"  style="font-family:${fontHead};font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Method</th>
+        <th align="right" style="font-family:${fontHead};font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:${textDark};border-top:1px solid ${textDark};border-bottom:1px solid ${textDark};padding:8px 6px">Amount</th>
       </tr>
     </thead>
     <tbody>
@@ -25924,22 +26188,23 @@ ${isReceipt ? `
         <td align="right" style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:8px 6px"><strong>${fmtInner(p.amount)}</strong></td>
       </tr>`).join('') : `<tr><td colspan="3" style="font-size:11px;color:${textMid};padding:8px 6px;font-style:italic">No payment records on file.</td></tr>`}
       <tr>
-        <td colspan="2" style="font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:${paidGreen};padding:10px 6px;font-weight:700">Total Paid</td>
-        <td align="right" style="font-family:'Oswald',sans-serif;font-size:14px;color:${paidGreen};padding:10px 6px;font-weight:700">${fmtInner(totalPaid)}</td>
+        <td colspan="2" style="font-family:${fontHead};font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:${paidGreen};padding:10px 6px;font-weight:700">Total Paid</td>
+        <td align="right" style="font-family:${fontHead};font-size:14px;color:${paidGreen};padding:10px 6px;font-weight:700">${fmtInner(totalPaid)}</td>
       </tr>
     </tbody>
   </table>
 </td></tr>` : `
-<tr><td align="center" style="padding:24px 36px 32px">
-  <a href="${esc(payUrl)}" style="display:inline-block;background:${mahogany};color:#fff;text-decoration:none;padding:14px 28px;font-family:'Oswald',sans-serif;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase">Review &amp; Pay Invoice</a>
-  <div style="font-family:'Courier New',monospace;font-weight:700;font-size:11px;color:${textMid};margin-top:10px">
+<tr><td align="center" style="padding:24px ${padX} 32px">
+  <a href="${esc(payUrl)}" style="display:inline-block;background:${mahogany};color:#fff;text-decoration:none;padding:14px 28px;font-family:${fontHead};font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase">Review &amp; Pay Invoice</a>
+  <div style="font-family:${fontBody};font-weight:${bodyWeight};font-size:11px;color:${textMid};margin-top:10px">
     ACH (no fee) · Credit / Debit · Wire · Check${si.checkMailingAddress?'':''}
   </div>
 </td></tr>`}
 
-<tr><td style="background:${bg};padding:16px 36px;text-align:center;font-family:'Courier New',monospace;font-weight:400;font-size:10px;color:${textMid}">
+${on('footer') ? `
+<tr><td style="background:${bg};padding:16px ${padX};text-align:center;font-family:${fontBody};font-weight:400;font-size:10px;color:${textMid}">
   Questions? Reply to this email or contact ${esc(si.email || si.phone || '')}
-</td></tr>
+</td></tr>` : ''}
 
 </table>
 </td></tr>
