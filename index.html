@@ -5947,7 +5947,7 @@ async function loadFromSupabase() {
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('projects').select('*, project_contacts(*)').eq('studio_id', studioId).is('deleted_at', null),
-    sb.from('invoices').select('*, invoice_line_items(*), invoice_payments(*)').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('invoices').select('*, invoice_line_items(*), invoice_payments(*), invoice_views(id, viewed_at, user_agent)').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('expenses').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('documents').select('*, document_versions!document_id(*)').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('time_entries').select('*').eq('studio_id', studioId),
@@ -6527,6 +6527,11 @@ function dbInvoiceToS(inv) {
       notes: p.notes || '',
       receiptPath: p.receipt_path || '',
     })),
+    // Client view log (Phase 0_34). Bot/email-prefetch views are filtered
+    // at the edge function so this count is real human opens.
+    views: (inv.invoice_views || [])
+      .map(v => ({ id: v.id, viewedAt: v.viewed_at, userAgent: v.user_agent || '' }))
+      .sort((a, b) => (b.viewedAt || '').localeCompare(a.viewedAt || '')),
   };
 }
 
@@ -24744,6 +24749,75 @@ function toggleInvLineTrack(idx, checked) {
   toast(checked ? 'Tracking in PM.' : 'Untracked from PM.');
 }
 
+// Render the "Viewed N×" / "Not viewed" pill that sits below the invoice
+// total. Drafts hide entirely (the link isn't out to a client yet). Sent /
+// partial / paid invoices show a clickable pill that toggles a dropdown
+// of every view timestamp. Bot/email-prefetch views are filtered upstream
+// at the get-invoice-for-payment edge function.
+function renderInvViewedPill(inv) {
+  if (!inv || inv.status === 'draft' || inv.status === 'cancelled') return '';
+  const views = inv.views || [];
+  const count = views.length;
+  if (count === 0) {
+    return `
+      <div style="margin-top:10px;display:flex;justify-content:flex-end">
+        <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-b);font-size:10px;padding:3px 9px;border-radius:999px;background:rgba(var(--text-rgb),0.06);color:var(--text-light)">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--text-light)"></span>Not viewed by client
+        </span>
+      </div>`;
+  }
+  const expanded = !!_invViewedExpanded;
+  const mostRecent = views[0]?.viewedAt;
+  const recentTxt = mostRecent ? _fmtViewWhen(mostRecent) : '';
+  const list = expanded ? `
+    <div style="margin-top:6px;padding:6px 10px;background:rgba(45,122,74,0.06);border:1px solid rgba(45,122,74,0.20);border-radius:var(--rs);max-height:180px;overflow-y:auto">
+      ${views.map(v => `
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);padding:2px 0;display:flex;justify-content:space-between;gap:10px">
+          <span>${escH(_fmtViewWhen(v.viewedAt))}</span>
+          <span style="color:var(--text-light);font-size:10px">${escH(_fmtAbsoluteWhen(v.viewedAt))}</span>
+        </div>`).join('')}
+    </div>` : '';
+  return `
+    <div style="margin-top:10px;display:flex;flex-direction:column;align-items:flex-end">
+      <button onclick="toggleInvViewedLog()" style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-b);font-size:10px;padding:3px 9px;border-radius:999px;background:rgba(45,122,74,0.14);color:#2d7a4a;border:none;cursor:pointer;font-weight:700">
+        <span style="width:6px;height:6px;border-radius:50%;background:#2d7a4a"></span>Viewed ${count}×${recentTxt ? ' · ' + escH(recentTxt) : ''}
+        <span style="margin-left:2px">${expanded ? '▾' : '▸'}</span>
+      </button>
+      <div style="align-self:stretch">${list}</div>
+    </div>`;
+}
+
+let _invViewedExpanded = false;
+
+function toggleInvViewedLog() {
+  _invViewedExpanded = !_invViewedExpanded;
+  // Re-render only the totals card region; renderInvoiceBuilder is cheap
+  // enough here and keeps things consistent with other in-builder updates.
+  renderInvoiceBuilder();
+}
+
+// Reset the expanded state whenever a different invoice is opened so it
+// doesn't carry over between invoices. Called by openInvoiceBuilder.
+function _resetInvViewedExpand() { _invViewedExpanded = false; }
+
+// "5m ago", "3h ago", "yesterday", "Jun 1" — for the pill subtext.
+function _fmtViewWhen(iso) {
+  if (!iso) return '';
+  const then = new Date(iso);
+  const diff = (Date.now() - then.getTime()) / 1000;
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  if (diff < 86400 * 2) return 'yesterday';
+  if (diff < 86400 * 7) return `${Math.floor(diff/86400)}d ago`;
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function _fmtAbsoluteWhen(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 // Inline edit handler for the builder header strip (Sent Date / Due Date /
 // Phase). Writes to the invoice in S, persists, and refreshes the page title
 // + subtitle in place. No full re-render — keeps the user's cursor and any
@@ -24925,6 +24999,7 @@ let _currentInvoiceId = null;
 
 function openInvoiceBuilder(invId) {
   _currentInvoiceId = invId;
+  _resetInvViewedExpand();
   const inv = (S.invoices||[]).find(i => i.id === invId);
   if (!inv) return;
   // Kick off (non-blocking) fetch of which reminder rules have already fired, so
@@ -25280,6 +25355,7 @@ function renderInvoiceBuilder() {
         <span style="font-family:var(--font-h);font-weight:900;font-size:14px;text-transform:uppercase;color:var(--mahogany)">Total</span>
         <span id="inv-grand-total" style="font-family:var(--font-h);font-weight:900;font-size:20px;color:var(--pecan)">$0.00</span>
       </div>
+      ${renderInvViewedPill(inv)}
       ${showPayments ? `
       <div style="display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-family:var(--font-b);font-size:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
         <span style="color:#1a6e3a">Paid</span><span style="text-align:right;color:#1a6e3a;font-weight:700">${fmt(paymentsTotal)}</span>

@@ -34,6 +34,28 @@ Deno.serve(async (req) => {
     if (error || !inv) return json({ error: 'Invoice not found.' }, 404);
     if (inv.status === 'cancelled') return json({ error: 'This invoice has been cancelled.' }, 410);
 
+    // Log a view row for analytics — fire-and-forget. Bots/email prefetches
+    // get filtered out so the studio's "Viewed N×" count reflects actual
+    // human opens. We don't block the response on this; failures are
+    // logged server-side but never surfaced to the client.
+    try {
+      const ua = req.headers.get('user-agent') || '';
+      if (!_isLikelyBot(ua) && inv.status !== 'draft') {
+        const xff = req.headers.get('x-forwarded-for') || '';
+        const ip = xff.split(',')[0].trim() || req.headers.get('cf-connecting-ip') || null;
+        sb.from('invoice_views').insert({
+          invoice_id: inv.id,
+          studio_id: inv.studio_id,
+          user_agent: ua.slice(0, 500),
+          ip: ip ? ip.slice(0, 64) : null,
+        }).then(({ error: viewErr }) => {
+          if (viewErr) console.warn('[get-invoice-for-payment] view log failed:', viewErr.message);
+        });
+      }
+    } catch (logErr) {
+      console.warn('[get-invoice-for-payment] view log threw:', logErr);
+    }
+
     // Pull studio info (name, address, email, website, check_mailing_address, wire_instructions, logo)
     const { data: studio } = await sb
       .from('studios')
@@ -138,4 +160,43 @@ function json(body: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
+}
+
+// Best-effort bot/email-prefetch detection. The goal isn't a perfect filter —
+// it's keeping the studio's "Viewed N×" count from being polluted by Gmail /
+// Outlook / Slack / Apple Mail silently fetching the link to render a preview
+// card. Common identifiers per provider docs as of 2026.
+function _isLikelyBot(ua: string): boolean {
+  if (!ua) return true; // no UA at all → almost certainly a bot
+  const lc = ua.toLowerCase();
+  const needles = [
+    'googleimageproxy',          // Gmail image proxy + link prefetch
+    'googleweblight',
+    'googlebot',
+    'bingbot',
+    'yandex',
+    'baiduspider',
+    'duckduckbot',
+    'applebot',
+    'facebookexternalhit', 'facebot',
+    'twitterbot',
+    'linkedinbot',
+    'slackbot', 'slack-imgproxy',
+    'discordbot',
+    'whatsapp',
+    'telegrambot',
+    'skype',
+    'outlook',                    // Outlook safelinks + prefetch
+    'safelinks',
+    'msoffice',
+    'mimecast',                   // common email security scanners
+    'proofpoint', 'pphosted',
+    'barracuda',
+    'mailruagent',
+    'yahoomailproxy',
+    'preview', 'prefetch',
+    'crawler', 'spider', 'bot/', 'bot ', 'http-client', 'okhttp',
+    'curl/', 'wget/', 'python-requests', 'go-http-client', 'java/',
+  ];
+  return needles.some(n => lc.includes(n));
 }
