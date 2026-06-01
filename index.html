@@ -18836,6 +18836,21 @@ function setEmailDesignPreviewMode(mode) {
   renderEmailDesignSettings();
 }
 
+// Opens the current email preview in a fresh browser tab at the real
+// rendered width — no iframe scaling, no Settings UI around it. Useful
+// when you want to inspect the email as the client actually sees it
+// (or take a screenshot, or hand it to someone for feedback).
+function openEmailFullPreview() {
+  const layout = _getCurrentEmailLayout();
+  const html = buildInvoiceEmailHtml({ ..._emailDesignSampleCtx(), layout });
+  const w = window.open('about:blank', '_blank');
+  if (!w) { toast('Pop-up blocked — allow pop-ups for hq.beepdesign.co to use full preview.'); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.document.title = 'Email Preview — ' + (EMAIL_THEMES[layout.theme]?.label || 'Custom');
+}
+
 // Sample data for the live preview iframe. We don't want to leak real
 // client data into the preview — and the preview should always look
 // "filled in" regardless of what real invoices exist.
@@ -18901,11 +18916,14 @@ function renderEmailDesignSettings() {
   const previewWidth = isMobile ? '375px' : '640px';
   const iframeWrap = `
     <div style="display:flex;flex-direction:column;gap:8px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Live Preview</div>
-        <div style="display:flex;gap:4px;background:rgba(var(--text-rgb),0.06);padding:2px;border-radius:var(--rs)">
-          <button onclick="setEmailDesignPreviewMode('desktop')" style="padding:4px 12px;font-family:var(--font-b);font-size:11px;border:none;background:${!isMobile ? 'var(--white)' : 'transparent'};color:${!isMobile ? 'var(--text-dark)' : 'var(--text-mid)'};font-weight:${!isMobile ? '700' : '400'};border-radius:var(--rs);cursor:pointer">Desktop</button>
-          <button onclick="setEmailDesignPreviewMode('mobile')" style="padding:4px 12px;font-family:var(--font-b);font-size:11px;border:none;background:${isMobile ? 'var(--white)' : 'transparent'};color:${isMobile ? 'var(--text-dark)' : 'var(--text-mid)'};font-weight:${isMobile ? '700' : '400'};border-radius:var(--rs);cursor:pointer">Mobile</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="display:flex;gap:4px;background:rgba(var(--text-rgb),0.06);padding:2px;border-radius:var(--rs)">
+            <button onclick="setEmailDesignPreviewMode('desktop')" style="padding:4px 12px;font-family:var(--font-b);font-size:11px;border:none;background:${!isMobile ? 'var(--white)' : 'transparent'};color:${!isMobile ? 'var(--text-dark)' : 'var(--text-mid)'};font-weight:${!isMobile ? '700' : '400'};border-radius:var(--rs);cursor:pointer">Desktop</button>
+            <button onclick="setEmailDesignPreviewMode('mobile')" style="padding:4px 12px;font-family:var(--font-b);font-size:11px;border:none;background:${isMobile ? 'var(--white)' : 'transparent'};color:${isMobile ? 'var(--text-dark)' : 'var(--text-mid)'};font-weight:${isMobile ? '700' : '400'};border-radius:var(--rs);cursor:pointer">Mobile</button>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="openEmailFullPreview()" title="Open the preview in a new browser tab at full size" style="font-size:11px;padding:4px 10px">Open in new tab</button>
         </div>
       </div>
       <div style="background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--rs);padding:16px;display:flex;justify-content:center">
