@@ -1518,8 +1518,11 @@ tr:hover .row-btns { opacity:1; }
           <div class="page-sub">Create, send, and track invoices</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center" id="inv-toolbar">
-          <select class="fi" id="inv-filter-project" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px;width:200px">
+          <select class="fi" id="inv-filter-project" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px;width:180px">
             <option value="">All Projects</option>
+          </select>
+          <select class="fi" id="inv-filter-client" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px;width:160px">
+            <option value="">All Clients</option>
           </select>
           <select class="fi" id="inv-filter-status" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px">
             <option value="">All Statuses</option>
@@ -1537,6 +1540,7 @@ tr:hover .row-btns { opacity:1; }
             <option value="standalone">Standalone</option>
             <option value="design_fee">Design Fee</option>
           </select>
+          <button id="inv-filter-clear" onclick="clearInvoiceFilters()" style="display:none;font-family:var(--font-b);font-size:11px;color:var(--russet);background:none;border:none;cursor:pointer;padding:6px 4px;text-decoration:underline">Clear filters</button>
           <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>
         </div>
       </div>
@@ -10539,7 +10543,7 @@ function renderPDManagement(proj, pid) {
       <span style="width:8px"></span>
       ${STATUS_FLAGS.map(f => {
         const active = _pmStatusFilters.includes(f.v);
-        return `<button onclick="togglePMStatusFilter('${f.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?f.color:f.color+'40'};background:${active?f.color+'18':'white'};color:${active?f.color:'var(--text-light)'}">${f.l}</button>`;
+        return `<button onclick="togglePMStatusFilter('${f.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?f.color:'var(--border)'};background:${active?f.color+'18':'white'};color:${active?f.color:'var(--text-mid)'}">${f.l}</button>`;
       }).join('')}
     </div>
   </div>`;
@@ -11120,8 +11124,13 @@ function renderDocFileCard(f, pid, removeOnclick) {
   const canView = !f.name.endsWith('.dwg');
   const displayName = f.displayName || f.name;
   const isRenamed = f.displayName && f.displayName !== f.name;
+  // Pass the full file record (esp. storagePath) — earlier the JSON only
+  // included {data, type, name}, so files uploaded via Supabase storage
+  // (which use storagePath, not data) opened to a "No file path on record"
+  // toast. Including storagePath fixes that.
+  const fileForView = JSON.stringify({ data: f.data, type: f.type, name: f.name, storagePath: f.storagePath });
   return `
-  <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;transition:var(--t)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''} oncontextmenu="showDocContextMenu(event,'${pid}','${f.id}')">
+  <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;transition:var(--t)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(fileForView).replace(/"/g,'&quot;')})"`:''} oncontextmenu="showDocContextMenu(event,'${pid}','${f.id}')">
     <span style="font-size:20px">${icon}</span>
     <div style="flex:1;min-width:0">
       <div style="font-family:var(--font-b);font-size:12px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(displayName)}</div>
@@ -27757,6 +27766,17 @@ function renderInvCard(inv) {
   </div>`;
 }
 
+// Reset all four invoice filter selects to "All" and re-render. Wired to
+// the Clear filters button that only appears when at least one filter
+// is active.
+function clearInvoiceFilters() {
+  ['inv-filter-project', 'inv-filter-client', 'inv-filter-status', 'inv-filter-type'].forEach(id => {
+    const el = $c(id);
+    if (el) el.value = '';
+  });
+  renderInvoices();
+}
+
 function renderInvoices() {
   const body = $c('invoices-body');
   if (!body) return;
@@ -27768,23 +27788,41 @@ function renderInvoices() {
     projFilter.innerHTML = '<option value="">All Projects</option>' +
       S.projects.map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
   }
+  // Populate client filter — sorted by name, only clients that actually
+  // have at least one invoice show up.
+  const clientFilter = $c('inv-filter-client');
+  if (clientFilter) {
+    const cur = clientFilter.value;
+    const clientIdsInUse = new Set((S.invoices || []).map(i => i.clientId).filter(Boolean));
+    const eligibleClients = (S.clients || []).filter(c => clientIdsInUse.has(c.id)).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+    clientFilter.innerHTML = '<option value="">All Clients</option>' +
+      eligibleClients.map(c => `<option value="${c.id}" ${c.id===cur?'selected':''}>${escH(c.name||'(unnamed)')}</option>`).join('');
+  }
 
   let invoices = S.invoices || [];
-  const fProj = $c('inv-filter-project')?.value;
+  const fProj   = $c('inv-filter-project')?.value;
+  const fClient = $c('inv-filter-client')?.value;
   const fStatus = $c('inv-filter-status')?.value;
-  const fType = $c('inv-filter-type')?.value;
+  const fType   = $c('inv-filter-type')?.value;
 
-  if (fProj) invoices = invoices.filter(i => i.projectId === fProj);
-  if (fType) invoices = invoices.filter(i => i.type === fType);
+  if (fProj)   invoices = invoices.filter(i => i.projectId === fProj);
+  if (fClient) invoices = invoices.filter(i => i.clientId === fClient);
+  if (fType)   invoices = invoices.filter(i => i.type === fType);
   if (fStatus) {
     invoices = invoices.filter(i => {
-      if (fStatus === 'overdue') return i.status === 'sent' && i.dueDate && new Date(i.dueDate) < new Date();
+      if (fStatus === 'overdue') return (i.status === 'sent' || i.status === 'partial') && i.dueDate && new Date(i.dueDate) < new Date();
       if (fStatus === 'cancelled') return i.status === 'cancelled';
       return i.status === fStatus;
     });
   }
 
-  // Separate active from cancelled
+  // Show/hide Clear filters button based on whether any filter is active.
+  const anyActive = !!(fProj || fClient || fStatus || fType);
+  const clearBtn = $c('inv-filter-clear');
+  if (clearBtn) clearBtn.style.display = anyActive ? '' : 'none';
+
+  // Separate active from cancelled — the filters above already applied to
+  // both, so this just decides which section each surviving invoice lands in.
   const active = invoices.filter(i => i.status !== 'cancelled').sort((a,b) => (b.created||'').localeCompare(a.created||''));
   const cancelled = invoices.filter(i => i.status === 'cancelled').sort((a,b) => (b.created||'').localeCompare(a.created||''));
 
