@@ -6091,6 +6091,16 @@ async function loadFromSupabase() {
   // first sign-in after this build; studio.contactsMigratedAt guards re-run.
   if (typeof migrateContactsToVendors === 'function') migrateContactsToVendors();
 
+  // Detect payment-state changes BEFORE shadow capture, so we can compare
+  // the freshly-loaded S.invoices to the prior shadow (last sync state) and
+  // fire client-side automations for any Stripe-originated payments that
+  // appeared, cleared, or bounced while we were offline. Notification
+  // idempotency (paymentId + event type) keeps repeated loads from
+  // re-firing the same event.
+  if (typeof detectStripePaymentChangesAndFire === 'function') {
+    try { detectStripePaymentChangesAndFire(); } catch (e) { console.warn('[payments] detection failed:', e); }
+  }
+
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
   if (typeof captureSbShadow === 'function') captureSbShadow();
 
@@ -6541,6 +6551,10 @@ function dbInvoiceToS(inv) {
       // Phase 0_35: pending=true for in-flight ACH that hasn't settled.
       // Excluded from Paid/Outstanding totals + sales tax report.
       pending: !!p.pending,
+      // Set by the Stripe webhook on Stripe-originated payments; null
+      // for manual Record Payment entries. Detection logic uses this to
+      // tell webhook-deleted bounces apart from user-initiated deletes.
+      stripePaymentIntent: p.stripe_payment_intent || null,
     })),
     // Client view log (Phase 0_34). Bot/email-prefetch views are filtered
     // at the edge function so this count is real human opens.
@@ -7155,6 +7169,7 @@ function invPaymentToDB(p) {
     method: p.method || null, notes: p.notes || null,
     receipt_path: p.receiptPath || null,
     pending: !!p.pending,
+    stripe_payment_intent: p.stripePaymentIntent || null,
   };
 }
 function documentToDB(d, studioId) {
@@ -7551,6 +7566,11 @@ const STATUSES = [
   { v:'billable',           l:'Billable' },
   { v:'invoiced',           l:'Invoiced' },
   { v:'pending_status',     l:'Pending Status' },
+  // Client Payment Submitted (phase0_35) — between Invoiced and CPR. Fires
+  // when an ACH payment is submitted but not yet settled (3-5 business
+  // days). On settlement the item auto-advances to CPR; on bounce it
+  // advances to Pending Status with the needs_attention flag.
+  { v:'client_payment_submitted', l:'Client Payment Submitted' },
   { v:'ready_for_ordering', l:'Client Payment Received' },
   { v:'ordered',            l:'Ordered' },
   { v:'payment_processed',  l:'Payment Processed' },
@@ -7587,6 +7607,7 @@ const DEFAULT_STATUS_COLORS = {
   billable:           '#b33333',
   invoiced:           '#2d5a8a',
   pending_status:     '#c47a20',
+  client_payment_submitted: '#7a6a30',
   ready_for_ordering: '#6a5a2d',
   ordered:            '#2d5a8a',
   payment_processed:  '#2d7a4a',
@@ -26922,25 +26943,88 @@ function openSendInvoiceFromBuilder() {
   openSendInvoiceModal(inv.id, { markSentOnSuccess: inv.status === 'draft' });
 }
 
-function processInvoicePaidAutomations(inv) {
+// Walks freshly-loaded S.invoices vs the prior _sbShadow.invoicePayments
+// state and fires the appropriate automation for each Stripe-originated
+// payment that changed:
+//   * New row, pending=true              → processInvoicePendingAutomations
+//   * New row, pending=false             → processInvoicePaidAutomations
+//   * Existed pending, now pending=false → processInvoicePaidAutomations
+//   * Existed pending, now missing       → processInvoiceBouncedAutomations
+//
+// Manual payments (no stripePaymentIntent) are ignored — those fire
+// through applyPaymentStatus directly when the user clicks Record.
+//
+// Notification idempotency inside each automation function means re-runs
+// (page refresh, second device, etc.) don't generate duplicate banners.
+function detectStripePaymentChangesAndFire() {
+  if (!Array.isArray(S.invoices)) return;
+  const shadowPayments = _sbShadow.invoicePayments;
+  if (!shadowPayments) return;
+  // Track current payment IDs per invoice for the "missing in current"
+  // bounce detection below.
+  const currentIdsByInv = new Map();
+  S.invoices.forEach(inv => {
+    const ids = new Set();
+    currentIdsByInv.set(inv.id, ids);
+    (inv.payments || []).forEach(p => {
+      ids.add(p.id);
+      // Only react to Stripe-originated rows. Manual entries are user-driven.
+      if (!p.stripePaymentIntent) return;
+      const prior = shadowPayments.get(p.id);
+      const isPending = !!p.pending;
+      if (!prior) {
+        // Brand new Stripe payment row (relative to last sync).
+        if (isPending) processInvoicePendingAutomations(inv, p.id);
+        else           processInvoicePaidAutomations(inv, { sourcePaymentId: p.id });
+      } else if (prior.pending && !isPending) {
+        // ACH cleared between syncs.
+        processInvoicePaidAutomations(inv, { sourcePaymentId: p.id });
+      }
+    });
+  });
+  // Bounce detection: any row that was in shadow with pending=true AND a
+  // stripePaymentIntent, but no longer exists in current state, means the
+  // webhook deleted it on async_payment_failed.
+  shadowPayments.forEach((prior, pid) => {
+    if (!prior.pending) return;
+    if (!prior.stripePaymentIntent) return;
+    const inv = S.invoices.find(i => i.id === prior._invoiceId);
+    if (!inv) return;
+    const ids = currentIdsByInv.get(inv.id);
+    if (ids && ids.has(pid)) return;
+    processInvoiceBouncedAutomations(inv, pid);
+  });
+}
+
+function processInvoicePaidAutomations(inv, opts) {
   const pid = inv.projectId;
   const prop = S.proposals[pid];
   if (!prop) return;
-  let updatedCount = 0;
+  const sourcePaymentId = opts?.sourcePaymentId || null;
+  // Idempotency: skip if a notification with this paymentId+'invoice_paid'
+  // already exists (sync-side detection runs on every load; we re-detect
+  // the same payment row each time, but only fire once).
+  if (sourcePaymentId && (prop.notifications || []).some(n => n.paymentId === sourcePaymentId && n.type === 'invoice_paid')) return;
 
-  // Update proposal items to ready_for_ordering (client payment received)
+  let updatedCount = 0;
+  // Items at invoiced OR client_payment_submitted are eligible to advance
+  // to ready_for_ordering — anything past CPR (ordered/shipped/etc.) is
+  // left alone. Regression protection: an item already past CPR never
+  // gets bumped backward.
+  const advanceable = (status) => status === 'invoiced' || status === 'client_payment_submitted';
+
   (inv.lineItems||[]).forEach(line => {
     if (line.proposalItemId) {
       (prop.spaces||[]).forEach(sp => {
         const item = (sp.items||[]).find(i => i.id === line.proposalItemId);
-        if (item && item.status === 'invoiced') { item.status = 'ready_for_ordering'; updatedCount++; }
+        if (item && advanceable(item.status)) { item.status = 'ready_for_ordering'; updatedCount++; }
       });
     }
     // Update expense-sourced PM items too
     if (line._expenseId) {
       (prop.spaces||[]).forEach(sp => {
         const item = (sp.items||[]).find(i => i._expenseId === line._expenseId);
-        if (item && item.status === 'invoiced') { item.status = 'ready_for_ordering'; updatedCount++; }
+        if (item && advanceable(item.status)) { item.status = 'ready_for_ordering'; updatedCount++; }
       });
       // Update expense status
       const exp = (S.expenses||[]).find(e => e.id === line._expenseId);
@@ -26950,7 +27034,7 @@ function processInvoicePaidAutomations(inv) {
   // Backup: check _invoiceIds
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
-      if (item._invoiceIds?.includes(inv.id) && item.status === 'invoiced') {
+      if (item._invoiceIds?.includes(inv.id) && advanceable(item.status)) {
         item.status = 'ready_for_ordering'; updatedCount++;
       }
     });
@@ -26963,11 +27047,110 @@ function processInvoicePaidAutomations(inv) {
       type: 'invoice_paid',
       invoiceId: inv.id,
       invoiceNumber: inv.number,
+      paymentId: sourcePaymentId,
       message: 'Invoice ' + inv.number + ' paid — ' + updatedCount + ' item' + (updatedCount!==1?'s':'') + ': Client Payment Received',
       timestamp: new Date().toISOString(),
       read: false,
     });
   }
+}
+
+// Fires when an ACH payment is submitted but not yet settled. Transitions
+// linked items invoiced → client_payment_submitted; no expense state
+// change yet (funds haven't actually arrived). Regression protection:
+// only items currently at 'invoiced' are advanced.
+function processInvoicePendingAutomations(inv, paymentId) {
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  if (paymentId && (prop.notifications || []).some(n => n.paymentId === paymentId && n.type === 'payment_pending')) return;
+
+  let updatedCount = 0;
+  (inv.lineItems || []).forEach(line => {
+    if (line.proposalItemId) {
+      (prop.spaces || []).forEach(sp => {
+        const item = (sp.items || []).find(i => i.id === line.proposalItemId);
+        if (item && item.status === 'invoiced') { item.status = 'client_payment_submitted'; updatedCount++; }
+      });
+    }
+    if (line._expenseId) {
+      (prop.spaces || []).forEach(sp => {
+        const item = (sp.items || []).find(i => i._expenseId === line._expenseId);
+        if (item && item.status === 'invoiced') { item.status = 'client_payment_submitted'; updatedCount++; }
+      });
+    }
+  });
+  (prop.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      if (item._invoiceIds?.includes(inv.id) && item.status === 'invoiced') {
+        item.status = 'client_payment_submitted'; updatedCount++;
+      }
+    });
+  });
+
+  if (!prop.notifications) prop.notifications = [];
+  prop.notifications.push({
+    id: uid(),
+    type: 'payment_pending',
+    invoiceId: inv.id,
+    invoiceNumber: inv.number,
+    paymentId,
+    message: 'Client submitted payment for invoice ' + inv.number + ' — ACH clearing (3-5 business days)' + (updatedCount ? '. ' + updatedCount + ' item' + (updatedCount!==1?'s':'') + ' → Client Payment Submitted' : ''),
+    timestamp: new Date().toISOString(),
+    read: false,
+  });
+}
+
+// Fires when an in-flight ACH payment bounces. Transitions linked items
+// from client_payment_submitted → pending_status with needs_attention
+// flag (matches the invoice-cancellation pattern). Items already past
+// CPS are left alone.
+function processInvoiceBouncedAutomations(inv, paymentId) {
+  const pid = inv.projectId;
+  const prop = S.proposals[pid];
+  if (!prop) return;
+  if (paymentId && (prop.notifications || []).some(n => n.paymentId === paymentId && n.type === 'payment_bounced')) return;
+
+  let updatedCount = 0;
+  const flagItem = (item) => {
+    if (item.status === 'client_payment_submitted') {
+      item.status = 'pending_status';
+      if (!item.statusFlags) item.statusFlags = [];
+      if (!item.statusFlags.includes('needs_attention')) item.statusFlags.push('needs_attention');
+      updatedCount++;
+    }
+  };
+  (inv.lineItems || []).forEach(line => {
+    if (line.proposalItemId) {
+      (prop.spaces || []).forEach(sp => {
+        const item = (sp.items || []).find(i => i.id === line.proposalItemId);
+        if (item) flagItem(item);
+      });
+    }
+    if (line._expenseId) {
+      (prop.spaces || []).forEach(sp => {
+        const item = (sp.items || []).find(i => i._expenseId === line._expenseId);
+        if (item) flagItem(item);
+      });
+    }
+  });
+  (prop.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      if (item._invoiceIds?.includes(inv.id)) flagItem(item);
+    });
+  });
+
+  if (!prop.notifications) prop.notifications = [];
+  prop.notifications.push({
+    id: uid(),
+    type: 'payment_bounced',
+    invoiceId: inv.id,
+    invoiceNumber: inv.number,
+    paymentId,
+    message: 'Client ACH bounced for invoice ' + inv.number + (updatedCount ? '. ' + updatedCount + ' item' + (updatedCount!==1?'s':'') + ' flagged Needs Attention' : '') + '. Follow up with the client.',
+    timestamp: new Date().toISOString(),
+    read: false,
+  });
 }
 
 function revertToSent() {
