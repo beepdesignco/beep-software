@@ -53,7 +53,20 @@ Deno.serve(async (req) => {
 
     const baseUrl = origin || 'https://hq.beepdesign.co';
 
-    const session = await stripe.checkout.sessions.create({
+    // ACH gets upgraded payment_method_options so the client links their
+    // bank via Plaid (Stripe Financial Connections) — gives instant
+    // verification instead of the 3-5 day micro-deposit dance, AND tends
+    // to unlock higher per-transaction ACH limits because Stripe trusts
+    // a Plaid-verified account more than a manually-entered one.
+    //
+    // verification_method 'automatic' = Plaid first, fall back to micro-
+    // deposits if Plaid fails (rather than 'instant' which would block
+    // the payment entirely if Plaid can't verify).
+    //
+    // permissions: 'payment_method' is required to charge; 'balances'
+    // is added so Stripe can confirm available funds (additional signal
+    // that helps with risk-based limit decisions).
+    const sessionParams: any = {
       mode: 'payment',
       payment_method_types: method === 'card' ? ['card'] : ['us_bank_account'],
       customer_email: client?.email || undefined,
@@ -82,7 +95,18 @@ Deno.serve(async (req) => {
       },
       success_url: `${baseUrl}/pay/?t=${encodeURIComponent(token)}&status=success`,
       cancel_url:  `${baseUrl}/pay/?t=${encodeURIComponent(token)}&status=cancel`,
-    });
+    };
+    if (method === 'ach') {
+      sessionParams.payment_method_options = {
+        us_bank_account: {
+          financial_connections: {
+            permissions: ['payment_method', 'balances'],
+          },
+          verification_method: 'automatic',
+        },
+      };
+    }
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     await sb.from('invoices').update({ stripe_checkout_session_id: session.id }).eq('id', inv.id);
 
