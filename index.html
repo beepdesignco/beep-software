@@ -6538,6 +6538,9 @@ function dbInvoiceToS(inv) {
       method: p.method || '',
       notes: p.notes || '',
       receiptPath: p.receipt_path || '',
+      // Phase 0_35: pending=true for in-flight ACH that hasn't settled.
+      // Excluded from Paid/Outstanding totals + sales tax report.
+      pending: !!p.pending,
     })),
     // Client view log (Phase 0_34). Bot/email-prefetch views are filtered
     // at the edge function so this count is real human opens.
@@ -7151,6 +7154,7 @@ function invPaymentToDB(p) {
     amount: Number(p.amount || 0),
     method: p.method || null, notes: p.notes || null,
     receipt_path: p.receiptPath || null,
+    pending: !!p.pending,
   };
 }
 function documentToDB(d, studioId) {
@@ -22258,7 +22262,8 @@ function renderExpenseReports() {
     const key = inv.projectId || '_none';
     const b = byProject[key];
     if (!b) return;
-    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+    // Exclude pending=true (in-flight ACH) from revenuePaid — cash basis.
+    const paid = (inv.payments||[]).filter(p => !p.pending).reduce((s,p) => s + (p.amount||0), 0);
     b.revenuePaid += paid;
     b.revenueInvoiced += (inv.total||0);
   });
@@ -25520,8 +25525,15 @@ function renderInvoiceBuilder() {
 
   // ── Right: totals panel (sticky) ──
   const showPayments = inv.status === 'sent' || inv.status === 'partial' || inv.status === 'paid';
-  const paymentsTotal = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+  // Phase 0_35: pending=true payments (in-flight ACH) excluded from Paid /
+  // Outstanding totals. They render in the Payments list with a Pending
+  // badge so Baylor can see they were initiated, but don't count toward
+  // received funds until the webhook clears them on settlement.
+  const settledPayments = (inv.payments||[]).filter(p => !p.pending);
+  const pendingPayments = (inv.payments||[]).filter(p => p.pending);
+  const paymentsTotal = settledPayments.reduce((s,p) => s + (p.amount||0), 0);
   const paymentsDue = Math.max(0, (inv.total||0) - paymentsTotal);
+  const pendingTotal = pendingPayments.reduce((s,p) => s + (p.amount||0), 0);
   html += `<div style="position:sticky;top:20px;display:flex;flex-direction:column;gap:14px">
     <div style="background:var(--white);border-radius:var(--rl);padding:20px 22px;border:1px solid var(--border)">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:14px">Invoice Summary</div>
@@ -25543,6 +25555,7 @@ function renderInvoiceBuilder() {
       <div style="display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-family:var(--font-b);font-size:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
         <span style="color:#1a6e3a">Paid</span><span style="text-align:right;color:#1a6e3a;font-weight:700">${fmt(paymentsTotal)}</span>
         <span style="color:${paymentsDue>0?'#c47a20':'var(--text-mid)'}">Outstanding</span><span style="text-align:right;color:${paymentsDue>0?'#c47a20':'var(--text-mid)'};font-weight:700">${fmt(paymentsDue)}</span>
+        ${pendingTotal > 0 ? `<span style="color:#7a6a30">ACH Pending</span><span style="text-align:right;color:#7a6a30;font-weight:700" title="ACH submitted; funds typically settle in 3-5 business days. Excluded from Paid until cleared.">${fmt(pendingTotal)}</span>` : ''}
       </div>` : ''}
     </div>
     ${showPayments ? `
@@ -25553,9 +25566,12 @@ function renderInvoiceBuilder() {
       </div>
       ${(inv.payments||[]).length
         ? `<div style="display:flex;flex-direction:column;gap:6px">${(inv.payments||[]).slice().sort((a,b) => (b.date||'').localeCompare(a.date||'')).map(p => `
-          <div onclick="openEditPayment('${inv.id}','${p.id}')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
-            <div style="min-width:0">
-              <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:600">${fmt(p.amount||0)}</div>
+          <div onclick="openEditPayment('${inv.id}','${p.id}')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid ${p.pending ? 'rgba(122,106,48,0.40)' : 'var(--border)'};background:${p.pending ? 'rgba(122,106,48,0.06)' : 'transparent'};border-radius:var(--rs);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='${p.pending ? 'rgba(122,106,48,0.40)' : 'var(--border)'}'">
+            <div style="min-width:0;flex:1">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:600">${fmt(p.amount||0)}</span>
+                ${p.pending ? '<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;padding:2px 6px;border-radius:8px;background:rgba(122,106,48,0.18);color:#7a6a30" title="ACH submitted; settlement typically takes 3-5 business days">Pending</span>' : ''}
+              </div>
               <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:1px">${escH(p.date||'—')}${p.method?' · '+escH(p.method):''}</div>
             </div>
             <span style="font-size:11px;color:var(--text-light)">Edit</span>
@@ -27144,7 +27160,11 @@ function revertFromPaid(inv) {
 function applyPaymentStatus(inv) {
   if (inv.status === 'cancelled' || inv.status === 'draft') return;
   const prevStatus = inv.status;
-  const totalPaid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+  // Pending=true (in-flight ACH) doesn't count toward status — invoice
+  // stays at 'sent' until the funds actually clear. Webhook flips
+  // pending=false on async_payment_succeeded, which then triggers the
+  // status recompute via the sync path.
+  const totalPaid = (inv.payments||[]).filter(p => !p.pending).reduce((s,p) => s + (p.amount||0), 0);
   let newStatus;
   if (totalPaid <= 0.001) newStatus = 'sent';
   else if (totalPaid + 0.01 < (inv.total||0)) newStatus = 'partial';
@@ -27163,7 +27183,7 @@ function applyPaymentStatus(inv) {
 function openNewPaymentModal(invId) {
   const inv = (S.invoices||[]).find(i => i.id === invId);
   if (!inv) return;
-  const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+  const paid = (inv.payments||[]).filter(p => !p.pending).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
   $c('pay-modal-title').textContent = 'Record Payment';
   $c('pay-id').value = '';
@@ -27182,7 +27202,7 @@ function openEditPayment(invId, payId) {
   if (!inv) return;
   const pay = (inv.payments||[]).find(p => p.id === payId);
   if (!pay) return;
-  const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
+  const paid = (inv.payments||[]).filter(p => !p.pending).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
   $c('pay-modal-title').textContent = 'Edit Payment';
   $c('pay-id').value = payId;
@@ -28091,6 +28111,11 @@ function buildSalesTaxReport(from, to, filters) {
 
     (inv.payments || []).forEach(p => {
       if (!p.date) return;
+      // Cash basis: only count payments whose funds have actually been
+      // received. ACH that's been submitted but hasn't settled (pending=true)
+      // is excluded — it'll land in the report for the month it actually
+      // clears, when the webhook updates pending=false + date=settlement.
+      if (p.pending) return;
       const d = new Date(p.date + 'T12:00:00');
       if (d < from || d > to) return;
 

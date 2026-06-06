@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
 
     const { data: inv, error } = await sb
       .from('invoices')
-      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method)')
+      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method, pending)')
       .eq('payment_token', token)
       .is('deleted_at', null)
       .single();
@@ -94,8 +94,13 @@ Deno.serve(async (req) => {
       ? await sb.from('clients').select('id, name, email, phone, address').eq('id', inv.client_id).maybeSingle()
       : { data: null };
 
-    const amountPaid = (inv.invoice_payments || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+    // Cash-basis Paid / Outstanding: exclude pending=true (in-flight ACH).
+    // Pending rows still come through in the payments list below with their
+    // flag so the pay page can badge them, but they don't reduce the amount
+    // the client owes until the funds actually settle.
+    const amountPaid = (inv.invoice_payments || []).filter((p: any) => !p.pending).reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
     const amountDue = Math.max(0, Number(inv.total || 0) - amountPaid);
+    const amountPending = (inv.invoice_payments || []).filter((p: any) => p.pending).reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
 
     // Compose display notes from studio preset library + this invoice's selections + free-form.
     const presets: any[] = studioInfo?.defaultInvoiceNotes || [];
@@ -122,6 +127,7 @@ Deno.serve(async (req) => {
         total: Number(inv.total || 0),
         amount_paid: amountPaid,
         amount_due: amountDue,
+        amount_pending: amountPending,
         line_items: (inv.invoice_line_items || [])
           .slice()
           .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
@@ -133,7 +139,7 @@ Deno.serve(async (req) => {
             taxable: !!l.taxable,
           })),
         payments: (inv.invoice_payments || []).map((p: any) => ({
-          date: p.date, amount: Number(p.amount || 0), method: p.method,
+          date: p.date, amount: Number(p.amount || 0), method: p.method, pending: !!p.pending,
         })),
       },
       studio: {

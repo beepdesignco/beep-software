@@ -97,6 +97,9 @@ async function handleCheckoutSessionCompleted(sb: any, session: Stripe.Checkout.
     ? `Stripe ${session.id}`
     : `Stripe ${session.id} — ACH pending settlement (typically 3-5 business days)`;
 
+  // Pending flag (phase0_35): true when ACH submitted but not yet settled.
+  // The sales tax report + invoice Paid/Outstanding totals exclude pending=true
+  // rows so cash-basis monthly reporting only counts funds actually received.
   const { error } = await sb.from('invoice_payments').insert({
     invoice_id: invoiceId,
     date: new Date().toISOString().slice(0, 10),
@@ -104,6 +107,7 @@ async function handleCheckoutSessionCompleted(sb: any, session: Stripe.Checkout.
     method: methodLabel,
     notes,
     stripe_payment_intent: paymentIntent,
+    pending: !isPaid,
   });
   if (error) {
     console.error('[stripe-webhook] insert payment failed:', error);
@@ -143,13 +147,16 @@ async function handleAsyncPaymentSucceeded(sb: any, session: Stripe.Checkout.Ses
     .eq('stripe_payment_intent', paymentIntent)
     .maybeSingle();
 
+  // On settlement: clear pending + bump the date to today (the actual
+  // settlement date), so cash-basis tax reporting lands the receipt in
+  // the correct month — not the submission month.
   if (existing) {
     const { error } = await sb.from('invoice_payments')
-      .update({ notes: cleanNote })
+      .update({ notes: cleanNote, pending: false, date: new Date().toISOString().slice(0, 10) })
       .eq('id', existing.id);
     if (error) console.warn('[stripe-webhook] async_succeeded update failed:', error);
   } else {
-    // Missed the completed event somehow — insert the row now.
+    // Missed the completed event somehow — insert the row now (as cleared).
     const amount = baseCents / 100;
     const { error } = await sb.from('invoice_payments').insert({
       invoice_id: invoiceId,
@@ -158,6 +165,7 @@ async function handleAsyncPaymentSucceeded(sb: any, session: Stripe.Checkout.Ses
       method: methodLabel,
       notes: cleanNote,
       stripe_payment_intent: paymentIntent,
+      pending: false,
     });
     if (error) {
       console.error('[stripe-webhook] async_succeeded insert failed:', error);
