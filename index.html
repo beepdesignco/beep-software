@@ -3468,6 +3468,10 @@ tr:hover .row-btns { opacity:1; }
         <option value="">— None —</option>
       </select>
     </div>
+    <div class="fg">
+      <label class="fl">Tags <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(comma-separated)</span></label>
+      <input type="text" class="fi" id="task-tags" placeholder="design, urgent, client-blocker">
+    </div>
 
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="task-delete-btn" style="display:none" onclick="deleteTaskFromModal()">Delete</button>
@@ -4439,8 +4443,31 @@ function taskStatusColor(v) { return TASK_STATUSES.find(s => s.v === v)?.color |
 function taskPriorityLabel(v) { return v ? (TASK_PRIORITIES.find(p => p.v === v)?.l || v) : ''; }
 function taskPriorityColor(v) { return v ? (TASK_PRIORITIES.find(p => p.v === v)?.color || 'var(--text-mid)') : 'var(--text-light)'; }
 
-// Filter state for the tasks tab list view. Persists within session.
+// Filter state for the tasks tab. Persists within session.
 let _tasksTabFilter = { assignee: '', status: '', project: '', search: '' };
+// Active view inside the Tasks tab. 'list' | 'board' | 'calendar'.
+let _tasksTabView = 'list';
+// Current month for calendar view (anchored to the 1st). Defaults to today's month.
+let _tasksCalMonth = (function(){ const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
+
+function setTasksTabView(v) {
+  if (v !== 'list' && v !== 'board' && v !== 'calendar') return;
+  _tasksTabView = v;
+  renderTasksTab();
+}
+
+function shiftTasksCalMonth(delta) {
+  _tasksCalMonth = new Date(_tasksCalMonth.getFullYear(), _tasksCalMonth.getMonth() + delta, 1);
+  renderTasksTab();
+}
+
+function jumpTasksCalMonth(toToday) {
+  if (toToday) {
+    const d = new Date();
+    _tasksCalMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+  }
+  renderTasksTab();
+}
 
 function setTasksTabFilter(key, value) {
   _tasksTabFilter[key] = value;
@@ -4464,6 +4491,7 @@ function openTaskModal(taskId, opts) {
   $c('task-status').value = task?.status || 'todo';
   $c('task-priority').value = task?.priority || '';
   $c('task-due-date').value = task?.dueDate || '';
+  $c('task-tags').value = (task?.tags || []).join(', ');
   $c('task-delete-btn').style.display = isEdit ? '' : 'none';
 
   // Populate assignee dropdown from studio members. Falls back to AUTH.member
@@ -4494,6 +4522,11 @@ function saveTaskFromModal() {
   const status = $c('task-status').value || 'todo';
   const wasDone = (S.tasks || []).find(t => t.id === id)?.status === 'done';
 
+  // Parse tags: split on commas, trim, dedupe, drop empties.
+  const tagInput = $c('task-tags').value || '';
+  const tags = Array.from(new Set(
+    tagInput.split(',').map(t => t.trim()).filter(Boolean)
+  ));
   const payload = {
     title,
     description: $c('task-description').value.trim(),
@@ -4502,6 +4535,7 @@ function saveTaskFromModal() {
     assigneeUserId: $c('task-assignee').value || null,
     dueDate: $c('task-due-date').value || '',
     projectId: $c('task-project').value || null,
+    tags,
     updated: new Date().toISOString(),
   };
   // Mark completed_at when transitioning to done; clear when leaving done.
@@ -4588,11 +4622,83 @@ function _tasksFiltered() {
   });
 }
 
+// Friendly label for an assignee user id. Falls back to email then to —.
+function _taskAssigneeLabel(uid) {
+  if (!uid) return '';
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const m = members.find(x => x.user_id === uid);
+  return m?.display_name || m?.email || '—';
+}
+
+// Drag state for Board view (between-status moves) + a tiny helper to commit.
+let _taskDragId = null;
+
+function onTaskDragStart(e, taskId) {
+  _taskDragId = taskId;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', taskId); } catch (_) {}
+}
+
+function onTaskBoardColDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+
+function onTaskBoardColDrop(e, statusV) {
+  e.preventDefault();
+  if (!_taskDragId) return;
+  const t = (S.tasks || []).find(x => x.id === _taskDragId);
+  _taskDragId = null;
+  if (!t || t.status === statusV) { renderTasksTab(); return; }
+  t.status = statusV;
+  if (statusV === 'done') t.completedAt = new Date().toISOString();
+  else if (t.completedAt) t.completedAt = null;
+  t.updated = new Date().toISOString();
+  save();
+  renderTasksTab();
+}
+
 function renderTasksTab() {
   const host = $c('work-tasks-body');
   if (!host) return;
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+
+  // Filter bar (shared across views).
+  const assigneeOpts = '<option value="">All assignees</option>' +
+    members.map(m => `<option value="${escH(m.user_id)}" ${_tasksTabFilter.assignee === m.user_id ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
+  const statusOpts = '<option value="">All statuses</option>' +
+    TASK_STATUSES.map(s => `<option value="${s.v}" ${_tasksTabFilter.status === s.v ? 'selected' : ''}>${escH(s.l)}</option>`).join('');
+  const projectOpts = '<option value="">All projects</option>' +
+    (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(p => `<option value="${escH(p.id)}" ${_tasksTabFilter.project === p.id ? 'selected' : ''}>${escH(p.name || '(unnamed)')}</option>`).join('');
+  const filtersActive = !!(_tasksTabFilter.assignee || _tasksTabFilter.status || _tasksTabFilter.project || _tasksTabFilter.search);
+
+  // View switcher.
+  const viewBtn = (id, label) => `<button onclick="setTasksTabView('${id}')" style="padding:6px 14px;font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;border:1px solid ${_tasksTabView === id ? 'var(--russet)' : 'var(--border)'};background:${_tasksTabView === id ? 'rgba(150,61,39,0.08)' : 'var(--white)'};color:${_tasksTabView === id ? 'var(--mahogany)' : 'var(--text-mid)'};border-radius:0;cursor:pointer">${label}</button>`;
+
+  const topBar = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <div style="display:flex">
+        ${viewBtn('list', 'List')}
+        ${viewBtn('board', 'Board')}
+        ${viewBtn('calendar', 'Calendar')}
+      </div>
+      <input type="text" class="fi" placeholder="Search tasks…" value="${escH(_tasksTabFilter.search)}" oninput="setTasksTabFilter('search', this.value)" style="width:200px;font-size:12px;padding:6px 10px;margin-left:8px">
+      <select class="fi fsel" onchange="setTasksTabFilter('assignee', this.value)" style="font-size:12px;padding:6px 10px;width:150px">${assigneeOpts}</select>
+      ${_tasksTabView !== 'board' ? `<select class="fi fsel" onchange="setTasksTabFilter('status', this.value)" style="font-size:12px;padding:6px 10px;width:130px">${statusOpts}</select>` : ''}
+      <select class="fi fsel" onchange="setTasksTabFilter('project', this.value)" style="font-size:12px;padding:6px 10px;width:170px">${projectOpts}</select>
+      ${filtersActive ? `<button onclick="clearTasksTabFilters()" style="font-family:var(--font-b);font-size:11px;color:var(--russet);background:none;border:none;cursor:pointer;text-decoration:underline">Clear</button>` : ''}
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button>
+    </div>`;
+
+  let viewHtml = '';
+  if (_tasksTabView === 'list')      viewHtml = _renderTasksList();
+  else if (_tasksTabView === 'board')    viewHtml = _renderTasksBoard();
+  else if (_tasksTabView === 'calendar') viewHtml = _renderTasksCalendar();
+
+  host.innerHTML = topBar + viewHtml;
+}
+
+// ── List view ────────────────────────────────────────────────────────────
+function _renderTasksList() {
   const filtered = _tasksFiltered();
-  // Sort: incomplete first, then by due date asc (null last), then by sort_order.
   filtered.sort((a, b) => {
     const aDone = a.status === 'done', bDone = b.status === 'done';
     if (aDone !== bDone) return aDone ? 1 : -1;
@@ -4602,37 +4708,12 @@ function renderTasksTab() {
     return (a.sortOrder || 0) - (b.sortOrder || 0);
   });
 
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
-  const memberLabel = (uid) => uid ? (members.find(m => m.user_id === uid)?.display_name || members.find(m => m.user_id === uid)?.email || '—') : '';
-
-  // Filter bar
-  const assigneeOpts = '<option value="">All assignees</option>' +
-    members.map(m => `<option value="${escH(m.user_id)}" ${_tasksTabFilter.assignee === m.user_id ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
-  const statusOpts = '<option value="">All statuses</option>' +
-    TASK_STATUSES.map(s => `<option value="${s.v}" ${_tasksTabFilter.status === s.v ? 'selected' : ''}>${escH(s.l)}</option>`).join('');
-  const projectOpts = '<option value="">All projects</option>' +
-    (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(p => `<option value="${escH(p.id)}" ${_tasksTabFilter.project === p.id ? 'selected' : ''}>${escH(p.name || '(unnamed)')}</option>`).join('');
-
-  const filtersActive = !!(_tasksTabFilter.assignee || _tasksTabFilter.status || _tasksTabFilter.project || _tasksTabFilter.search);
-  const filterBar = `
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-      <input type="text" class="fi" placeholder="Search tasks…" value="${escH(_tasksTabFilter.search)}" oninput="setTasksTabFilter('search', this.value)" style="width:220px;font-size:12px;padding:6px 10px">
-      <select class="fi fsel" onchange="setTasksTabFilter('assignee', this.value)" style="font-size:12px;padding:6px 10px;width:160px">${assigneeOpts}</select>
-      <select class="fi fsel" onchange="setTasksTabFilter('status', this.value)" style="font-size:12px;padding:6px 10px;width:140px">${statusOpts}</select>
-      <select class="fi fsel" onchange="setTasksTabFilter('project', this.value)" style="font-size:12px;padding:6px 10px;width:180px">${projectOpts}</select>
-      ${filtersActive ? `<button onclick="clearTasksTabFilters()" style="font-family:var(--font-b);font-size:11px;color:var(--russet);background:none;border:none;cursor:pointer;text-decoration:underline">Clear</button>` : ''}
-      <div style="flex:1"></div>
-      <button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button>
-    </div>`;
-
-  // Task list
   if (!filtered.length) {
-    host.innerHTML = filterBar + `
+    return `
       <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:32px 30px;text-align:center">
         <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--text-mid);margin-bottom:6px">${(S.tasks || []).length === 0 ? 'No tasks yet' : 'No tasks match the current filters'}</div>
         <div style="font-family:var(--font-b);font-size:12px;color:var(--text-light)">${(S.tasks || []).length === 0 ? 'Create your first task to get started.' : 'Adjust the filters above or clear them.'}</div>
       </div>`;
-    return;
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -4642,8 +4723,9 @@ function renderTasksTab() {
     const isOverdue = !isDone && t.dueDate && t.dueDate < today;
     const dueLabel = t.dueDate ? new Date(t.dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
     const projectName = t.projectId ? ((S.projects || []).find(p => p.id === t.projectId)?.name || '') : '';
-    const assigneeName = memberLabel(t.assigneeUserId);
+    const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
     const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
+    const tagChips = (t.tags || []).length ? (t.tags || []).slice(0, 4).map(tg => `<span style="font-family:var(--font-b);font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('') : '';
     return `
       <div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--border);border-left:3px solid ${sColor};border-radius:var(--rs);background:${isDone ? 'rgba(var(--text-rgb),0.03)' : 'var(--white)'};margin-bottom:6px;cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)';this.style.borderLeftColor='${sColor}'" onmouseleave="this.style.borderColor='var(--border)';this.style.borderLeftColor='${sColor}'" onclick="openTaskModal('${t.id}')">
         <input type="checkbox" ${isDone ? 'checked' : ''} onclick="event.stopPropagation()" onchange="quickToggleTaskDone('${t.id}', this.checked)" style="accent-color:#1a6e3a;width:16px;height:16px;flex-shrink:0">
@@ -4652,6 +4734,7 @@ function renderTasksTab() {
           <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
             <button onclick="event.stopPropagation();cycleTaskStatus('${t.id}')" title="Click to advance status" style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${sColor}18;color:${sColor};border:none;cursor:pointer">${escH(taskStatusLabel(t.status))}</button>
             ${pri}
+            ${tagChips}
             ${dueLabel ? `<span style="font-family:var(--font-b);font-size:11px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}${isOverdue ? ' (overdue)' : ''}</span>` : ''}
             ${assigneeName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">👤 ${escH(assigneeName)}</span>` : ''}
             ${projectName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--russet)">📁 ${escH(projectName)}</span>` : ''}
@@ -4660,7 +4743,118 @@ function renderTasksTab() {
       </div>`;
   }).join('');
 
-  host.innerHTML = filterBar + `<div>${rows}</div>`;
+  return `<div>${rows}</div>`;
+}
+
+// ── Board (Kanban) view ──────────────────────────────────────────────────
+function _renderTasksBoard() {
+  const filtered = _tasksFiltered();
+  const today = new Date().toISOString().slice(0, 10);
+  const byStatus = {};
+  TASK_STATUSES.forEach(s => byStatus[s.v] = []);
+  filtered.forEach(t => {
+    if (byStatus[t.status]) byStatus[t.status].push(t);
+    else byStatus['todo'].push(t);
+  });
+  Object.values(byStatus).forEach(arr => arr.sort((a, b) => {
+    const ad = a.dueDate || '9999-99-99';
+    const bd = b.dueDate || '9999-99-99';
+    if (ad !== bd) return ad.localeCompare(bd);
+    return (a.sortOrder || 0) - (b.sortOrder || 0);
+  }));
+
+  const cols = TASK_STATUSES.map(s => {
+    const list = byStatus[s.v] || [];
+    const cards = list.map(t => {
+      const isOverdue = t.status !== 'done' && t.dueDate && t.dueDate < today;
+      const dueLabel = t.dueDate ? new Date(t.dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      const projectName = t.projectId ? ((S.projects || []).find(p => p.id === t.projectId)?.name || '') : '';
+      const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
+      const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:8px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 6px;border-radius:6px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
+      const tags = (t.tags || []).length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:3px">${(t.tags || []).slice(0, 3).map(tg => `<span style="font-family:var(--font-b);font-size:9px;padding:1px 6px;border-radius:6px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('')}</div>` : '';
+      return `
+        <div draggable="true" ondragstart="onTaskDragStart(event, '${t.id}')" onclick="openTaskModal('${t.id}')" style="background:var(--white);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px;cursor:grab;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700;line-height:1.35">${escH(t.title || '(untitled)')}</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap">
+            ${pri}
+            ${dueLabel ? `<span style="font-family:var(--font-b);font-size:10px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}</span>` : ''}
+            ${assigneeName ? `<span style="font-family:var(--font-b);font-size:10px;color:var(--text-mid)">👤 ${escH(assigneeName.split(' ')[0])}</span>` : ''}
+          </div>
+          ${projectName ? `<div style="margin-top:4px;font-family:var(--font-b);font-size:10px;color:var(--russet)">📁 ${escH(projectName)}</div>` : ''}
+          ${tags}
+        </div>`;
+    }).join('');
+    return `
+      <div ondragover="onTaskBoardColDragOver(event)" ondrop="onTaskBoardColDrop(event, '${s.v}')" style="flex:1;min-width:220px;background:rgba(var(--text-rgb),0.02);border:1px solid var(--border);border-top:3px solid ${s.color};border-radius:var(--rs);padding:10px;display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${s.color}">${escH(s.l)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-weight:700">${list.length}</div>
+        </div>
+        <div style="flex:1;min-height:120px">${cards || '<div style="font-size:10px;color:var(--text-light);font-style:italic;padding:10px 0;text-align:center">Drop tasks here</div>'}</div>
+      </div>`;
+  }).join('');
+
+  return `<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:8px">${cols}</div>`;
+}
+
+// ── Calendar view ────────────────────────────────────────────────────────
+function _renderTasksCalendar() {
+  const monthStart = _tasksCalMonth;
+  const year = monthStart.getFullYear();
+  const month = monthStart.getMonth();
+  const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+  // Build a grid starting from the Sunday on or before the 1st.
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const gridStart = new Date(year, month, 1 - firstDay.getDay());
+  const totalCells = Math.ceil((firstDay.getDay() + lastDay.getDate()) / 7) * 7;
+
+  // Bucket filtered tasks by their dueDate (string yyyy-mm-dd).
+  const filtered = _tasksFiltered();
+  const byDay = {};
+  filtered.forEach(t => {
+    if (!t.dueDate) return;
+    (byDay[t.dueDate] = byDay[t.dueDate] || []).push(t);
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const cells = [];
+  for (let i = 0; i < totalCells; i++) {
+    const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
+    const iso = d.toISOString().slice(0, 10);
+    const inMonth = d.getMonth() === month;
+    const isToday = iso === today;
+    const list = byDay[iso] || [];
+    const tasksHtml = list.slice(0, 4).map(t => {
+      const sColor = taskStatusColor(t.status);
+      const isDone = t.status === 'done';
+      return `<div onclick="event.stopPropagation();openTaskModal('${t.id}')" style="font-family:var(--font-b);font-size:10px;padding:2px 6px;border-radius:4px;background:${sColor}18;color:${sColor};margin-top:2px;cursor:pointer;${isDone ? 'text-decoration:line-through;opacity:0.7' : ''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escH(t.title || '')}">${escH(t.title || '(untitled)')}</div>`;
+    }).join('');
+    const more = list.length > 4 ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);margin-top:2px;text-align:center">+${list.length - 4} more</div>` : '';
+    cells.push(`
+      <div style="border:1px solid var(--border);background:${inMonth ? 'var(--white)' : 'rgba(var(--text-rgb),0.03)'};padding:6px;min-height:90px;display:flex;flex-direction:column;cursor:pointer" onclick="(function(){ const m = document.getElementById('modal-task'); if(!m) return; openTaskModal(null); setTimeout(() => { const dd = document.getElementById('task-due-date'); if (dd) dd.value = '${iso}'; }, 100); })()" title="Click to add task on ${iso}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+          <span style="font-family:var(--font-h);font-weight:${isToday ? '900' : '700'};font-size:11px;color:${isToday ? 'var(--mahogany)' : (inMonth ? 'var(--text-dark)' : 'var(--text-light)')}">${d.getDate()}</span>
+          ${isToday ? '<span style="font-family:var(--font-h);font-weight:700;font-size:8px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mahogany)">Today</span>' : ''}
+        </div>
+        ${tasksHtml}
+        ${more}
+      </div>`);
+  }
+
+  const dayHeaders = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+    .map(d => `<div style="text-align:center;font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);padding:6px 0">${d}</div>`).join('');
+
+  return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" onclick="shiftTasksCalMonth(-1)" style="font-size:12px;padding:5px 10px">← Prev</button>
+      <div style="font-family:var(--font-h);font-weight:900;font-size:15px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(monthLabel)}</div>
+      <button class="btn btn-ghost btn-sm" onclick="shiftTasksCalMonth(1)" style="font-size:12px;padding:5px 10px">Next →</button>
+      <button class="btn btn-ghost btn-sm" onclick="jumpTasksCalMonth(true)" style="font-size:11px;color:var(--russet)">Today</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:0;background:var(--border)">${dayHeaders}</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:0">${cells.join('')}</div>`;
 }
 let _workSystemEvents = [];          // Cache of recent activity_entries rows (source='system')
 const _workChannels = [];            // Realtime channels, created on first Work view mount
