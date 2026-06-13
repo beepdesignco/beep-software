@@ -3394,6 +3394,47 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ PAID INVOICE CANCEL MODAL ═════════════════ -->
+<!-- §3 cancellation flow for paid invoices. Three options:
+       1. Cancel & Issue Full Refund  — Stripe automation if Stripe-paid,
+                                        method picker (Check/Cash/Other) if manual.
+       2. Cancel & Hold as Credit     — Convert collected funds to a project
+                                        credit; no refund issued.
+       3. Recording Error             — Manual-only. Undo the manual payment;
+                                        invoice returns to Sent (no cancellation).
+     Above the options: warning banner listing any items already past Invoiced
+     (Ordered/Shipped/etc.) so the user is aware before proceeding. -->
+<div class="overlay" id="modal-cancel-paid-invoice">
+  <div class="modal" style="width:600px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-cancel-paid-invoice')">✕</button>
+    <div class="modal-title">Cancel Paid Invoice</div>
+    <div id="cpi-summary" style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:12px;line-height:1.5"></div>
+    <div id="cpi-already-ordered" style="display:none;background:rgba(196,122,32,0.08);border:1px solid rgba(196,122,32,0.30);border-radius:var(--rs);padding:10px 14px;margin-bottom:14px"></div>
+
+    <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Choose how to cancel</div>
+    <div id="cpi-options" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
+
+    <!-- Manual refund method picker (only shown when Refund is selected AND
+         the invoice was manually recorded). -->
+    <div id="cpi-refund-method-row" style="display:none;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px">
+      <label class="fl">Refund Method</label>
+      <select class="fi fsel" id="cpi-refund-method" onchange="onCpiRefundMethodChange()" style="margin-bottom:6px">
+        <option value="">— Select —</option>
+        <option value="Check">Check</option>
+        <option value="Cash">Cash</option>
+        <option value="Other">Other</option>
+      </select>
+      <input type="text" class="fi" id="cpi-refund-method-other" placeholder="Describe other method…" style="display:none">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-cancel-paid-invoice')">Back</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-danger" id="cpi-confirm-btn" onclick="confirmCancelPaidInvoice()" disabled>Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ PROJECT CREDITS MODAL ═════════════════ -->
 <!-- Read-only list of all credit rows on a project. §4 (overpayment),
      and eventually §1 (freight/cost credits) and §3 (cancellation credits)
@@ -24956,6 +24997,10 @@ function renderInvLineItems() {
   // removeInvLine(idx) targets the right entry.
   const _invForLines = (S.invoices || []).find(x => x.id === _currentInvoiceId);
   const _pidForLines = _invForLines?.projectId || null;
+  // §3: paid invoices are LOCKED — line item name/price/qty are read-only.
+  // Only Cancel action is available on locked invoices. (Partial deferred
+  // per §5 so this is just === 'paid'.)
+  const _lockedByPaid = _invForLines?.status === 'paid';
   let firstShown = true;
   const html = _invLineItems.map((l, i) => {
     if (l._reconType === 'credit') return '';
@@ -24964,6 +25009,7 @@ function renderInvLineItems() {
     const showHeader = firstShown;
     firstShown = false;
     const headerPad = showHeader ? '10' : '2';
+    const _ro = _lockedByPaid ? ' readonly disabled style="background:rgba(var(--text-rgb),0.04);font-size:12px;padding:5px 8px;cursor:not-allowed"' : ' style="font-size:12px;padding:5px 8px"';
     // Discrepancy warning for proposal-linked lines.
     const warn = _invLineDiscrepancyWarn(l, _pidForLines);
     const warnHTML = warn ? `
@@ -24984,15 +25030,15 @@ function renderInvLineItems() {
         </div>
         <div class="fg" style="flex:2">
           ${showHeader?'<label class="fl">Name</label>':''}
-          <input type="text" class="fi" value="${escH(l.name||'')}" onchange="_invLineItems[${i}].name=this.value" style="font-size:12px;padding:5px 8px">
+          <input type="text" class="fi" value="${escH(l.name||'')}" ${_lockedByPaid ? 'readonly disabled' : `onchange="_invLineItems[${i}].name=this.value"`} style="font-size:12px;padding:5px 8px${_lockedByPaid ? ';background:rgba(var(--text-rgb),0.04);cursor:not-allowed' : ''}">
         </div>
         <div class="fg" style="max-width:65px">
           ${showHeader?'<label class="fl">Qty</label>':''}
-          <input type="number" class="fi" value="${l.qty||1}" min="0.25" step="0.25" onchange="_invLineItems[${i}].qty=parseFloat(this.value)||1;recalcInvoice()" style="font-size:12px;padding:5px 8px;text-align:center">
+          <input type="number" class="fi" value="${l.qty||1}" min="0.25" step="0.25" ${_lockedByPaid ? 'readonly disabled' : `onchange="_invLineItems[${i}].qty=parseFloat(this.value)||1;recalcInvoice()"`} style="font-size:12px;padding:5px 8px;text-align:center${_lockedByPaid ? ';background:rgba(var(--text-rgb),0.04);cursor:not-allowed' : ''}">
         </div>
         <div class="fg" style="max-width:100px">
           ${showHeader?'<label class="fl">Price</label>':''}
-          <input type="text" class="fi" value="${l.price||''}" onchange="_invLineItems[${i}].price=parse$(this.value);recalcInvoice()" style="font-size:12px;padding:5px 8px">
+          <input type="text" class="fi" value="${l.price||''}" ${_lockedByPaid ? 'readonly disabled' : `onchange="_invLineItems[${i}].price=parse$(this.value);recalcInvoice()"`} style="font-size:12px;padding:5px 8px${_lockedByPaid ? ';background:rgba(var(--text-rgb),0.04);cursor:not-allowed' : ''}">
         </div>
         <label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${headerPad}px;white-space:nowrap">
           <input type="checkbox" ${l.taxable?'checked':''} onchange="_invLineItems[${i}].taxable=this.checked;recalcInvoice()" style="accent-color:var(--russet);width:11px;height:11px"> Tax
@@ -25000,7 +25046,7 @@ function renderInvLineItems() {
         ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${headerPad}px;white-space:nowrap" title="Add this line to Project Management as an open-line item">
           <input type="checkbox" ${l.trackInPM?'checked':''} onchange="toggleInvLineTrack(${i}, this.checked)" style="accent-color:var(--russet);width:11px;height:11px"> Track
         </label>` : ''}
-        <button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${headerPad}px 2px">✕</button>
+        ${_lockedByPaid ? '' : `<button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${headerPad}px 2px">✕</button>`}
       </div>
       ${descExpanded ? `
       <div style="padding:4px 0 2px;margin-top:4px">
@@ -25577,11 +25623,15 @@ function renderInvoiceBuilder() {
       </div>`;
   }
 
-  // Line items
+  // Line items — § 3 locks edits/adds/removes when invoice is paid.
+  const _lockedByPaidHeader = inv.status === 'paid';
   html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
-    <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Line Items</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Line Items</div>
+      ${_lockedByPaidHeader ? '<span style="font-family:var(--font-h);font-weight:700;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:10px;background:rgba(26,110,58,0.10);color:#1a6e3a;display:inline-flex;align-items:center;gap:5px" title="Invoice is paid — line items locked. Only Cancel is available."><span style="font-size:11px">🔒</span> Locked · Paid</span>' : ''}
+    </div>
     <div id="inv-line-items"></div>
-    <button class="btn btn-ghost btn-sm" onclick="addInvManualLine()" style="margin-top:6px">+ Add Line Item</button>
+    ${_lockedByPaidHeader ? '' : '<button class="btn btn-ghost btn-sm" onclick="addInvManualLine()" style="margin-top:6px">+ Add Line Item</button>'}
   </div>`;
 
   // Freight + Other associated charges. Freight has a single Taxable
@@ -27370,9 +27420,267 @@ function revertTimeEntriesForInvoice(inv) {
   return count;
 }
 
+// ─── §3 Paid invoice cancellation ─────────────────────────────
+// Three-option flow: Refund / Hold-as-Credit / Recording Error.
+
+let _cpiSelectedOption = null; // 'refund' | 'credit' | 'recording_error'
+let _cpiInvoiceId = null;
+
+function openCancelPaidInvoiceModal(inv) {
+  _cpiInvoiceId = inv.id;
+  _cpiSelectedOption = null;
+  const isStripePaid = (inv.payments || []).some(p => p.stripePaymentIntent);
+  const isManual = !isStripePaid;
+  const totalPaid = (inv.payments || []).filter(p => !p.pending).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+  // Summary
+  $c('cpi-summary').innerHTML = `Invoice <strong>${escH(inv.number || '')}</strong> · Total ${fmt(inv.total || 0)} · Paid ${fmt(totalPaid)} · Source: <strong>${isStripePaid ? 'Stripe' : 'Manual entry'}</strong>`;
+
+  // Already-ordered warning — surface items past Invoiced.
+  const advanced = _cpiAdvancedItems(inv);
+  const aoHost = $c('cpi-already-ordered');
+  if (advanced.length) {
+    aoHost.innerHTML = `
+      <div style="font-family:var(--font-b);font-size:11px;color:#c47a20;font-weight:700;margin-bottom:4px">⚠ ${advanced.length} item${advanced.length === 1 ? '' : 's'} already past Invoiced</div>
+      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);line-height:1.5">${advanced.slice(0, 6).map(x => `${escH(x.name)} <span style="color:var(--text-light)">· ${escH(x.statusLabel)}</span>`).join('<br>')}${advanced.length > 6 ? `<br><span style="color:var(--text-light)">+${advanced.length - 6} more</span>` : ''}</div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-mid);font-style:italic;margin-top:6px">These items will revert to Pending Status with the Needs Attention flag. You may need to coordinate with vendors.</div>`;
+    aoHost.style.display = '';
+  } else {
+    aoHost.style.display = 'none';
+  }
+
+  // Option cards
+  const opts = [];
+  opts.push({
+    id: 'refund',
+    label: 'Cancel & Issue Full Refund',
+    desc: isStripePaid
+      ? `Automatically refund ${fmt(totalPaid)} back to the client's Stripe payment method.`
+      : `Record a refund of ${fmt(totalPaid)}. You'll pick the method (Check / Cash / Other).`,
+    color: '#b33',
+  });
+  opts.push({
+    id: 'credit',
+    label: 'Cancel & Hold as Credit',
+    desc: `Log ${fmt(totalPaid)} as a project credit for future invoices on this project. No refund issued.`,
+    color: '#1a6e3a',
+  });
+  if (isManual) {
+    opts.push({
+      id: 'recording_error',
+      label: 'Recording Error',
+      desc: `Undo the manually-recorded payment. Invoice returns to Sent status. Items revert to Invoiced.`,
+      color: 'var(--text-mid)',
+    });
+  }
+
+  $c('cpi-options').innerHTML = opts.map(o => `
+    <label data-cpi-opt="${o.id}" style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border:2px solid var(--border);border-radius:var(--rs);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='${o.color}'" onmouseleave="if(!this.classList.contains('cpi-selected')) this.style.borderColor='var(--border)'">
+      <input type="radio" name="cpi-opt" value="${o.id}" onchange="selectCpiOption('${o.id}')" style="accent-color:${o.color};margin-top:2px">
+      <div style="flex:1">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:12px;color:${o.color};text-transform:uppercase;letter-spacing:0.04em">${escH(o.label)}</div>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:3px;line-height:1.5">${escH(o.desc)}</div>
+      </div>
+    </label>`).join('');
+
+  $c('cpi-refund-method-row').style.display = 'none';
+  $c('cpi-refund-method').value = '';
+  $c('cpi-refund-method-other').value = '';
+  $c('cpi-refund-method-other').style.display = 'none';
+  $c('cpi-confirm-btn').disabled = true;
+
+  $c('modal-cancel-paid-invoice').classList.add('open');
+}
+
+function _cpiAdvancedItems(inv) {
+  const prop = S.proposals[inv.projectId];
+  if (!prop) return [];
+  const advancedStatuses = new Set(['ordered', 'payment_processed', 'shipped', 'received', 'installed']);
+  const out = [];
+  const lineProposalIds = new Set((inv.lineItems || []).map(l => l.proposalItemId).filter(Boolean));
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    const linked = lineProposalIds.has(item.id) || (item._invoiceIds || []).includes(inv.id);
+    if (linked && advancedStatuses.has(item.status)) {
+      const sLabel = STATUSES.find(s => s.v === item.status)?.l || item.status;
+      out.push({ id: item.id, name: item.name || '(unnamed)', statusLabel: sLabel });
+    }
+  }));
+  return out;
+}
+
+function selectCpiOption(opt) {
+  _cpiSelectedOption = opt;
+  document.querySelectorAll('[data-cpi-opt]').forEach(el => {
+    el.classList.toggle('cpi-selected', el.dataset.cpiOpt === opt);
+    if (el.dataset.cpiOpt === opt) {
+      el.style.borderColor = opt === 'refund' ? '#b33' : opt === 'credit' ? '#1a6e3a' : 'var(--text-mid)';
+      el.style.background = 'rgba(var(--text-rgb),0.03)';
+    } else {
+      el.style.borderColor = 'var(--border)';
+      el.style.background = 'transparent';
+    }
+  });
+  // For manual refund, show the method picker. Stripe refund auto-routes.
+  const inv = (S.invoices || []).find(i => i.id === _cpiInvoiceId);
+  const isStripePaid = (inv?.payments || []).some(p => p.stripePaymentIntent);
+  const showMethod = opt === 'refund' && !isStripePaid;
+  $c('cpi-refund-method-row').style.display = showMethod ? '' : 'none';
+  _updateCpiConfirmEnabled();
+}
+
+function onCpiRefundMethodChange() {
+  const v = $c('cpi-refund-method').value;
+  const other = $c('cpi-refund-method-other');
+  other.style.display = v === 'Other' ? '' : 'none';
+  if (v !== 'Other') other.value = '';
+  _updateCpiConfirmEnabled();
+}
+
+function _updateCpiConfirmEnabled() {
+  if (!_cpiSelectedOption) { $c('cpi-confirm-btn').disabled = true; return; }
+  if (_cpiSelectedOption === 'refund') {
+    const inv = (S.invoices || []).find(i => i.id === _cpiInvoiceId);
+    const isStripePaid = (inv?.payments || []).some(p => p.stripePaymentIntent);
+    if (!isStripePaid) {
+      const method = $c('cpi-refund-method').value;
+      const otherTxt = $c('cpi-refund-method-other').value.trim();
+      if (!method || (method === 'Other' && !otherTxt)) { $c('cpi-confirm-btn').disabled = true; return; }
+    }
+  }
+  $c('cpi-confirm-btn').disabled = false;
+}
+
+async function confirmCancelPaidInvoice() {
+  const inv = (S.invoices || []).find(i => i.id === _cpiInvoiceId);
+  if (!inv || !_cpiSelectedOption) return;
+  const btn = $c('cpi-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+  try {
+    if (_cpiSelectedOption === 'recording_error') {
+      // Manual-only: undo the payment, invoice back to Sent. No cancellation.
+      const lastPay = (inv.payments || []).slice().reverse().find(p => !p.stripePaymentIntent && !p.pending);
+      if (lastPay) inv.payments = (inv.payments || []).filter(p => p.id !== lastPay.id);
+      if (typeof applyPaymentStatus === 'function') applyPaymentStatus(inv);
+      else inv.status = 'sent';
+      save();
+      closeModal('modal-cancel-paid-invoice');
+      renderInvoiceBuilder();
+      toast('Payment record removed. Invoice back to Sent.');
+      return;
+    }
+
+    const totalPaid = (inv.payments || []).filter(p => !p.pending).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const isStripePaid = (inv.payments || []).some(p => p.stripePaymentIntent);
+
+    if (_cpiSelectedOption === 'refund') {
+      if (isStripePaid) {
+        // Stripe refund routes through the stripe-refund edge function.
+        const pi = (inv.payments || []).find(p => p.stripePaymentIntent)?.stripePaymentIntent;
+        if (!pi) throw new Error('No Stripe payment intent on this invoice.');
+        const { data: { session } } = await sb.auth.getSession();
+        const r = await fetch(`${window.BEEP_SUPABASE_CONFIG.url}/functions/v1/stripe-refund`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'authorization': `Bearer ${session?.access_token || ''}` },
+          body: JSON.stringify({ payment_intent: pi, invoice_id: inv.id }),
+        });
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error || 'Stripe refund failed.');
+        // Edge function inserts the negative payment row server-side; sync
+        // picks it up. Set status here so UI flips immediately.
+        inv.status = 'cancelled';
+      } else {
+        // Manual refund: insert a negative payment row with the chosen method.
+        const method = $c('cpi-refund-method').value;
+        const other = $c('cpi-refund-method-other').value.trim();
+        const refundMethod = method === 'Other' ? (other || 'Other') : method;
+        if (!inv.payments) inv.payments = [];
+        inv.payments.push({
+          id: uid(),
+          date: new Date().toISOString().slice(0, 10),
+          amount: -Math.abs(totalPaid),
+          method: 'Refund — ' + refundMethod,
+          notes: 'Refund of ' + fmt(totalPaid) + ' for cancelled invoice ' + inv.number,
+        });
+        inv.status = 'cancelled';
+      }
+    } else if (_cpiSelectedOption === 'credit') {
+      // Hold as project credit. For Stripe-paid: no refund issued. For manual:
+      // no refund issued either (funds stay where they are). Either way the
+      // collected amount becomes a project credit.
+      const proj = getProject(inv.projectId);
+      if (proj) {
+        if (!proj.settings) proj.settings = {};
+        if (!Array.isArray(proj.settings.credits)) proj.settings.credits = [];
+        proj.settings.credits.push({
+          id: uid(),
+          source: 'cancellation_hold',
+          sourceInvoiceId: inv.id,
+          sourceInvoiceNumber: inv.number,
+          amount: totalPaid,
+          balance: totalPaid,
+          created: new Date().toISOString(),
+          notes: 'Held from cancelled invoice ' + inv.number + ' (' + (isStripePaid ? 'Stripe' : 'manual') + ')',
+        });
+      }
+      inv.status = 'cancelled';
+    }
+
+    // Revert linked items per §3: status → pending_status, + needs_attention flag.
+    _cpiRevertLinkedItems(inv);
+
+    // PM notification
+    const prop = S.proposals[inv.projectId];
+    if (prop) {
+      if (!prop.notifications) prop.notifications = [];
+      const label = _cpiSelectedOption === 'refund' ? 'cancelled — refund issued'
+                  : 'cancelled — funds held as project credit';
+      prop.notifications.push({
+        id: uid(),
+        type: 'invoice_cancelled',
+        invoiceId: inv.id,
+        invoiceNumber: inv.number,
+        message: 'Invoice ' + inv.number + ' ' + label + '. Linked items set to Pending Status.',
+        timestamp: new Date().toISOString(),
+        read: false,
+      });
+    }
+
+    save();
+    closeModal('modal-cancel-paid-invoice');
+    renderInvoiceBuilder();
+    toast('Invoice cancelled.');
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Confirm';
+    toast(e.message || 'Cancellation failed.');
+  }
+}
+
+function _cpiRevertLinkedItems(inv) {
+  const prop = S.proposals[inv.projectId];
+  if (!prop) return;
+  const lineProposalIds = new Set((inv.lineItems || []).map(l => l.proposalItemId).filter(Boolean));
+  (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
+    const linked = lineProposalIds.has(item.id) || (item._invoiceIds || []).includes(inv.id);
+    if (!linked) return;
+    item.status = 'pending_status';
+    if (!item.statusFlags) item.statusFlags = [];
+    if (!item.statusFlags.includes('needs_attention')) item.statusFlags.push('needs_attention');
+    if (item._invoiceIds) item._invoiceIds = item._invoiceIds.filter(id => id !== inv.id);
+  }));
+}
+
 function cancelInvoice() {
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
+  // §3: paid invoices route through the 3-option Cancel Paid Invoice modal
+  // (Refund / Hold-as-Credit / Recording Error). Non-paid invoices use the
+  // legacy confirm-and-cancel flow below.
+  if (inv.status === 'paid') {
+    openCancelPaidInvoiceModal(inv);
+    return;
+  }
   if (!confirm('Cancel this invoice? Linked items will be set to "Pending Status".')) return;
 
   const pid = inv.projectId;
