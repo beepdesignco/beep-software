@@ -11374,11 +11374,16 @@ function _invoiceStatusBadgeMeta(inv) {
 function renderInvoiceRefBadges(itemId, size) {
   const refs = getItemInvoiceRefs(itemId);
   if (!refs.length) return '';
-  const s = size === 'sm' ? 'font-size:9px;padding:1px 6px;border-radius:6px;margin-right:3px' : 'font-size:10px;padding:2px 8px;border-radius:8px;margin-right:4px';
+  const s = size === 'sm' ? 'font-size:9px;padding:2px 7px;border-radius:6px;margin-right:3px' : 'font-size:10px;padding:3px 9px;border-radius:8px;margin-right:4px';
+  // §12: badge is clickable — opens the invoice PDF in a new tab via the
+  // existing exportInvoicePDF helper. Draft invoices show "(draft)"
+  // appended to the number per spec. Cancelled invoices are already
+  // filtered out upstream in getItemInvoiceRefs.
   return '<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:3px">' + refs.map(inv => {
     const meta = _invoiceStatusBadgeMeta(inv);
     const phasePart = inv.phase && size !== 'sm' ? ' · ' + escH(inv.phase) : '';
-    return `<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-b);color:${meta.color};background:${meta.bg};${s}">${escH(inv.number)}${phasePart} · ${escH(meta.label)}</span>`;
+    const draftSuffix = inv.status === 'draft' ? ' <span style="font-style:italic;opacity:0.85">(draft)</span>' : '';
+    return `<a href="javascript:void(0)" onclick="event.stopPropagation();exportInvoicePDF('${inv.id}')" title="Open invoice ${escH(inv.number || '')} PDF" style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-b);color:${meta.color};background:${meta.bg};${s};text-decoration:none;cursor:pointer" onmouseover="this.style.filter='brightness(0.92)'" onmouseout="this.style.filter='none'">${escH(inv.number)}${draftSuffix}${phasePart} · ${escH(meta.label)}</a>`;
   }).join('') + '</div>';
 }
 
