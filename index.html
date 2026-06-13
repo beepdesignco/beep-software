@@ -3504,6 +3504,35 @@ tr:hover .row-btns { opacity:1; }
       <div id="task-subtasks-list"></div>
     </div>
 
+    <!-- §13 Attachments — task-level file attachments. Click to view; X to
+         remove. Upload button below the list adds via the existing
+         uploadFile() helper that scopes paths by entity. -->
+    <div id="task-attachments-section" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Attachments</div>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet)">
+          + Upload
+          <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.dwg" style="display:none" onchange="handleTaskFileUpload(this)">
+        </label>
+      </div>
+      <div id="task-attachments-list"></div>
+    </div>
+
+    <!-- §13 Comments — flat thread. Type @ to start a mention; the
+         autocomplete dropdown shows matching team members. Confirmed
+         mentions are stored in comment.mentions[] for notification. -->
+    <div id="task-comments-section" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Comments</div>
+      <div style="position:relative;margin-bottom:12px">
+        <textarea class="fi" id="task-new-comment" placeholder="Write a comment… use @name to mention a teammate" style="resize:vertical;min-height:60px;font-size:12px;width:100%" oninput="onTaskCommentInput()"></textarea>
+        <div id="task-comment-mention-popover" style="display:none;position:absolute;left:6px;top:100%;z-index:1000;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:4px;min-width:220px;box-shadow:0 4px 16px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="btn btn-primary btn-sm" onclick="postTaskComment()" style="font-size:11px">Post Comment</button>
+        </div>
+      </div>
+      <div id="task-comments-list"></div>
+    </div>
+
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="task-delete-btn" style="display:none" onclick="deleteTaskFromModal()">Delete</button>
       <div style="flex:1"></div>
@@ -4557,17 +4586,213 @@ function openTaskModal(taskId, opts) {
   parentSel.innerHTML = '<option value="">— None (top-level task) —</option>' +
     parentCandidates.map(t => `<option value="${escH(t.id)}" ${t.id === initialParent ? 'selected' : ''}>${escH(t.title || '(untitled)')}</option>`).join('');
 
-  // Subtasks list (edit mode only).
+  // Subtasks, attachments, comments — edit mode only.
   const subSection = $c('task-subtasks-section');
+  const attSection = $c('task-attachments-section');
+  const cmtSection = $c('task-comments-section');
   if (isEdit) {
     subSection.style.display = '';
+    attSection.style.display = '';
+    cmtSection.style.display = '';
     _renderTaskSubtasksList(taskId);
+    _renderTaskAttachmentsList(taskId);
+    _renderTaskCommentsList(taskId);
+    $c('task-new-comment').value = '';
+    $c('task-comment-mention-popover').style.display = 'none';
   } else {
     subSection.style.display = 'none';
+    attSection.style.display = 'none';
+    cmtSection.style.display = 'none';
   }
 
   $c('modal-task').classList.add('open');
   setTimeout(() => $c('task-title').focus(), 80);
+}
+
+// ── §13 Session 6: Attachments ──────────────────────────────────────────
+async function handleTaskFileUpload(input) {
+  const taskId = $c('task-id').value;
+  if (!taskId) { toast('Save the task first.'); return; }
+  const task = (S.tasks || []).find(t => t.id === taskId);
+  if (!task) return;
+  const files = [...input.files];
+  if (!files.length) return;
+  for (const file of files) {
+    if (file.size > 10 * 1024 * 1024) { toast(`${file.name}: too large (max 10MB).`); continue; }
+    try {
+      const record = await uploadFile(file, 'tasks', taskId);
+      if (!Array.isArray(task.attachments)) task.attachments = [];
+      task.attachments.push(record);
+    } catch (e) {
+      toast(`${file.name}: ${e.message || 'upload failed'}`);
+    }
+  }
+  task.updated = new Date().toISOString();
+  save();
+  _renderTaskAttachmentsList(taskId);
+  input.value = '';
+}
+
+function _renderTaskAttachmentsList(taskId) {
+  const host = $c('task-attachments-list');
+  if (!host) return;
+  const task = (S.tasks || []).find(t => t.id === taskId);
+  const atts = task?.attachments || [];
+  if (!atts.length) {
+    host.innerHTML = '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No attachments yet.</div>';
+    return;
+  }
+  host.innerHTML = `<div style="display:flex;flex-direction:column;gap:4px">${atts.map((a, i) => {
+    const sizeStr = a.size ? (a.size < 1024 ? a.size + 'B' : a.size < 1048576 ? (a.size/1024).toFixed(0) + 'KB' : (a.size/1048576).toFixed(1) + 'MB') : '';
+    const icon = (a.name || '').toLowerCase().endsWith('.pdf') ? '📄' : (a.name || '').toLowerCase().endsWith('.dwg') ? '📐' : '🖼';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--white)">
+        <span style="font-size:16px">${icon}</span>
+        <div onclick="viewFile(${escH(JSON.stringify({ name: a.name, type: a.type, storagePath: a.storagePath })).replace(/"/g, '&quot;')})" style="flex:1;min-width:0;cursor:pointer">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(a.name || '(unnamed)')}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">${escH(sizeStr)}</div>
+        </div>
+        <button onclick="removeTaskAttachment('${taskId}', ${i})" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:13px;padding:2px 4px" title="Remove">✕</button>
+      </div>`;
+  }).join('')}</div>`;
+}
+
+async function removeTaskAttachment(taskId, idx) {
+  const task = (S.tasks || []).find(t => t.id === taskId);
+  if (!task || !Array.isArray(task.attachments)) return;
+  if (!confirm('Remove this attachment?')) return;
+  const removed = task.attachments[idx];
+  task.attachments = task.attachments.filter((_, i) => i !== idx);
+  task.updated = new Date().toISOString();
+  save();
+  _renderTaskAttachmentsList(taskId);
+  if (removed?.storagePath && typeof deleteStoredFile === 'function') deleteStoredFile(removed.storagePath);
+}
+
+// ── §13 Session 6: Comments + @mentions ─────────────────────────────────
+function _renderTaskCommentsList(taskId) {
+  const host = $c('task-comments-list');
+  if (!host) return;
+  const task = (S.tasks || []).find(t => t.id === taskId);
+  const cs = (task?.comments || []).slice().sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+  if (!cs.length) {
+    host.innerHTML = '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No comments yet.</div>';
+    return;
+  }
+  host.innerHTML = cs.map(c => {
+    const authorName = _taskAssigneeLabel(c.authorUserId) || 'Someone';
+    const when = c.created ? new Date(c.created).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+    const isMe = AUTH.user && c.authorUserId === AUTH.user.id;
+    // Render @mentions inline by replacing them with styled spans.
+    let body = escH(c.body || '');
+    (c.mentions || []).forEach(uid => {
+      const name = _taskAssigneeLabel(uid);
+      if (name) {
+        const re = new RegExp('@' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        body = body.replace(re, `<span style="font-family:var(--font-b);font-weight:700;color:var(--russet);background:rgba(150,61,39,0.08);padding:1px 4px;border-radius:4px">@${escH(name)}</span>`);
+      }
+    });
+    return `
+      <div style="background:rgba(var(--text-rgb),0.02);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
+          <div style="font-family:var(--font-h);font-weight:700;font-size:11px;color:var(--mahogany);text-transform:uppercase;letter-spacing:0.04em">${escH(authorName)}${isMe ? ' <span style="font-family:var(--font-b);font-weight:400;font-size:9px;color:var(--text-light);text-transform:none;letter-spacing:0;margin-left:4px">(you)</span>' : ''}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">${escH(when)}</span>
+            ${isMe ? `<button onclick="deleteTaskComment('${taskId}','${c.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:0 2px" title="Delete">✕</button>` : ''}
+          </div>
+        </div>
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);line-height:1.5;white-space:pre-wrap">${body}</div>
+      </div>`;
+  }).join('');
+}
+
+// On every keystroke, look at what comes after the last @ and show a member
+// dropdown when the user is mid-mention. Esc dismisses; click inserts.
+function onTaskCommentInput() {
+  const ta = $c('task-new-comment');
+  const popover = $c('task-comment-mention-popover');
+  if (!ta || !popover) return;
+  const text = ta.value;
+  const caret = ta.selectionStart;
+  const beforeCaret = text.slice(0, caret);
+  const atIdx = beforeCaret.lastIndexOf('@');
+  if (atIdx < 0) { popover.style.display = 'none'; return; }
+  const queryRaw = beforeCaret.slice(atIdx + 1);
+  // Stop suggesting if there's a space or newline since the @.
+  if (/[\s\n]/.test(queryRaw)) { popover.style.display = 'none'; return; }
+  const q = queryRaw.toLowerCase();
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const matches = members.filter(m => {
+    const name = (m.display_name || m.email || '').toLowerCase();
+    return name.includes(q);
+  }).slice(0, 6);
+  if (!matches.length) { popover.style.display = 'none'; return; }
+  popover.innerHTML = matches.map(m => `
+    <div onclick="insertTaskMention('${escH(m.display_name || m.email || 'Member').replace(/'/g, "&#39;")}')" style="padding:6px 10px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);border-radius:4px" onmouseover="this.style.background='rgba(150,61,39,0.08)'" onmouseout="this.style.background='transparent'">${escH(m.display_name || m.email || 'Member')}</div>
+  `).join('');
+  popover.style.display = '';
+}
+
+function insertTaskMention(name) {
+  const ta = $c('task-new-comment');
+  const popover = $c('task-comment-mention-popover');
+  if (!ta) return;
+  const text = ta.value;
+  const caret = ta.selectionStart;
+  const beforeCaret = text.slice(0, caret);
+  const atIdx = beforeCaret.lastIndexOf('@');
+  if (atIdx < 0) return;
+  const newBefore = beforeCaret.slice(0, atIdx) + '@' + name + ' ';
+  const after = text.slice(caret);
+  ta.value = newBefore + after;
+  ta.selectionStart = ta.selectionEnd = newBefore.length;
+  ta.focus();
+  popover.style.display = 'none';
+}
+
+function postTaskComment() {
+  const taskId = $c('task-id').value;
+  if (!taskId) return;
+  const ta = $c('task-new-comment');
+  const body = (ta.value || '').trim();
+  if (!body) return;
+  const task = (S.tasks || []).find(t => t.id === taskId);
+  if (!task) return;
+  // Detect mentions: scan for "@DisplayName" matching team members.
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const mentions = [];
+  members.forEach(m => {
+    const name = m.display_name || m.email || '';
+    if (!name) return;
+    const re = new RegExp('@' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    if (re.test(body) && !mentions.includes(m.user_id)) mentions.push(m.user_id);
+  });
+  if (!Array.isArray(task.comments)) task.comments = [];
+  task.comments.push({
+    id: uid(),
+    taskId,
+    authorUserId: AUTH.user?.id || null,
+    body,
+    mentions,
+    attachments: [],
+    created: new Date().toISOString(),
+    edited: null,
+  });
+  task.updated = new Date().toISOString();
+  save();
+  ta.value = '';
+  $c('task-comment-mention-popover').style.display = 'none';
+  _renderTaskCommentsList(taskId);
+}
+
+function deleteTaskComment(taskId, commentId) {
+  if (!confirm('Delete this comment?')) return;
+  const task = (S.tasks || []).find(t => t.id === taskId);
+  if (!task) return;
+  task.comments = (task.comments || []).filter(c => c.id !== commentId);
+  task.updated = new Date().toISOString();
+  save();
+  _renderTaskCommentsList(taskId);
 }
 
 function _populateTaskItemAndInvoicePickers(projectId, selectedItemId, selectedInvoiceId) {
