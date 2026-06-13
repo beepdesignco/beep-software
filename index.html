@@ -1324,17 +1324,26 @@ tr:hover .row-btns { opacity:1; }
 
     <!-- ─────────── WORK QUEUE VIEW ─────────── -->
     <div class="view" id="view-work">
-      <div class="page-header">
+      <div class="page-header" style="border-bottom:none;padding-bottom:0">
         <div>
           <div class="page-title">Work</div>
-          <div class="page-sub">Everything asking for attention across the studio.</div>
+          <div class="page-sub">Queue, tasks, and everything asking for attention across the studio.</div>
         </div>
-        <div class="view-tabs">
+        <div class="view-tabs" id="work-scope-tabs" style="display:none">
+          <!-- Sub-scope only relevant on Queue tab. Toggled by setWorkTab. -->
           <button class="view-tab active" data-wscope="my"  onclick="setWorkScope('my')">My Work</button>
           <button class="view-tab"        data-wscope="all" onclick="setWorkScope('all')">All Work</button>
         </div>
       </div>
+      <!-- §13 multi-tab Work section. Queue = existing work queue; Tasks =
+           Asana-style task management system. Future additions could include
+           a Reports tab or similar. -->
+      <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
+        <button class="view-tab active" data-wktab="queue" onclick="setWorkTab('queue')" style="margin-bottom:-1px">Queue</button>
+        <button class="view-tab"        data-wktab="tasks" onclick="setWorkTab('tasks')" style="margin-bottom:-1px">Tasks</button>
+      </div>
       <div id="work-body" style="padding:20px 30px"></div>
+      <div id="work-tasks-body" style="display:none;padding:20px 30px"></div>
     </div>
 
     <!-- ─────────── PROJECT DETAIL VIEW ─────────── -->
@@ -1741,6 +1750,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
         <button class="view-tab"        data-settab="emails"  onclick="setSettingsTab('emails')"  style="margin-bottom:-1px">Email Templates</button>
         <button class="view-tab"        data-settab="email_design" onclick="setSettingsTab('email_design')" style="margin-bottom:-1px">Email Design</button>
+        <button class="view-tab"        data-settab="payment_methods" onclick="setSettingsTab('payment_methods')" style="margin-bottom:-1px">Payment Methods</button>
         <button class="view-tab"        data-settab="notes"   onclick="setSettingsTab('notes')"   style="margin-bottom:-1px">Invoice Notes</button>
         <button class="view-tab"        data-settab="categories" onclick="setSettingsTab('categories')" style="margin-bottom:-1px">Categories</button>
         <button class="view-tab"        data-settab="reminders" onclick="setSettingsTab('reminders')" style="margin-bottom:-1px">Reminders</button>
@@ -1864,6 +1874,13 @@ tr:hover .row-btns { opacity:1; }
           </div>
           <div id="as-email-templates-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
           <button class="btn btn-primary btn-sm" onclick="addEmailTemplate()">+ Add Template</button>
+        </div>
+
+        <div id="settab-payment_methods" class="settings-panel" style="display:none;max-width:800px">
+          <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin-bottom:14px;font-style:italic;line-height:1.5">
+            Control which payment methods are offered per invoice type, and add custom methods (informational text or external link) for special cases.
+          </div>
+          <div id="payment-methods-host"></div>
         </div>
 
         <div id="settab-email_design" class="settings-panel" style="display:none;max-width:1100px">
@@ -3629,10 +3646,26 @@ tr:hover .row-btns { opacity:1; }
         <label class="fl">State</label>
         <input type="text" class="fi" id="ts-name" placeholder="e.g. Louisiana">
       </div>
-      <div class="fg" style="max-width:140px">
-        <label class="fl">Tax Rate %</label>
-        <input type="number" class="fi" id="ts-rate" min="0" step="0.01" placeholder="9.45">
+      <div class="fg" style="max-width:160px">
+        <label class="fl">Combined Rate %</label>
+        <div id="ts-rate-display" style="font-family:var(--font-h);font-weight:800;font-size:20px;color:var(--pecan);padding:6px 0">0.00%</div>
+        <input type="hidden" id="ts-rate">
       </div>
+    </div>
+    <!-- §7 Combined-rate model: state holds multiple named components
+         (state + county + city + special districts). Stored as
+         taxState.rateComponents = [{ name, rate }]. Combined rate is sum;
+         accountant gets per-component breakdown for filings; client sees
+         single combined rate on proposals/invoices. -->
+    <div class="fg" style="margin-top:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <label class="fl" style="margin-bottom:0">Rate Components</label>
+        <button class="btn btn-ghost btn-sm" onclick="addTaxRateComponent()" style="font-size:10px">+ Add component</button>
+      </div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-bottom:8px;line-height:1.4">
+        Stack components like "TX State 6.25%" + "Travis County 1%" + "Austin 1%". Each saves separately for your accountant; the client sees the combined total.
+      </div>
+      <div id="ts-components-list" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
     <div class="fg">
       <label class="fl">Resale # <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(your studio's resale certificate number for this state)</span></label>
@@ -4298,6 +4331,43 @@ async function markAllNotificationsRead() {
 
 let _workScope = 'all';              // 'my' | 'all' — default set below based on role
 let _workScopeInitialized = false;
+// §13: which top-level tab is active inside the Work section. 'queue' is the
+// existing work-queue dashboard; 'tasks' is the new Asana-style task system.
+let _workTab = 'queue';
+
+function setWorkTab(tab) {
+  if (tab !== 'queue' && tab !== 'tasks') return;
+  _workTab = tab;
+  $a('[data-wktab]').forEach(b => b.classList.toggle('active', b.dataset.wktab === tab));
+  const queueBody = $c('work-body');
+  const tasksBody = $c('work-tasks-body');
+  const scopeTabs = $c('work-scope-tabs');
+  if (queueBody) queueBody.style.display = tab === 'queue' ? '' : 'none';
+  if (tasksBody) tasksBody.style.display = tab === 'tasks' ? '' : 'none';
+  // The My Work / All Work scope toggle only makes sense on the Queue tab.
+  if (scopeTabs) scopeTabs.style.display = tab === 'queue' ? '' : 'none';
+  if (tab === 'queue') renderWork();
+  else if (typeof renderTasksTab === 'function') renderTasksTab();
+  if (typeof saveUIState === 'function') saveUIState();
+}
+
+// Placeholder renderer for the Tasks tab. CRUD UI + views (list/board/
+// calendar) land in §13 Session 2. For now, show a "Coming next session"
+// state plus a live count of any tasks already loaded so we can verify the
+// data model is wired correctly.
+function renderTasksTab() {
+  const host = $c('work-tasks-body');
+  if (!host) return;
+  const count = (S.tasks || []).length;
+  host.innerHTML = `
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:28px 30px;text-align:center">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);margin-bottom:8px">Tasks</div>
+      <div style="font-family:var(--font-b);font-size:13px;color:var(--text-mid);line-height:1.6;max-width:520px;margin:0 auto">
+        Asana-style task management — board, list, and calendar views with subtasks, comments, @mentions, attachments, and project links — lands here in the next session.
+      </div>
+      <div style="margin-top:14px;font-family:var(--font-b);font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.07em">${count} task${count === 1 ? '' : 's'} on file</div>
+    </div>`;
+}
 let _workSystemEvents = [];          // Cache of recent activity_entries rows (source='system')
 const _workChannels = [];            // Realtime channels, created on first Work view mount
 
@@ -6015,6 +6085,7 @@ async function loadFromSupabase() {
     itemTypesRes, posRes, submittalsRes,
     freightCategoriesRes, freightChargesRes, freightActualsRes, freightSettlementsRes,
     estimatesRes, expenseAllocationsRes, freightActualAllocationsRes,
+    tasksRes, taskActivityRes, taskFieldDefsRes, taskDependenciesRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -6037,9 +6108,14 @@ async function loadFromSupabase() {
     sb.from('estimates').select('*').eq('studio_id', studioId).is('deleted_at', null).order('created_at'),
     sb.from('expense_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_actual_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    // §13 task system load — tasks come with comments embedded for one round-trip.
+    sb.from('tasks').select('*, task_comments(*)').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('task_activity').select('*').eq('studio_id', studioId).order('created_at', { ascending: false }).limit(500),
+    sb.from('task_field_defs').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('task_dependencies').select('*, tasks!task_dependencies_task_id_fkey(studio_id)'),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -6090,6 +6166,11 @@ async function loadFromSupabase() {
   }));
   S.documents      = (documentsRes.data      || []).map(dbDocumentToS);
   S.timeEntries    = (timeRes.data           || []).map(dbTimeToS);
+  // §13 task system
+  S.tasks            = (tasksRes.data         || []).map(dbTaskToS).sort((a, b) => (a.sortOrder - b.sortOrder) || (a.created || '').localeCompare(b.created || ''));
+  S.taskActivity     = (taskActivityRes.data  || []).map(dbTaskActivityToS);
+  S.taskFieldDefs    = ((taskFieldDefsRes.data || []).map(dbTaskFieldDefToS)).sort((a, b) => a.sortOrder - b.sortOrder);
+  S.taskDependencies = (taskDependenciesRes.data || []).map(d => ({ id: d.id, taskId: d.task_id, dependsOnTaskId: d.depends_on_task_id, kind: d.kind || 'blocks', created: d.created_at }));
   S.vendors        = (vendorsRes.data        || []).map(dbVendorToS);
   S.vendorContacts = (vendorContactsRes.data || []).map(dbVendorContactToS);
   S.brands         = (brandsRes.data         || []).map(dbBrandToS);
@@ -6860,6 +6941,12 @@ function captureSbShadow() {
   _sbShadow.expenses       = new Map((S.expenses       || []).map(e => [e.id, snap(e)]));
   _sbShadow.documents      = new Map((S.documents      || []).map(d => [d.id, snap(d)]));
   _sbShadow.timeEntries    = new Map((S.timeEntries    || []).map(t => [t.id, snap(t)]));
+  // §13 tasks shadow — comments live nested on each task so they share a Map.
+  _sbShadow.tasks            = new Map((S.tasks || []).map(t => [t.id, snap({ ...t, comments: undefined })]));
+  _sbShadow.taskComments     = new Map();
+  (S.tasks || []).forEach(t => (t.comments || []).forEach(c => _sbShadow.taskComments.set(c.id, { ...snap(c), _taskId: t.id })));
+  _sbShadow.taskFieldDefs    = new Map((S.taskFieldDefs    || []).map(f => [f.id, snap(f)]));
+  _sbShadow.taskDependencies = new Map((S.taskDependencies || []).map(d => [d.id, snap(d)]));
   _sbShadow.invoices       = new Map((S.invoices       || []).map(i => [i.id, snap(i)]));
   _sbShadow.vendors        = new Map((S.vendors        || []).map(v => [v.id, snap(v)]));
   _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
@@ -7038,6 +7125,113 @@ function freightSettlementToDB(r, studioId) {
     deleted_at: null,
   };
 }
+// ── §13 Tasks ── Asana-style task system mappings ─────────────────────
+// Tasks have polymorphic links to project/proposal_item/invoice (any subset
+// can be null), subtasks via parent_task_id, custom_fields jsonb + tags
+// for the §13 Phase 2 UI, attachments inline jsonb. Comments + activity
+// load alongside.
+function dbTaskToS(t) {
+  return {
+    id: t.id,
+    parentTaskId: t.parent_task_id || null,
+    title: t.title || '',
+    description: t.description || '',
+    status: t.status || 'todo',
+    assigneeUserId: t.assignee_user_id || null,
+    dueDate: t.due_date || '',
+    priority: t.priority || '',
+    projectId: t.project_id || null,
+    proposalItemId: t.proposal_item_id || null,
+    invoiceId: t.invoice_id || null,
+    customFields: t.custom_fields || {},
+    tags: Array.isArray(t.tags) ? t.tags : [],
+    attachments: Array.isArray(t.attachments) ? t.attachments : [],
+    sortOrder: Number(t.sort_order || 0),
+    completedAt: t.completed_at || null,
+    created: t.created_at,
+    updated: t.updated_at,
+    createdByUserId: t.created_by_user_id || null,
+    comments: (t.task_comments || []).map(dbTaskCommentToS).sort((a, b) => (a.created || '').localeCompare(b.created || '')),
+  };
+}
+function taskToDB(t, studioId) {
+  return {
+    id: t.id, studio_id: studioId,
+    parent_task_id: t.parentTaskId || null,
+    title: t.title || '',
+    description: t.description || null,
+    status: t.status || 'todo',
+    assignee_user_id: t.assigneeUserId || null,
+    due_date: t.dueDate || null,
+    priority: t.priority || null,
+    project_id: t.projectId || null,
+    proposal_item_id: t.proposalItemId || null,
+    invoice_id: t.invoiceId || null,
+    custom_fields: t.customFields || {},
+    tags: Array.isArray(t.tags) ? t.tags : [],
+    attachments: Array.isArray(t.attachments) ? t.attachments : [],
+    sort_order: Number(t.sortOrder || 0),
+    completed_at: t.completedAt || null,
+    deleted_at: null,
+  };
+}
+function dbTaskCommentToS(c) {
+  return {
+    id: c.id,
+    taskId: c.task_id,
+    authorUserId: c.author_user_id || null,
+    body: c.body || '',
+    mentions: Array.isArray(c.mentions) ? c.mentions : [],
+    attachments: Array.isArray(c.attachments) ? c.attachments : [],
+    created: c.created_at,
+    edited: c.edited_at || null,
+  };
+}
+function taskCommentToDB(c) {
+  return {
+    id: c.id,
+    task_id: c.taskId,
+    author_user_id: c.authorUserId || null,
+    body: c.body || '',
+    mentions: Array.isArray(c.mentions) ? c.mentions : [],
+    attachments: Array.isArray(c.attachments) ? c.attachments : [],
+    edited_at: c.edited || null,
+    deleted_at: null,
+  };
+}
+function dbTaskActivityToS(a) {
+  return {
+    id: a.id,
+    taskId: a.task_id,
+    actorUserId: a.actor_user_id || null,
+    kind: a.kind || '',
+    payload: a.payload || {},
+    created: a.created_at,
+  };
+}
+function dbTaskFieldDefToS(f) {
+  return {
+    id: f.id,
+    name: f.name || '',
+    fieldType: f.field_type || 'text',
+    options: f.options || {},
+    defaultValue: f.default_value || '',
+    sortOrder: Number(f.sort_order || 0),
+    created: f.created_at,
+  };
+}
+function taskFieldDefToDB(f, studioId) {
+  return {
+    id: f.id, studio_id: studioId,
+    name: f.name || '',
+    field_type: f.fieldType || 'text',
+    options: f.options || {},
+    default_value: f.defaultValue || null,
+    sort_order: Number(f.sortOrder || 0),
+    deleted_at: null,
+  };
+}
+
 function freightActualAllocationToDB(a, studioId) {
   return {
     id: a.id,
@@ -7543,6 +7737,17 @@ async function syncToSupabase() {
     await syncSafe('expense_allocations', current.expenseAllocations, _sbShadow.expenseAllocations, a => expenseAllocationToDB(a, studioId));
     // freight_actual_allocations after freight_actuals.
     await syncSafe('freight_actual_allocations', current.freightActualAllocations, _sbShadow.freightActualAllocations, a => freightActualAllocationToDB(a, studioId));
+    // §13 task system. Tasks first (parent_task_id self-ref allowed since
+    // we use ON DELETE SET NULL). Comments and dependencies come after.
+    const currentTasks = new Map((S.tasks || []).map(t => [t.id, t]));
+    const currentTaskComments = new Map();
+    (S.tasks || []).forEach(t => (t.comments || []).forEach(c => currentTaskComments.set(c.id, { ...c, _taskId: t.id })));
+    const currentTaskFieldDefs = new Map((S.taskFieldDefs || []).map(f => [f.id, f]));
+    const currentTaskDependencies = new Map((S.taskDependencies || []).map(d => [d.id, d]));
+    await syncSafe('tasks',             currentTasks,            _sbShadow.tasks,            t => taskToDB(t, studioId));
+    await syncSafe('task_comments',     currentTaskComments,     _sbShadow.taskComments,     c => taskCommentToDB(c), { softDelete: false });
+    await syncSafe('task_field_defs',   currentTaskFieldDefs,    _sbShadow.taskFieldDefs,    f => taskFieldDefToDB(f, studioId));
+    await syncSafe('task_dependencies', currentTaskDependencies, _sbShadow.taskDependencies, d => ({ id: d.id, task_id: d.taskId, depends_on_task_id: d.dependsOnTaskId, kind: d.kind || 'blocks' }), { softDelete: false });
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     // Three-phase to satisfy circular FKs:
@@ -13441,8 +13646,10 @@ function renderPDSettings(proj, pid) {
         <input type="number" class="fi" id="pds-markup" min="0" step="1" value="${proj.markupPct != null ? proj.markupPct : 25}" onchange="savePDSetting('${pid}','markupPct',parseFloat(this.value)||25)">
       </div>
       <div class="fg">
-        <label class="fl">State <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(defaults pulled from App Settings → Categories → Tax States)</span></label>
-        <select class="fi fsel" id="pds-state" onchange="onPDStateChange('${pid}')">${buildStateSelectOptions(proj.state||'')}</select>
+        <label class="fl">State <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">${proj.state ? '(locked — tax behavior depends on this)' : '(defaults pulled from App Settings → Categories → Tax States)'}</span></label>
+        ${proj.state
+          ? `<div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);padding:8px 12px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--rs);display:flex;align-items:center;gap:6px"><span style="font-size:11px">🔒</span>${escH(proj.state)}</div>`
+          : `<select class="fi fsel" id="pds-state" onchange="onPDStateChange('${pid}')">${buildStateSelectOptions(proj.state||'')}</select>`}
       </div>
     </div>
     <div class="frow">
@@ -14493,6 +14700,24 @@ function openEstimateWizard() {
   $c('est-recv-fee').value = 50;
   $c('est-storage-on').checked = false;
   $c('est-storage-amt').value = 0;
+  // §7: auto-check "Tax freight" if the project's state has taxFreight=true
+  // configured in App Settings → Tax States. Surface the state name under
+  // the checkbox so the user understands why it pre-checked.
+  const _projForEst = S.projects.find(p => p.id === pid);
+  const _taxStateForEst = _projForEst?.state ? (S.taxStates || []).find(s => (s.name || '').toLowerCase() === _projForEst.state.toLowerCase()) : null;
+  const _shouldAutoTaxFreight = !!(_taxStateForEst && _taxStateForEst.taxFreight);
+  $c('est-freight-tax').checked = _shouldAutoTaxFreight;
+  const _freightTaxLabel = $c('est-freight-tax')?.closest('label');
+  if (_freightTaxLabel) {
+    let hint = _freightTaxLabel.querySelector('.est-freight-tax-hint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.className = 'est-freight-tax-hint';
+      hint.style.cssText = 'font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;margin-left:18px;white-space:nowrap';
+      _freightTaxLabel.appendChild(hint);
+    }
+    hint.textContent = _shouldAutoTaxFreight ? `Auto: ${_projForEst.state} taxes freight` : (_projForEst?.state ? `${_projForEst.state} does not tax freight` : '');
+  }
   _estCustomLines = [];
   _estFreightExclude = new Set();
   _estRecvExclude = new Set();
@@ -19008,6 +19233,125 @@ function setSettingsTab(tab) {
   if (tab === 'reminders') renderRemindersPanel();
   if (tab === 'appearance') renderAppearanceSettings();
   if (tab === 'email_design') renderEmailDesignSettings();
+  if (tab === 'payment_methods') renderPaymentMethodsSettings();
+}
+
+// ── §6 Payment Methods config ──────────────────────────────────────
+// Per-invoice-type defaults: admin checks which built-in methods (Card / ACH /
+// Wire / Check) are offered for each type. Custom methods can be added as
+// either informational text or external link. All stored in
+// studio.settings.paymentMethodsConfig.
+
+const PM_INVOICE_TYPES = [
+  { v: 'phased',      l: 'Phased' },
+  { v: 'monthly',     l: 'Monthly Charges' },
+  { v: 'standalone',  l: 'Standalone' },
+  { v: 'design_fee',  l: 'Design Fee' },
+];
+
+const PM_BUILTIN_METHODS = [
+  { v: 'card',  l: 'Credit / Debit Card' },
+  { v: 'ach',   l: 'ACH Bank Transfer' },
+  { v: 'wire',  l: 'Wire Transfer' },
+  { v: 'check', l: 'Check' },
+];
+
+function _getPaymentMethodsConfig() {
+  const s = getStudio() || {};
+  if (!s.paymentMethodsConfig) s.paymentMethodsConfig = { perType: {}, custom: [] };
+  if (!s.paymentMethodsConfig.perType) s.paymentMethodsConfig.perType = {};
+  if (!Array.isArray(s.paymentMethodsConfig.custom)) s.paymentMethodsConfig.custom = [];
+  return s.paymentMethodsConfig;
+}
+
+function _isMethodEnabledForType(invoiceType, methodKey) {
+  const cfg = _getPaymentMethodsConfig();
+  const perType = cfg.perType[invoiceType];
+  // Default: if no config saved for this type, all 4 built-ins enabled.
+  if (!perType) return true;
+  const v = perType[methodKey];
+  return v === undefined ? true : !!v;
+}
+
+function togglePaymentMethodForType(invoiceType, methodKey, enabled) {
+  const cfg = _getPaymentMethodsConfig();
+  if (!cfg.perType[invoiceType]) cfg.perType[invoiceType] = {};
+  cfg.perType[invoiceType][methodKey] = !!enabled;
+  save();
+  renderPaymentMethodsSettings();
+}
+
+function addCustomPaymentMethod() {
+  const cfg = _getPaymentMethodsConfig();
+  cfg.custom.push({ id: uid(), label: '', kind: 'info', content: '' });
+  save();
+  renderPaymentMethodsSettings();
+  setTimeout(() => {
+    const inputs = document.querySelectorAll('[data-pm-custom-label]');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  }, 40);
+}
+
+function updateCustomPaymentMethod(id, field, value) {
+  const cfg = _getPaymentMethodsConfig();
+  const m = cfg.custom.find(x => x.id === id);
+  if (!m) return;
+  m[field] = value;
+  save();
+}
+
+function deleteCustomPaymentMethod(id) {
+  if (!confirm('Delete this custom payment method?')) return;
+  const cfg = _getPaymentMethodsConfig();
+  cfg.custom = cfg.custom.filter(x => x.id !== id);
+  save();
+  renderPaymentMethodsSettings();
+}
+
+function renderPaymentMethodsSettings() {
+  const host = $c('payment-methods-host');
+  if (!host) return;
+  const cfg = _getPaymentMethodsConfig();
+
+  // Per-type grid
+  const headerRow = `
+    <div style="display:grid;grid-template-columns:160px repeat(${PM_BUILTIN_METHODS.length}, 1fr);gap:8px;align-items:center;padding:8px 12px;background:rgba(var(--text-rgb),0.04);border-radius:var(--rs);font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin-bottom:6px">
+      <div>Invoice Type</div>
+      ${PM_BUILTIN_METHODS.map(m => `<div style="text-align:center">${escH(m.l)}</div>`).join('')}
+    </div>`;
+
+  const typeRows = PM_INVOICE_TYPES.map(t => `
+    <div style="display:grid;grid-template-columns:160px repeat(${PM_BUILTIN_METHODS.length}, 1fr);gap:8px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:4px;background:var(--white)">
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700">${escH(t.l)}</div>
+      ${PM_BUILTIN_METHODS.map(m => `<div style="text-align:center"><input type="checkbox" ${_isMethodEnabledForType(t.v, m.v) ? 'checked' : ''} onchange="togglePaymentMethodForType('${t.v}','${m.v}', this.checked)" style="accent-color:var(--russet);width:16px;height:16px"></div>`).join('')}
+    </div>`).join('');
+
+  // Custom methods
+  const customRows = (cfg.custom || []).map(m => `
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px;margin-bottom:8px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <input type="text" data-pm-custom-label class="fi" value="${escH(m.label || '')}" placeholder="Label (e.g. PayPal, Zelle, custom wire)" onchange="updateCustomPaymentMethod('${m.id}','label',this.value.trim())" style="flex:1;font-size:13px;font-weight:700">
+        <select class="fi fsel" onchange="updateCustomPaymentMethod('${m.id}','kind',this.value); renderPaymentMethodsSettings()" style="width:160px;font-size:11px">
+          <option value="info"  ${m.kind === 'info'  ? 'selected' : ''}>Informational text</option>
+          <option value="link"  ${m.kind === 'link'  ? 'selected' : ''}>External link</option>
+        </select>
+        <button class="btn btn-danger btn-sm" onclick="deleteCustomPaymentMethod('${m.id}')" style="font-size:10px">Remove</button>
+      </div>
+      ${m.kind === 'link'
+        ? `<input type="url" class="fi" value="${escH(m.content || '')}" placeholder="https://…" onchange="updateCustomPaymentMethod('${m.id}','content',this.value.trim())" style="font-size:12px">`
+        : `<textarea class="fi" placeholder="Instructions shown to the client (e.g. Zelle to baylor@beepdesign.co)" onchange="updateCustomPaymentMethod('${m.id}','content',this.value.trim())" style="font-size:12px;min-height:60px;resize:vertical">${escH(m.content || '')}</textarea>`}
+    </div>`).join('');
+
+  host.innerHTML = `
+    <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Per Invoice Type</div>
+    ${headerRow}
+    ${typeRows}
+
+    <div style="margin-top:24px;display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Custom Payment Methods</div>
+      <button class="btn btn-primary btn-sm" onclick="addCustomPaymentMethod()" style="font-size:11px">+ Add Custom Method</button>
+    </div>
+    ${customRows || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No custom methods yet. Add one to show wire instructions, Zelle info, or a link to an external payment portal.</div>'}`;
 }
 
 // ── Email Design settings ──
@@ -20010,8 +20354,59 @@ function openTaxStateEditor(id, callback) {
   $c('ts-timetaxable').checked = !!t?.timeTaxable;
   $c('ts-delete-btn').style.display = t ? '' : 'none';
   $c('ts-error').style.display = 'none';
+  // §7: seed components. Legacy states with no rateComponents get a single
+  // synthetic component named after the state so the new UI is consistent.
+  const existing = Array.isArray(t?.rateComponents) ? t.rateComponents.slice() : null;
+  const seed = (existing && existing.length) ? existing
+             : (t?.taxRate ? [{ name: (t?.name || 'State') + ' base', rate: t.taxRate }]
+                           : [{ name: '', rate: '' }]);
+  _renderTsComponentsList(seed);
   $c('modal-tax-state').classList.add('open');
   setTimeout(() => $c('ts-name').focus(), 80);
+}
+
+// In-memory mirror of the components shown in the modal — read by saveTaxState.
+let _tsEditorComponents = [];
+
+function _renderTsComponentsList(components) {
+  _tsEditorComponents = (components || []).map(c => ({ name: c.name || '', rate: c.rate != null ? c.rate : '' }));
+  if (!_tsEditorComponents.length) _tsEditorComponents.push({ name: '', rate: '' });
+  const host = $c('ts-components-list');
+  if (!host) return;
+  host.innerHTML = _tsEditorComponents.map((c, i) => `
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="text" class="fi" value="${escH(String(c.name || ''))}" placeholder="e.g. TX State" oninput="_tsEditorComponents[${i}].name=this.value;_updateTsRateDisplay()" style="flex:1">
+      <input type="number" class="fi" value="${escH(String(c.rate ?? ''))}" min="0" step="0.001" placeholder="0.00" oninput="_tsEditorComponents[${i}].rate=parseFloat(this.value)||0;_updateTsRateDisplay()" style="width:90px;text-align:right">
+      <span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">%</span>
+      <button onclick="removeTaxRateComponent(${i})" class="btn btn-ghost btn-sm" style="font-size:11px;color:var(--text-light)" title="Remove">✕</button>
+    </div>`).join('');
+  _updateTsRateDisplay();
+}
+
+function addTaxRateComponent() {
+  _tsEditorComponents.push({ name: '', rate: '' });
+  _renderTsComponentsList(_tsEditorComponents);
+}
+
+function removeTaxRateComponent(i) {
+  _tsEditorComponents.splice(i, 1);
+  if (!_tsEditorComponents.length) _tsEditorComponents.push({ name: '', rate: '' });
+  _renderTsComponentsList(_tsEditorComponents);
+}
+
+function _readTsComponentsFromDOM() {
+  // Strip empty rows on save so we don't persist trash.
+  return _tsEditorComponents
+    .map(c => ({ name: String(c.name || '').trim(), rate: Number(c.rate) || 0 }))
+    .filter(c => c.name || c.rate > 0);
+}
+
+function _updateTsRateDisplay() {
+  const sum = _tsEditorComponents.reduce((s, c) => s + (Number(c.rate) || 0), 0);
+  const el = $c('ts-rate-display');
+  if (el) el.textContent = (sum.toFixed(3).replace(/\.?0+$/, '')) + '%';
+  const hidden = $c('ts-rate');
+  if (hidden) hidden.value = sum;
 }
 
 function saveTaxState() {
@@ -20020,9 +20415,16 @@ function saveTaxState() {
   if (!name) { showTaxStateErr('Enter the state name.'); return; }
   const dupe = (S.taxStates || []).find(s => s.id !== id && (s.name||'').toLowerCase() === name.toLowerCase());
   if (dupe) { showTaxStateErr('"' + name + '" already exists.'); return; }
+  // §7 combined rate = sum of component rates. The taxRate field is the
+  // denormalized total (kept for back-compat with existing per-project tax
+  // calc); rateComponents is the per-jurisdiction breakdown the accountant
+  // uses for filings.
+  const components = _readTsComponentsFromDOM();
+  const combinedRate = components.reduce((s, c) => s + (Number(c.rate) || 0), 0);
   const fields = {
     name,
-    taxRate: parseFloat($c('ts-rate').value) || 0,
+    taxRate: combinedRate,
+    rateComponents: components,
     resaleNumber: $c('ts-resale').value.trim(),
     filingFrequency: $c('ts-frequency').value,
     notes: $c('ts-notes').value.trim(),
