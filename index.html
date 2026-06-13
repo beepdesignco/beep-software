@@ -3394,6 +3394,25 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ PROJECT CREDITS MODAL ═════════════════ -->
+<!-- Read-only list of all credit rows on a project. §4 (overpayment),
+     and eventually §1 (freight/cost credits) and §3 (cancellation credits)
+     all write here. Apply-to-future-invoice flow is a later iteration. -->
+<div class="overlay" id="modal-project-credits">
+  <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-project-credits')">✕</button>
+    <div class="modal-title">Project Credits</div>
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:14px;line-height:1.5">
+      Credits accumulated on this project from overpayments, freight/cost overcollection, or cancelled invoices held as credit. Will be applicable to future invoices on this project.
+    </div>
+    <div id="project-credits-body"></div>
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-project-credits')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ FREIGHT RETAINER MODAL ═════════════════ -->
 <!-- Bulk-set primary freight on selected proposal items to allowance @ X%.
      Writes back to each item's freight_charges row so the existing invoice
@@ -6691,6 +6710,8 @@ function dbItemToS(it) {
     groupComponents: !!it.group_components,
     additionalCharges: it.additional_charges || [],
     costActual: it.cost_actual != null ? String(it.cost_actual) : '',
+    costActualPaymentMethod: it.cost_actual_payment_method || '',
+    vendorOrderNumber: it.vendor_order_number || '',
     additionalCosts: it.additional_costs || [],
     _invoiceIds: it.invoice_ids || [],
     _expenseId: it.expense_id || null,
@@ -7245,6 +7266,8 @@ function itemToDB(it) {
     adjust_markup: it.adjustMarkup ?? null, group_components: !!it.groupComponents,
     additional_charges: it.additionalCharges || [],
     cost_actual: _parseMoney(it.costActual),
+    cost_actual_payment_method: it.costActualPaymentMethod || null,
+    vendor_order_number: it.vendorOrderNumber || null,
     additional_costs: it.additionalCosts || [],
     invoice_ids: it._invoiceIds || [], expense_id: it._expenseId || null,
     invoice_line_id: it._invoiceLineId || null, invoice_number: it._invoiceNumber || null,
@@ -8448,7 +8471,17 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
         <input type="text" class="fi" value="${escH(item.costActual||'')}" placeholder="$0.00" onchange="savePMField('${pid}','${spId}','${itemId}','costActual',this.value.trim())">
       </div>
       ${freightRow}
-      <div></div>
+      <div>
+        <label class="fl">Paid With</label>
+        <select class="fi fsel" onchange="savePMField('${pid}','${spId}','${itemId}','costActualPaymentMethod',this.value)" ${item.costActual ? '' : 'disabled style="opacity:0.6"'}>
+          <option value="">${item.costActual ? '— Select payment method —' : 'Enter Actual Cost first'}</option>
+          ${(S.paymentCards||[]).map(c => `<option value="${escH(c)}" ${item.costActualPaymentMethod === c ? 'selected' : ''}>${escH(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="fl">Vendor Order #</label>
+        <input type="text" class="fi" value="${escH(item.vendorOrderNumber||'')}" placeholder="+ Add vendor order number" onchange="savePMField('${pid}','${spId}','${itemId}','vendorOrderNumber',this.value.trim())">
+      </div>
     </div>
     ${addlBlock}
     ${variancePill}
@@ -8635,6 +8668,45 @@ function copyQRCard(btn) {
   );
 }
 
+// §4 Project credits modal — read-only list of credit rows + their source.
+// Apply-to-future-invoice flow will be added later; this is just visibility.
+function openProjectCreditsModal(pid) {
+  const proj = getProject(pid);
+  if (!proj) return;
+  const allCredits = (proj.settings?.credits || []).slice().sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+  const host = $c('project-credits-body');
+  if (!host) return;
+  if (!allCredits.length) {
+    host.innerHTML = '<div style="font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;padding:8px 0">No credits on file.</div>';
+  } else {
+    host.innerHTML = allCredits.map(c => {
+      const balance = Number(c.balance || 0);
+      const isApplied = balance < 0.005;
+      const sourceLabel = c.source === 'overpayment' ? 'Overpayment'
+                       : c.source === 'freight_credit' ? 'Freight credit'
+                       : c.source === 'cost_credit' ? 'Cost credit'
+                       : c.source === 'cancellation' ? 'Cancellation hold'
+                       : 'Credit';
+      const createdLabel = c.created ? new Date(c.created).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:${isApplied ? 'rgba(var(--text-rgb),0.03)' : 'rgba(26,110,58,0.04)'}">
+          <div style="flex:1;min-width:0">
+            <div style="font-family:var(--font-h);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">${escH(sourceLabel)}</div>
+            ${c.sourceInvoiceNumber ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:2px">From invoice ${escH(c.sourceInvoiceNumber)}</div>` : ''}
+            ${c.notes ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">${escH(c.notes)}</div>` : ''}
+            ${createdLabel ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">${escH(createdLabel)}</div>` : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:${isApplied ? 'var(--text-light)' : '#1a6e3a'}">${fmt(balance)}</div>
+            <div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em">${isApplied ? 'applied' : 'available'}</div>
+            ${Number(c.amount || 0) !== balance ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">of ${fmt(c.amount || 0)}</div>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+  }
+  $c('modal-project-credits').classList.add('open');
+}
+
 function renderPDOverview(proj, pid) {
   const client = (S.clients||[]).find(c => c.id === proj.clientId);
   const prop = S.proposals[pid];
@@ -8650,7 +8722,23 @@ function renderPDOverview(proj, pid) {
     });
   });
 
-  let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">';
+  // §4 Project credits banner — total available credit balance across
+  // every credit row on this project. Currently only generated by manual
+  // overpayments; §1 freight overhaul + §3 cancellation will write here too.
+  const credits = (proj.settings?.credits || []).filter(c => Number(c.balance) > 0.005);
+  const totalAvailableCredit = credits.reduce((s, c) => s + Number(c.balance || 0), 0);
+  let html = '';
+  if (totalAvailableCredit > 0.005) {
+    html += `
+    <div style="background:rgba(26,110,58,0.06);border:1px solid rgba(26,110,58,0.30);border-radius:var(--rl);padding:12px 18px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <strong style="color:#1a6e3a">Available project credit: ${fmt(totalAvailableCredit)}</strong>
+        <span style="color:var(--text-mid)"> · ${credits.length} credit${credits.length === 1 ? '' : 's'} on file</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="openProjectCreditsModal('${pid}')" style="font-size:11px;color:#1a6e3a">View details</button>
+    </div>`;
+  }
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">';
 
   // Left column: client info + stats
   html += '<div>';
@@ -13856,7 +13944,11 @@ function renderItemRow(item, spId, pid) {
   }
 
   const isAllowance = !!item.allowance;
-  const hasExpandable = !isAllowance && ((item.type === 'constructed' && compRows) || (item.type === 'readymade' && chargeRows) || item.notes);
+  // §9: constructed items marked as an allowance-as-whole keep their
+  // components expandable (collapsed by default; click to expand). The
+  // allowance flag controls how it's billed/displayed to the client, not
+  // whether internal users can see the components.
+  const hasExpandable = (item.type === 'constructed' && compRows) || (!isAllowance && ((item.type === 'readymade' && chargeRows) || item.notes));
   const contactStr = (() => {
     if (isAllowance) return '';
     const d = itemContactDisplay(item);
@@ -14401,6 +14493,20 @@ function openExclusionPicker(type) {
 
   $c('excl-title').textContent = type === 'freight' ? 'Freight — Select Exclusions' : 'Receiving — Select Exclusions';
 
+  // §8: items with primary freight set to "None" (or no freight at all) are
+  // implicitly excluded from the freight picker — they have no freight to
+  // estimate. Still shown in the list, grayed and italicized, so the user
+  // sees they exist but can't toggle them on. Auto-add to excludeSet at
+  // open time to keep the calc consistent.
+  const primaryFreightCatId = (type === 'freight' && typeof getPrimaryFreightCategoryId === 'function') ? getPrimaryFreightCategoryId() : null;
+  const itemHasNoFreight = (item) => {
+    if (!primaryFreightCatId) return false;
+    const charges = (S.freightCharges || []).filter(c =>
+      c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryFreightCatId);
+    if (!charges.length) return true; // no row = treat as None
+    return charges.every(c => !c.state || c.state === 'none');
+  };
+
   // Only show items that are in-scope for the current estimate. For space/item
   // scope, items not in scope shouldn't be excludable (they're already excluded
   // by virtue of being out-of-scope). Group by space for readability.
@@ -14411,14 +14517,25 @@ function openExclusionPicker(type) {
     if (!items.length) return;
     html += `<div style="font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:4px">${escH(sp.name||'Unnamed Space')}</div>`;
     items.forEach(item => {
+      const isNoFreight = type === 'freight' && itemHasNoFreight(item);
+      if (isNoFreight) excludeSet.add(item.id); // auto-exclude items with freight=None
       const checked = !excludeSet.has(item.id);
       const qty = parseFloat(item.qty)||1;
       const qtyLabel = qty > 1 ? ' ×'+qty+(item.qtyUnit?' '+escH(item.qtyUnit):'') : (item.qtyUnit?' — '+escH(item.qtyUnit):'');
-      html += `<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;cursor:pointer;border-radius:var(--rs);transition:var(--t)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
-        <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleEstExclude('${type}','${item.id}',this.checked)" style="accent-color:var(--russet);width:14px;height:14px;flex-shrink:0">
-        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
-        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);white-space:nowrap">${qtyLabel}</span>
-      </label>`;
+      if (isNoFreight) {
+        // Visible but non-clickable, grayed + italic per §8.
+        html += `<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-radius:var(--rs);opacity:0.55;cursor:not-allowed" title="Freight set to None on this item — not part of estimate">
+          <input type="checkbox" disabled style="accent-color:var(--text-light);width:14px;height:14px;flex-shrink:0">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;flex:1">${escH(item.name||'—')} <span style="font-size:10px;color:var(--text-light);font-weight:400">· freight: None</span></span>
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);white-space:nowrap;font-style:italic">${qtyLabel}</span>
+        </label>`;
+      } else {
+        html += `<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;cursor:pointer;border-radius:var(--rs);transition:var(--t)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleEstExclude('${type}','${item.id}',this.checked)" style="accent-color:var(--russet);width:14px;height:14px;flex-shrink:0">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
+          <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b);white-space:nowrap">${qtyLabel}</span>
+        </label>`;
+      }
     });
   });
 
@@ -16707,24 +16824,50 @@ function initItemPickers(item) {
   const initialContactId = item?.vendorContactId || null;
   const initialBrandId   = item?.brandId         || null;
 
+  // §10: brand picker is gated by vendor. Only brands tagged to the chosen
+  // vendor are selectable; without a vendor the picker shows a disabled
+  // placeholder. Helper computes the restrictTo set per current vendor.
+  const _initialVendor = initialVendorId ? (S.vendors || []).find(v => v.id === initialVendorId) : null;
+  const _initialBrandRestrict = _initialVendor ? (_initialVendor.brandIds || []) : [];
+
   renderItemBrandPicker('ai-brand-picker', initialBrandId, (newBrandId) => {
     __icpRefreshBrand('ai-contact-picker', newBrandId);
     updateLegacyContactLine();
-  });
+  }, { restrictTo: _initialBrandRestrict, allowCreate: false });
 
   renderItemContactPicker('ai-contact-picker', initialVendorId, initialContactId, initialBrandId, () => {
     updateLegacyContactLine();
   });
 
   renderItemVendorPicker('ai-vendor-picker', initialVendorId, (newVendorId) => {
-    // Reset contact when vendor changes (or clears)
+    // Reset contact when vendor changes (or clears). §10: auto-populate
+    // the vendor's primary contact when one is set and the previous
+    // contact was empty/stale, so users don't have to re-select it
+    // every time they pick a vendor.
     const cur = $c('ai-contact-picker');
-    const stillValid = cur?._selectedId && (S.vendorContacts || []).some(c => c.id === cur._selectedId && c.vendorId === newVendorId);
-    const nextContact = stillValid ? cur._selectedId : null;
+    const curContactStillValid = cur?._selectedId && (S.vendorContacts || []).some(c => c.id === cur._selectedId && c.vendorId === newVendorId);
+    let nextContact = curContactStillValid ? cur._selectedId : null;
+    if (!nextContact && newVendorId) {
+      const primary = (S.vendorContacts || []).find(c => c.vendorId === newVendorId && c.primary);
+      if (primary) nextContact = primary.id;
+    }
     const brandId = $c('ai-brand-picker')?._selectedId || null;
     renderItemContactPicker('ai-contact-picker', newVendorId, nextContact, brandId, () => {
       updateLegacyContactLine();
     });
+
+    // §10: re-restrict the brand picker to the new vendor's brand list.
+    // If the currently-selected brand isn't in that list, clear it.
+    const newVendor = newVendorId ? (S.vendors || []).find(v => v.id === newVendorId) : null;
+    const newRestrict = newVendor ? (newVendor.brandIds || []) : [];
+    const bp = $c('ai-brand-picker');
+    const curBrandId = bp?._selectedId || null;
+    const brandStillValid = curBrandId && newRestrict.includes(curBrandId);
+    renderItemBrandPicker('ai-brand-picker', brandStillValid ? curBrandId : null, bp?._onChange || ((newBrandId) => {
+      __icpRefreshBrand('ai-contact-picker', newBrandId);
+      updateLegacyContactLine();
+    }), { restrictTo: newRestrict, allowCreate: false });
+
     updateLegacyContactLine();
   });
 
@@ -17833,6 +17976,13 @@ function renderItemBrandPicker(hostId, brandId, onChange, opts) {
         <div style="flex:1"></div>
         <button onclick="event.stopPropagation(); __ibpClear('${hostId}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:14px;line-height:1;padding:0 2px" title="Clear">✕</button>
       </div>
+      <div id="${hostId}-popover" style="display:none"></div>`;
+    return;
+  }
+  // §10: restrictTo === [] means "vendor not picked yet, no brands available".
+  // Render a disabled input so the user is forced to pick a vendor first.
+  if (Array.isArray(host._restrictTo) && host._restrictTo.length === 0) {
+    host.innerHTML = `<input type="text" class="fi" disabled placeholder="Pick a vendor first…" style="background:rgba(var(--text-rgb),0.04)">
       <div id="${hostId}-popover" style="display:none"></div>`;
     return;
   }
@@ -27419,11 +27569,44 @@ function savePayment() {
     inv.payments.push({ id: uid(), date, amount, method, notes });
   }
 
+  // §4 overpayment → project credit: if this new payment (in combination
+  // with prior settled payments) takes the invoice past its total, log the
+  // overage as a project-level credit. Only fires for NEW payments — edits
+  // that change amount handled separately later.
+  let creditCreated = 0;
+  if (!payId) {
+    const totalPaid = (inv.payments || []).filter(p => !p.pending).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const overage = totalPaid - Number(inv.total || 0);
+    if (overage > 0.005) {
+      const proj = getProject(inv.projectId);
+      if (proj) {
+        if (!proj.settings) proj.settings = {};
+        if (!Array.isArray(proj.settings.credits)) proj.settings.credits = [];
+        proj.settings.credits.push({
+          id: uid(),
+          source: 'overpayment',
+          sourceInvoiceId: inv.id,
+          sourceInvoiceNumber: inv.number,
+          sourcePaymentId: inv.payments[inv.payments.length - 1].id,
+          amount: overage,
+          balance: overage,
+          created: new Date().toISOString(),
+          notes: 'Overpayment on invoice ' + inv.number,
+        });
+        creditCreated = overage;
+      }
+    }
+  }
+
   applyPaymentStatus(inv);
   save();
   closeModal('modal-payment');
   renderInvoiceBuilder();
-  toast(payId ? 'Payment updated.' : 'Payment recorded.');
+  if (creditCreated > 0) {
+    toast('Payment recorded. $' + creditCreated.toFixed(2) + ' overage logged as project credit.');
+  } else {
+    toast(payId ? 'Payment updated.' : 'Payment recorded.');
+  }
 }
 
 function deletePayment() {
