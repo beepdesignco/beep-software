@@ -11331,6 +11331,42 @@ function renderActivityNote(note, pid, spId, itemId) {
 
 // ── PM Management Tab ──
 
+// §12 Group invoice line items by location (space). Lines linked to a
+// proposal item resolve to that item's parent space; lines with an
+// explicit spaceId use it; everything else (manual entries) lands in
+// "Other". Returns an array of { location, lines } preserving original
+// document order — the first space encountered comes first.
+function groupInvoiceLineItemsByLocation(inv) {
+  if (!inv || !Array.isArray(inv.lineItems)) return [];
+  const lines = inv.lineItems.filter(l => l._reconType !== 'credit');
+  const prop = inv.projectId ? S.proposals[inv.projectId] : null;
+  const spaceById = {};
+  if (prop) (prop.spaces || []).forEach(sp => spaceById[sp.id] = sp);
+  const itemToSpaceName = (proposalItemId) => {
+    if (!prop || !proposalItemId) return '';
+    for (const sp of (prop.spaces || [])) {
+      if ((sp.items || []).some(it => it.id === proposalItemId)) return sp.name || '';
+    }
+    return '';
+  };
+  const locationFor = (l) => {
+    if (l.spaceId && spaceById[l.spaceId]) return spaceById[l.spaceId].name || 'Unassigned';
+    if (l.proposalItemId) {
+      const name = itemToSpaceName(l.proposalItemId);
+      if (name) return name;
+    }
+    return 'Other';
+  };
+  const order = [];
+  const buckets = {};
+  lines.forEach(l => {
+    const loc = locationFor(l);
+    if (!buckets[loc]) { buckets[loc] = []; order.push(loc); }
+    buckets[loc].push(l);
+  });
+  return order.map(loc => ({ location: loc, lines: buckets[loc] }));
+}
+
 function getItemInvoiceRefs(itemId) {
   // Check both directions: invoice lineItems → proposalItemId, AND item._invoiceIds
   const fromLineItems = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
@@ -27836,14 +27872,26 @@ ${sec_invoice_meta}
       </tr>
     </thead>
     <tbody>
-      ${(inv.lineItems||[]).filter(l => l._reconType !== 'credit').map(l => {
-        const qty = Number(l.qty||1), price = Number(l.price||0), total = qty * price;
-        return `<tr>
-          <td style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px">${esc(l.name||'')}${l.description?`<div style="font-size:11px;color:${textMid};font-weight:400;margin-top:3px;white-space:pre-wrap">${esc(l.description)}</div>`:''}</td>
-          <td align="right" style="font-size:12px;color:${textMid};border-bottom:1px solid ${border};padding:10px 6px">${qty}</td>
-          <td align="right" style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px"><strong>${fmtInner(total)}</strong></td>
-        </tr>`;
-      }).join('')}
+      ${(function(){
+        // §12 group by location. Insert a section header row before each
+        // group; skip header if there's only one group (and its name is
+        // "Other") to avoid visual noise on simple invoices.
+        const groups = (typeof groupInvoiceLineItemsByLocation === 'function') ? groupInvoiceLineItemsByLocation(inv) : [];
+        const skipHeaders = groups.length <= 1 && (!groups[0] || groups[0].location === 'Other');
+        return groups.map(group => {
+          const header = skipHeaders ? '' : `
+            <tr><td colspan="3" style="font-family:${fontHead};font-weight:700;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${mahogany};padding:14px 6px 6px;border-bottom:1px solid ${border}">${esc(group.location || 'Other')}</td></tr>`;
+          const rows = group.lines.map(l => {
+            const qty = Number(l.qty||1), price = Number(l.price||0), total = qty * price;
+            return `<tr>
+              <td style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px">${esc(l.name||'')}${l.description?`<div style="font-size:11px;color:${textMid};font-weight:400;margin-top:3px;white-space:pre-wrap">${esc(l.description)}</div>`:''}</td>
+              <td align="right" style="font-size:12px;color:${textMid};border-bottom:1px solid ${border};padding:10px 6px">${qty}</td>
+              <td align="right" style="font-size:12px;color:${textDark};border-bottom:1px solid ${border};padding:10px 6px"><strong>${fmtInner(total)}</strong></td>
+            </tr>`;
+          }).join('');
+          return header + rows;
+        }).join('');
+      })()}
     </tbody>
   </table>
 </td></tr>
@@ -29582,46 +29630,53 @@ async function exportInvoicePDF(invId) {
   }
   cursorY += metaRowH + 16;
 
-  // ── Line items table — exclude credits (rendered separately in totals).
-  const body = (inv.lineItems||[]).filter(l => l._reconType !== 'credit').map(l => {
-    const qty = parseFloat(l.qty)||1;
-    const price = parseFloat(l.price)||0;
+  // §12 Line items grouped by location. One autoTable per group with a
+  // bold location label above each. Credits excluded — they render in the
+  // totals block. If no groups (only credits / nothing), render a placeholder.
+  const lineGroups = groupInvoiceLineItemsByLocation(inv);
+  const rowsForGroup = (lines) => lines.map(l => {
+    const qty = parseFloat(l.qty) || 1;
+    const price = parseFloat(l.price) || 0;
     const total = qty * price;
     const namePlusDesc = l.description ? (l.name || '') + '\n' + l.description : (l.name || '');
-    return [namePlusDesc, qty.toString(), fmt(price), (l.taxable ? 'Y' : ''), fmt(total)];
+    return [namePlusDesc, qty.toString(), fmt(total)];
   });
-
-  // Line items with visible column grid
-  doc.autoTable({
-    startY: cursorY,
-    head: [['DESCRIPTION', 'QTY', 'AMOUNT']],
-    body: body.length ? body.map(r => [r[0], r[1], r[4]]) : [['—', '', fmt(0)]],
-    margin: { left: margin, right: margin },
-    theme: 'grid',
-    styles: {
-      font: 'courier', fontStyle: 'bold', fontSize: 10,
-      cellPadding: { top: 10, bottom: 10, left: 10, right: 10 },
-      textColor: TEXT_DARK,
-      lineColor: TEXT_DARK,
-      lineWidth: 0.3,
-    },
-    headStyles: {
-      fillColor: [251, 247, 239],
-      textColor: TEXT_DARK,
-      fontStyle: 'bold', font: 'courier', fontSize: 9,
-      halign: 'left',
-      lineWidth: 0.5,
-      lineColor: TEXT_DARK,
-      cellPadding: { top: 10, bottom: 10, left: 10, right: 10 },
-    },
-    columnStyles: {
-      0: { cellWidth: 'auto' },
-      1: { cellWidth: 70, halign: 'right' },
-      2: { cellWidth: 100, halign: 'right' },
-    },
-  });
-
-  cursorY = doc.lastAutoTable.finalY + 14;
+  if (!lineGroups.length) {
+    doc.autoTable({
+      startY: cursorY,
+      head: [['DESCRIPTION', 'QTY', 'AMOUNT']],
+      body: [['—', '', fmt(0)]],
+      margin: { left: margin, right: margin },
+      theme: 'grid',
+      styles: { font: 'courier', fontStyle: 'bold', fontSize: 10, cellPadding: { top: 10, bottom: 10, left: 10, right: 10 }, textColor: TEXT_DARK, lineColor: TEXT_DARK, lineWidth: 0.3 },
+      headStyles: { fillColor: [251, 247, 239], textColor: TEXT_DARK, fontStyle: 'bold', font: 'courier', fontSize: 9, halign: 'left', lineWidth: 0.5, lineColor: TEXT_DARK, cellPadding: { top: 10, bottom: 10, left: 10, right: 10 } },
+      columnStyles: { 0: { cellWidth: 'auto' }, 1: { cellWidth: 70, halign: 'right' }, 2: { cellWidth: 100, halign: 'right' } },
+    });
+    cursorY = doc.lastAutoTable.finalY + 14;
+  } else {
+    lineGroups.forEach((group, gIdx) => {
+      // Location label above the table — Oswald-style headline using courier
+      // (the only embedded font here) with letter spacing for emphasis.
+      if (gIdx > 0) cursorY += 6; // breathing room between groups
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(...MAHOGANY);
+      doc.text(String(group.location || 'Other').toUpperCase(), margin, cursorY + 2, { charSpace: 1.5 });
+      cursorY += 12;
+      doc.autoTable({
+        startY: cursorY,
+        head: gIdx === 0 ? [['DESCRIPTION', 'QTY', 'AMOUNT']] : [],
+        body: rowsForGroup(group.lines),
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        styles: { font: 'courier', fontStyle: 'bold', fontSize: 10, cellPadding: { top: 10, bottom: 10, left: 10, right: 10 }, textColor: TEXT_DARK, lineColor: TEXT_DARK, lineWidth: 0.3 },
+        headStyles: { fillColor: [251, 247, 239], textColor: TEXT_DARK, fontStyle: 'bold', font: 'courier', fontSize: 9, halign: 'left', lineWidth: 0.5, lineColor: TEXT_DARK, cellPadding: { top: 10, bottom: 10, left: 10, right: 10 } },
+        columnStyles: { 0: { cellWidth: 'auto' }, 1: { cellWidth: 70, halign: 'right' }, 2: { cellWidth: 100, halign: 'right' } },
+      });
+      cursorY = doc.lastAutoTable.finalY + 8;
+    });
+    cursorY += 6;
+  }
 
   // ── Totals block — same cell-grid as line items; no oversized accents
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
