@@ -3518,6 +3518,13 @@ tr:hover .row-btns { opacity:1; }
       <div id="task-attachments-list"></div>
     </div>
 
+    <!-- §13 Activity log — chronological list of events on this task.
+         Auto-populated by save / comment / upload code paths. -->
+    <details id="task-activity-section" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <summary style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);cursor:pointer;list-style:none">Activity <span style="font-family:var(--font-b);font-weight:400;color:var(--text-light);font-size:10px;text-transform:none;letter-spacing:0">(click to expand)</span></summary>
+      <div id="task-activity-list" style="margin-top:8px"></div>
+    </details>
+
     <!-- §13 Comments — flat thread. Type @ to start a mention; the
          autocomplete dropdown shows matching team members. Confirmed
          mentions are stored in comment.mentions[] for notification. -->
@@ -4590,19 +4597,23 @@ function openTaskModal(taskId, opts) {
   const subSection = $c('task-subtasks-section');
   const attSection = $c('task-attachments-section');
   const cmtSection = $c('task-comments-section');
+  const actSection = $c('task-activity-section');
   if (isEdit) {
     subSection.style.display = '';
     attSection.style.display = '';
     cmtSection.style.display = '';
+    actSection.style.display = '';
     _renderTaskSubtasksList(taskId);
     _renderTaskAttachmentsList(taskId);
     _renderTaskCommentsList(taskId);
+    _renderTaskActivityList(taskId);
     $c('task-new-comment').value = '';
     $c('task-comment-mention-popover').style.display = 'none';
   } else {
     subSection.style.display = 'none';
     attSection.style.display = 'none';
     cmtSection.style.display = 'none';
+    actSection.style.display = 'none';
   }
 
   $c('modal-task').classList.add('open');
@@ -4623,6 +4634,7 @@ async function handleTaskFileUpload(input) {
       const record = await uploadFile(file, 'tasks', taskId);
       if (!Array.isArray(task.attachments)) task.attachments = [];
       task.attachments.push(record);
+      _recordTaskActivity(taskId, 'attached', { name: record.name });
     } catch (e) {
       toast(`${file.name}: ${e.message || 'upload failed'}`);
     }
@@ -4630,6 +4642,7 @@ async function handleTaskFileUpload(input) {
   task.updated = new Date().toISOString();
   save();
   _renderTaskAttachmentsList(taskId);
+  _renderTaskActivityList(taskId);
   input.value = '';
 }
 
@@ -4768,8 +4781,9 @@ function postTaskComment() {
     if (re.test(body) && !mentions.includes(m.user_id)) mentions.push(m.user_id);
   });
   if (!Array.isArray(task.comments)) task.comments = [];
+  const commentId = uid();
   task.comments.push({
-    id: uid(),
+    id: commentId,
     taskId,
     authorUserId: AUTH.user?.id || null,
     body,
@@ -4779,10 +4793,12 @@ function postTaskComment() {
     edited: null,
   });
   task.updated = new Date().toISOString();
+  _recordTaskActivity(taskId, 'commented', { commentId, preview: body.slice(0, 80), mentions });
   save();
   ta.value = '';
   $c('task-comment-mention-popover').style.display = 'none';
   _renderTaskCommentsList(taskId);
+  _renderTaskActivityList(taskId);
 }
 
 function deleteTaskComment(taskId, commentId) {
@@ -4905,12 +4921,31 @@ function saveTaskFromModal() {
   if (!S.tasks) S.tasks = [];
   if (id) {
     const idx = S.tasks.findIndex(t => t.id === id);
-    if (idx > -1) S.tasks[idx] = { ...S.tasks[idx], ...payload };
+    if (idx > -1) {
+      const prev = S.tasks[idx];
+      // §13 Session 7: log meaningful field changes to the activity stream.
+      if (prev.title !== payload.title)
+        _recordTaskActivity(id, 'title_changed', { from: prev.title, to: payload.title });
+      if (prev.status !== payload.status)
+        _recordTaskActivity(id, 'status_changed', { from: prev.status, to: payload.status });
+      if ((prev.assigneeUserId || null) !== (payload.assigneeUserId || null))
+        _recordTaskActivity(id, 'assigned', { from: prev.assigneeUserId, to: payload.assigneeUserId });
+      if ((prev.priority || '') !== (payload.priority || ''))
+        _recordTaskActivity(id, 'priority_changed', { from: prev.priority, to: payload.priority });
+      if ((prev.dueDate || '') !== (payload.dueDate || ''))
+        _recordTaskActivity(id, 'due_date_changed', { from: prev.dueDate, to: payload.dueDate });
+      if (prev.status !== 'done' && payload.status === 'done')
+        _recordTaskActivity(id, 'completed', {});
+      else if (prev.status === 'done' && payload.status !== 'done')
+        _recordTaskActivity(id, 'reopened', {});
+      S.tasks[idx] = { ...prev, ...payload };
+    }
   } else {
     // New task: assign a sort_order at the bottom of the list.
     const maxSort = (S.tasks || []).reduce((m, t) => Math.max(m, t.sortOrder || 0), 0);
+    const newId = uid();
     S.tasks.unshift({
-      id: uid(),
+      id: newId,
       ...payload,
       customFields: {},
       attachments: [],
@@ -4920,6 +4955,8 @@ function saveTaskFromModal() {
       created: new Date().toISOString(),
       createdByUserId: AUTH.user?.id || null,
     });
+    _recordTaskActivity(newId, 'created', { title });
+    if (payload.assigneeUserId) _recordTaskActivity(newId, 'assigned', { from: null, to: payload.assigneeUserId });
   }
   save();
   closeModal('modal-task');
@@ -4945,10 +4982,13 @@ function cycleTaskStatus(taskId) {
   const seq = ['todo', 'in_progress', 'done'];
   const cur = seq.indexOf(t.status);
   const next = seq[(cur + 1) % seq.length];
+  const from = t.status;
   t.status = next;
   if (next === 'done') t.completedAt = new Date().toISOString();
   else if (t.completedAt) t.completedAt = null;
   t.updated = new Date().toISOString();
+  _recordTaskActivity(taskId, 'status_changed', { from, to: next });
+  if (next === 'done' && from !== 'done') _recordTaskActivity(taskId, 'completed', {});
   save();
   renderTasksTab();
 }
@@ -4956,9 +4996,13 @@ function cycleTaskStatus(taskId) {
 function quickToggleTaskDone(taskId, checked) {
   const t = (S.tasks || []).find(x => x.id === taskId);
   if (!t) return;
+  const from = t.status;
   t.status = checked ? 'done' : 'todo';
   t.completedAt = checked ? new Date().toISOString() : null;
   t.updated = new Date().toISOString();
+  _recordTaskActivity(taskId, 'status_changed', { from, to: t.status });
+  if (checked && from !== 'done') _recordTaskActivity(taskId, 'completed', {});
+  else if (!checked && from === 'done') _recordTaskActivity(taskId, 'reopened', {});
   save();
   renderTasksTab();
 }
@@ -4992,6 +5036,88 @@ function _taskItemName(itemId) {
   return '';
 }
 
+// §13 Session 7: append-only activity log + render helpers + notification surface.
+function _recordTaskActivity(taskId, kind, payload) {
+  if (!taskId || !kind) return;
+  if (!Array.isArray(S.taskActivity)) S.taskActivity = [];
+  S.taskActivity.push({
+    id: uid(),
+    taskId,
+    actorUserId: AUTH.user?.id || null,
+    kind,
+    payload: payload || {},
+    created: new Date().toISOString(),
+  });
+}
+
+// Returns the activity rows for a task, newest first, with friendly labels.
+function _taskActivityRows(taskId) {
+  return (S.taskActivity || [])
+    .filter(a => a.taskId === taskId)
+    .slice()
+    .sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+}
+
+function _humanizeTaskActivity(a) {
+  const actor = _taskAssigneeLabel(a.actorUserId) || 'Someone';
+  const p = a.payload || {};
+  switch (a.kind) {
+    case 'created':         return `${actor} created the task`;
+    case 'status_changed':  return `${actor} moved status: ${taskStatusLabel(p.from || 'todo')} → ${taskStatusLabel(p.to || 'todo')}`;
+    case 'assigned':        return `${actor} reassigned: ${_taskAssigneeLabel(p.from) || 'Unassigned'} → ${_taskAssigneeLabel(p.to) || 'Unassigned'}`;
+    case 'priority_changed': return `${actor} set priority: ${p.from ? taskPriorityLabel(p.from) : 'None'} → ${p.to ? taskPriorityLabel(p.to) : 'None'}`;
+    case 'due_date_changed': return `${actor} changed due date: ${p.from || 'none'} → ${p.to || 'none'}`;
+    case 'title_changed':   return `${actor} renamed: "${p.from || ''}" → "${p.to || ''}"`;
+    case 'commented':       return `${actor} commented${p.preview ? `: "${p.preview}"` : ''}`;
+    case 'attached':        return `${actor} attached ${p.name || 'a file'}`;
+    case 'completed':       return `${actor} marked complete`;
+    case 'reopened':        return `${actor} reopened`;
+    default:                return `${actor} · ${a.kind}`;
+  }
+}
+
+function _renderTaskActivityList(taskId) {
+  const host = $c('task-activity-list');
+  if (!host) return;
+  const rows = _taskActivityRows(taskId);
+  if (!rows.length) {
+    host.innerHTML = '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No activity yet.</div>';
+    return;
+  }
+  host.innerHTML = rows.map(a => {
+    const when = a.created ? new Date(a.created).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+    return `
+      <div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid rgba(var(--text-rgb),0.05);font-family:var(--font-b);font-size:11px;color:var(--text-mid)">
+        <span style="flex:1;min-width:0">${escH(_humanizeTaskActivity(a))}</span>
+        <span style="color:var(--text-light);flex-shrink:0;font-size:10px">${escH(when)}</span>
+      </div>`;
+  }).join('');
+}
+
+// Tasks the current signed-in user should know about now: assigned to me +
+// not done + due today/overdue, plus tasks where I was @mentioned in the
+// most recent comment. Surfaced on the Work Queue as a small list.
+function _myTaskAlerts() {
+  if (!AUTH.user) return [];
+  const me = AUTH.user.id;
+  const today = new Date().toISOString().slice(0, 10);
+  const out = [];
+  (S.tasks || []).forEach(t => {
+    if (t.status === 'done') return;
+    if (t.assigneeUserId === me && t.dueDate && t.dueDate <= today) {
+      out.push({ task: t, reason: t.dueDate < today ? 'Overdue assigned to you' : 'Due today, assigned to you' });
+    }
+    // @mention check: most recent comment mentioning me.
+    const mentioned = (t.comments || []).slice().reverse().find(c => Array.isArray(c.mentions) && c.mentions.includes(me));
+    if (mentioned) {
+      out.push({ task: t, reason: 'You were @mentioned' });
+    }
+  });
+  // Dedupe by task id, keep first reason.
+  const seen = new Set();
+  return out.filter(x => { if (seen.has(x.task.id)) return false; seen.add(x.task.id); return true; });
+}
+
 // Friendly label for an assignee user id. Falls back to email then to —.
 function _taskAssigneeLabel(uid) {
   if (!uid) return '';
@@ -5017,10 +5143,14 @@ function onTaskBoardColDrop(e, statusV) {
   const t = (S.tasks || []).find(x => x.id === _taskDragId);
   _taskDragId = null;
   if (!t || t.status === statusV) { renderTasksTab(); return; }
+  const from = t.status;
   t.status = statusV;
   if (statusV === 'done') t.completedAt = new Date().toISOString();
   else if (t.completedAt) t.completedAt = null;
   t.updated = new Date().toISOString();
+  _recordTaskActivity(t.id, 'status_changed', { from, to: statusV });
+  if (statusV === 'done' && from !== 'done') _recordTaskActivity(t.id, 'completed', {});
+  else if (statusV !== 'done' && from === 'done') _recordTaskActivity(t.id, 'reopened', {});
   save();
   renderTasksTab();
 }
@@ -5549,13 +5679,32 @@ async function renderWork() {
   const A = _workSectionA();
   const B = _workSectionB();
   const C = _workSectionC();
-  if (A.count === 0 && B.count === 0 && C.count === 0) {
+  // §13 Session 7: task alerts for the signed-in user.
+  const taskAlerts = _myTaskAlerts();
+  const tasksBlock = taskAlerts.length ? `
+    <div style="background:var(--white);border:1px solid var(--border);border-left:3px solid var(--russet);border-radius:var(--rl);padding:14px 18px;margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-family:var(--font-h);font-weight:900;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany)">My Tasks Needing Attention</div>
+        <button class="btn btn-ghost btn-sm" onclick="setWorkTab('tasks')" style="font-size:11px">Open Tasks tab →</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${taskAlerts.slice(0, 10).map(({ task, reason }) => `
+          <div onclick="setWorkTab('tasks'); setTimeout(() => openTaskModal('${task.id}'), 60)" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-left:3px solid ${taskStatusColor(task.status)};border-radius:var(--rs);cursor:pointer">
+            <div style="flex:1;min-width:0">
+              <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(task.title || '(untitled)')}</div>
+              <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:1px">${escH(reason)}${task.dueDate ? ' · 📅 ' + escH(task.dueDate) : ''}</div>
+            </div>
+          </div>`).join('')}
+        ${taskAlerts.length > 10 ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding-top:4px">+${taskAlerts.length - 10} more</div>` : ''}
+      </div>
+    </div>` : '';
+  if (A.count === 0 && B.count === 0 && C.count === 0 && !taskAlerts.length) {
     body.innerHTML = `
       <div style="max-width:480px;margin:80px auto;background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:48px 32px;text-align:center">
         <div style="font-family:var(--font-h);font-weight:700;font-size:15px;color:var(--mahogany);letter-spacing:.04em">No open work — nice.</div>
       </div>`;
   } else {
-    body.innerHTML = A.html + B.html + C.html;
+    body.innerHTML = tasksBlock + A.html + B.html + C.html;
   }
   // Keep sidebar badge synced with Section A
   updateWorkBadge(A.count);
@@ -7815,6 +7964,7 @@ function captureSbShadow() {
   (S.tasks || []).forEach(t => (t.comments || []).forEach(c => _sbShadow.taskComments.set(c.id, { ...snap(c), _taskId: t.id })));
   _sbShadow.taskFieldDefs    = new Map((S.taskFieldDefs    || []).map(f => [f.id, snap(f)]));
   _sbShadow.taskDependencies = new Map((S.taskDependencies || []).map(d => [d.id, snap(d)]));
+  _sbShadow.taskActivity     = new Map((S.taskActivity     || []).map(a => [a.id, snap(a)]));
   _sbShadow.invoices       = new Map((S.invoices       || []).map(i => [i.id, snap(i)]));
   _sbShadow.vendors        = new Map((S.vendors        || []).map(v => [v.id, snap(v)]));
   _sbShadow.vendorContacts = new Map((S.vendorContacts || []).map(c => [c.id, snap(c)]));
@@ -8616,6 +8766,16 @@ async function syncToSupabase() {
     await syncSafe('task_comments',     currentTaskComments,     _sbShadow.taskComments,     c => taskCommentToDB(c), { softDelete: false });
     await syncSafe('task_field_defs',   currentTaskFieldDefs,    _sbShadow.taskFieldDefs,    f => taskFieldDefToDB(f, studioId));
     await syncSafe('task_dependencies', currentTaskDependencies, _sbShadow.taskDependencies, d => ({ id: d.id, task_id: d.taskId, depends_on_task_id: d.dependsOnTaskId, kind: d.kind || 'blocks' }), { softDelete: false });
+    // task_activity is append-only — every event gets a fresh id. Diff sync
+    // is overkill but cheap; softDelete off so re-runs don't try to delete
+    // history rows that the shadow's already missing.
+    const currentTaskActivity = new Map((S.taskActivity || []).map(a => [a.id, a]));
+    await syncSafe('task_activity', currentTaskActivity, _sbShadow.taskActivity, a => ({
+      id: a.id, task_id: a.taskId, studio_id: studioId,
+      actor_user_id: a.actorUserId || null,
+      kind: a.kind || '',
+      payload: a.payload || {},
+    }), { softDelete: false });
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     // Three-phase to satisfy circular FKs:
