@@ -3464,13 +3464,44 @@ tr:hover .row-btns { opacity:1; }
     </div>
     <div class="fg">
       <label class="fl">Linked Project <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
-      <select class="fi fsel" id="task-project">
+      <select class="fi fsel" id="task-project" onchange="onTaskProjectChange()">
         <option value="">— None —</option>
+      </select>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Linked Item <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+        <select class="fi fsel" id="task-proposal-item" disabled>
+          <option value="">— Pick project first —</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">Linked Invoice <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+        <select class="fi fsel" id="task-invoice" disabled>
+          <option value="">— Pick project first —</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Parent Task <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(if this is a subtask)</span></label>
+      <select class="fi fsel" id="task-parent">
+        <option value="">— None (top-level task) —</option>
       </select>
     </div>
     <div class="fg">
       <label class="fl">Tags <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(comma-separated)</span></label>
       <input type="text" class="fi" id="task-tags" placeholder="design, urgent, client-blocker">
+    </div>
+
+    <!-- §13 Subtasks list — shown when editing an existing task. Each row
+         links into the child task; "+ Add Subtask" creates a new task
+         with parent_task_id set to this task. -->
+    <div id="task-subtasks-section" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Subtasks</div>
+        <button class="btn btn-ghost btn-sm" onclick="addSubtaskFromModal()" style="font-size:11px">+ Add Subtask</button>
+      </div>
+      <div id="task-subtasks-list"></div>
     </div>
 
     <div class="modal-footer">
@@ -4511,8 +4542,107 @@ function openTaskModal(taskId, opts) {
       `<option value="${escH(p.id)}" ${p.id === initialProject ? 'selected' : ''}>${escH(p.name || '(unnamed)')}</option>`
     ).join('');
 
+  // Item + invoice pickers scoped to the chosen project. If a project is
+  // pre-set (edit mode or opts.projectId), populate them now.
+  _populateTaskItemAndInvoicePickers(initialProject, task?.proposalItemId || opts.proposalItemId || '', task?.invoiceId || opts.invoiceId || '');
+
+  // Parent task picker: list all top-level tasks except the task being
+  // edited (avoid cycles). Plus the option for "no parent".
+  const parentSel = $c('task-parent');
+  const initialParent = task?.parentTaskId || opts.parentTaskId || '';
+  const parentCandidates = (S.tasks || [])
+    .filter(t => t.id !== taskId)
+    .slice()
+    .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  parentSel.innerHTML = '<option value="">— None (top-level task) —</option>' +
+    parentCandidates.map(t => `<option value="${escH(t.id)}" ${t.id === initialParent ? 'selected' : ''}>${escH(t.title || '(untitled)')}</option>`).join('');
+
+  // Subtasks list (edit mode only).
+  const subSection = $c('task-subtasks-section');
+  if (isEdit) {
+    subSection.style.display = '';
+    _renderTaskSubtasksList(taskId);
+  } else {
+    subSection.style.display = 'none';
+  }
+
   $c('modal-task').classList.add('open');
   setTimeout(() => $c('task-title').focus(), 80);
+}
+
+function _populateTaskItemAndInvoicePickers(projectId, selectedItemId, selectedInvoiceId) {
+  const itemSel = $c('task-proposal-item');
+  const invoiceSel = $c('task-invoice');
+  if (!projectId) {
+    itemSel.innerHTML = '<option value="">— Pick project first —</option>';
+    itemSel.disabled = true;
+    invoiceSel.innerHTML = '<option value="">— Pick project first —</option>';
+    invoiceSel.disabled = true;
+    return;
+  }
+  // Items in this project (across all spaces).
+  const prop = S.proposals[projectId];
+  const items = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => items.push({ item: it, space: sp })));
+  items.sort((a, b) => (a.space.name || '').localeCompare(b.space.name || '') || (a.item.name || '').localeCompare(b.item.name || ''));
+  itemSel.innerHTML = '<option value="">— None —</option>' +
+    items.map(({ item, space }) => `<option value="${escH(item.id)}" ${item.id === selectedItemId ? 'selected' : ''}>${escH(item.name || '(unnamed)')} · ${escH(space.name || 'Unassigned')}</option>`).join('');
+  itemSel.disabled = false;
+
+  // Invoices for this project.
+  const invoices = (S.invoices || [])
+    .filter(i => i.projectId === projectId)
+    .slice()
+    .sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+  invoiceSel.innerHTML = '<option value="">— None —</option>' +
+    invoices.map(i => `<option value="${escH(i.id)}" ${i.id === selectedInvoiceId ? 'selected' : ''}>${escH(i.number || '(unnumbered)')} · ${escH(i.status || '')}</option>`).join('');
+  invoiceSel.disabled = false;
+}
+
+function onTaskProjectChange() {
+  const pid = $c('task-project').value;
+  // When the project changes, reset item + invoice (they're project-scoped).
+  _populateTaskItemAndInvoicePickers(pid, '', '');
+}
+
+function _renderTaskSubtasksList(parentId) {
+  const host = $c('task-subtasks-list');
+  if (!host) return;
+  const subs = (S.tasks || []).filter(t => t.parentTaskId === parentId)
+    .slice()
+    .sort((a, b) => {
+      const aDone = a.status === 'done', bDone = b.status === 'done';
+      if (aDone !== bDone) return aDone ? 1 : -1;
+      return (a.sortOrder || 0) - (b.sortOrder || 0);
+    });
+  if (!subs.length) {
+    host.innerHTML = '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">No subtasks yet.</div>';
+    return;
+  }
+  host.innerHTML = subs.map(s => {
+    const sColor = taskStatusColor(s.status);
+    const isDone = s.status === 'done';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-left:3px solid ${sColor};border-radius:var(--rs);margin-bottom:4px;cursor:pointer" onclick="openTaskModal('${s.id}')">
+        <input type="checkbox" ${isDone ? 'checked' : ''} onclick="event.stopPropagation()" onchange="quickToggleTaskDone('${s.id}', this.checked); _renderTaskSubtasksList('${parentId}')" style="accent-color:#1a6e3a;width:14px;height:14px">
+        <div style="flex:1;min-width:0;font-family:var(--font-b);font-size:12px;color:var(--text-dark);${isDone ? 'text-decoration:line-through;color:var(--text-light)' : ''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(s.title || '(untitled)')}</div>
+        <span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:${sColor}">${escH(taskStatusLabel(s.status))}</span>
+      </div>`;
+  }).join('');
+}
+
+function addSubtaskFromModal() {
+  const parentId = $c('task-id').value;
+  if (!parentId) { toast('Save the parent task first, then add subtasks.'); return; }
+  // Inherit project/item from parent so the subtask is auto-scoped correctly.
+  const parent = (S.tasks || []).find(t => t.id === parentId);
+  closeModal('modal-task');
+  setTimeout(() => openTaskModal(null, {
+    parentTaskId: parentId,
+    projectId: parent?.projectId || '',
+    proposalItemId: parent?.proposalItemId || '',
+    invoiceId: parent?.invoiceId || '',
+  }), 60);
 }
 
 function saveTaskFromModal() {
@@ -4535,9 +4665,14 @@ function saveTaskFromModal() {
     assigneeUserId: $c('task-assignee').value || null,
     dueDate: $c('task-due-date').value || '',
     projectId: $c('task-project').value || null,
+    proposalItemId: $c('task-proposal-item').value || null,
+    invoiceId: $c('task-invoice').value || null,
+    parentTaskId: $c('task-parent').value || null,
     tags,
     updated: new Date().toISOString(),
   };
+  // Guard against self-parenting (UI excludes the current task but be safe).
+  if (id && payload.parentTaskId === id) payload.parentTaskId = null;
   // Mark completed_at when transitioning to done; clear when leaving done.
   if (status === 'done' && !wasDone) payload.completedAt = new Date().toISOString();
   else if (status !== 'done' && wasDone) payload.completedAt = null;
@@ -4552,11 +4687,7 @@ function saveTaskFromModal() {
     S.tasks.unshift({
       id: uid(),
       ...payload,
-      parentTaskId: null,
-      proposalItemId: null,
-      invoiceId: null,
       customFields: {},
-      tags: [],
       attachments: [],
       comments: [],
       sortOrder: maxSort + 10,
@@ -4620,6 +4751,20 @@ function _tasksFiltered() {
     }
     return true;
   });
+}
+
+// Find a proposal item's name across all projects/spaces. Returns '' if
+// the item doesn't exist (e.g. it was deleted after the task was linked).
+function _taskItemName(itemId) {
+  if (!itemId) return '';
+  for (const pid of Object.keys(S.proposals || {})) {
+    const prop = S.proposals[pid];
+    for (const sp of (prop.spaces || [])) {
+      const it = (sp.items || []).find(i => i.id === itemId);
+      if (it) return it.name || '';
+    }
+  }
+  return '';
 }
 
 // Friendly label for an assignee user id. Falls back to email then to —.
@@ -4726,6 +4871,13 @@ function _renderTasksList() {
     const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
     const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
     const tagChips = (t.tags || []).length ? (t.tags || []).slice(0, 4).map(tg => `<span style="font-family:var(--font-b);font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('') : '';
+    // §13 Session 5 link indicators.
+    const subCount = (S.tasks || []).filter(x => x.parentTaskId === t.id).length;
+    const itemName = t.proposalItemId ? _taskItemName(t.proposalItemId) : '';
+    const invoiceNumber = t.invoiceId ? ((S.invoices || []).find(i => i.id === t.invoiceId)?.number || '') : '';
+    const subPill = subCount ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)" title="Subtasks">📑 ${subCount}</span>` : '';
+    const itemPill = itemName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)" title="Linked item: ${escH(itemName)}">🧩 ${escH(itemName)}</span>` : '';
+    const invoicePill = invoiceNumber ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)" title="Linked invoice">🧾 ${escH(invoiceNumber)}</span>` : '';
     return `
       <div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--border);border-left:3px solid ${sColor};border-radius:var(--rs);background:${isDone ? 'rgba(var(--text-rgb),0.03)' : 'var(--white)'};margin-bottom:6px;cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)';this.style.borderLeftColor='${sColor}'" onmouseleave="this.style.borderColor='var(--border)';this.style.borderLeftColor='${sColor}'" onclick="openTaskModal('${t.id}')">
         <input type="checkbox" ${isDone ? 'checked' : ''} onclick="event.stopPropagation()" onchange="quickToggleTaskDone('${t.id}', this.checked)" style="accent-color:#1a6e3a;width:16px;height:16px;flex-shrink:0">
@@ -4738,6 +4890,9 @@ function _renderTasksList() {
             ${dueLabel ? `<span style="font-family:var(--font-b);font-size:11px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}${isOverdue ? ' (overdue)' : ''}</span>` : ''}
             ${assigneeName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">👤 ${escH(assigneeName)}</span>` : ''}
             ${projectName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--russet)">📁 ${escH(projectName)}</span>` : ''}
+            ${itemPill}
+            ${invoicePill}
+            ${subPill}
           </div>
         </div>
       </div>`;
