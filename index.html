@@ -3411,6 +3411,73 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ TASK MODAL ═════════════════ -->
+<!-- §13 Session 2: create + edit a task. Subtasks UI deferred to Session 3+;
+     the schema supports parent_task_id from day one. Comments, @mentions,
+     attachments come in later sessions. -->
+<div class="overlay" id="modal-task">
+  <div class="modal" style="width:580px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-task')">✕</button>
+    <div class="modal-title" id="task-modal-title">New Task</div>
+    <input type="hidden" id="task-id">
+
+    <div class="fg">
+      <label class="fl">Title</label>
+      <input type="text" class="fi" id="task-title" placeholder="What needs to happen?">
+    </div>
+    <div class="fg">
+      <label class="fl">Description <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+      <textarea class="fi" id="task-description" style="resize:vertical;min-height:80px;font-size:12px" placeholder="More detail…"></textarea>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Status</label>
+        <select class="fi fsel" id="task-status">
+          <option value="todo">Todo</option>
+          <option value="in_progress">In Progress</option>
+          <option value="blocked">Blocked</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">Priority</label>
+        <select class="fi fsel" id="task-priority">
+          <option value="">— None —</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="urgent">Urgent</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Assignee</label>
+        <select class="fi fsel" id="task-assignee">
+          <option value="">— Unassigned —</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">Due Date</label>
+        <input type="date" class="fi" id="task-due-date">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Linked Project <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+      <select class="fi fsel" id="task-project">
+        <option value="">— None —</option>
+      </select>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="task-delete-btn" style="display:none" onclick="deleteTaskFromModal()">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-task')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTaskFromModal()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ PAID INVOICE CANCEL MODAL ═════════════════ -->
 <!-- §3 cancellation flow for paid invoices. Three options:
        1. Cancel & Issue Full Refund  — Stripe automation if Stripe-paid,
@@ -4351,22 +4418,249 @@ function setWorkTab(tab) {
   if (typeof saveUIState === 'function') saveUIState();
 }
 
-// Placeholder renderer for the Tasks tab. CRUD UI + views (list/board/
-// calendar) land in §13 Session 2. For now, show a "Coming next session"
-// state plus a live count of any tasks already loaded so we can verify the
-// data model is wired correctly.
+// §13 Session 2: Task system constants, helpers, modal handlers, list view.
+
+const TASK_STATUSES = [
+  { v: 'todo',        l: 'Todo',        color: '#8a8a8a' },
+  { v: 'in_progress', l: 'In Progress', color: '#2d5a8a' },
+  { v: 'blocked',     l: 'Blocked',     color: '#b33' },
+  { v: 'done',        l: 'Done',        color: '#1a6e3a' },
+];
+
+const TASK_PRIORITIES = [
+  { v: 'low',    l: 'Low',    color: '#8a8a8a' },
+  { v: 'medium', l: 'Medium', color: '#c47a20' },
+  { v: 'high',   l: 'High',   color: '#b35a00' },
+  { v: 'urgent', l: 'Urgent', color: '#b33' },
+];
+
+function taskStatusLabel(v) { return TASK_STATUSES.find(s => s.v === v)?.l || v; }
+function taskStatusColor(v) { return TASK_STATUSES.find(s => s.v === v)?.color || 'var(--text-mid)'; }
+function taskPriorityLabel(v) { return v ? (TASK_PRIORITIES.find(p => p.v === v)?.l || v) : ''; }
+function taskPriorityColor(v) { return v ? (TASK_PRIORITIES.find(p => p.v === v)?.color || 'var(--text-mid)') : 'var(--text-light)'; }
+
+// Filter state for the tasks tab list view. Persists within session.
+let _tasksTabFilter = { assignee: '', status: '', project: '', search: '' };
+
+function setTasksTabFilter(key, value) {
+  _tasksTabFilter[key] = value;
+  renderTasksTab();
+}
+
+function clearTasksTabFilters() {
+  _tasksTabFilter = { assignee: '', status: '', project: '', search: '' };
+  renderTasksTab();
+}
+
+// Open the task modal in either create or edit mode.
+function openTaskModal(taskId, opts) {
+  opts = opts || {};
+  const isEdit = !!taskId;
+  const task = isEdit ? (S.tasks || []).find(t => t.id === taskId) : null;
+  $c('task-modal-title').textContent = isEdit ? 'Edit Task' : 'New Task';
+  $c('task-id').value = taskId || '';
+  $c('task-title').value = task?.title || '';
+  $c('task-description').value = task?.description || '';
+  $c('task-status').value = task?.status || 'todo';
+  $c('task-priority').value = task?.priority || '';
+  $c('task-due-date').value = task?.dueDate || '';
+  $c('task-delete-btn').style.display = isEdit ? '' : 'none';
+
+  // Populate assignee dropdown from studio members. Falls back to AUTH.member
+  // if the cache hasn't loaded yet.
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers) && _teamMembers.length)
+    ? _teamMembers
+    : (AUTH.member ? [AUTH.member] : []);
+  const assigneeSel = $c('task-assignee');
+  assigneeSel.innerHTML = '<option value="">— Unassigned —</option>' +
+    members.map(m => `<option value="${escH(m.user_id)}" ${task?.assigneeUserId === m.user_id ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
+
+  // Populate project dropdown.
+  const projectSel = $c('task-project');
+  const initialProject = task?.projectId || opts.projectId || '';
+  projectSel.innerHTML = '<option value="">— None —</option>' +
+    (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(p =>
+      `<option value="${escH(p.id)}" ${p.id === initialProject ? 'selected' : ''}>${escH(p.name || '(unnamed)')}</option>`
+    ).join('');
+
+  $c('modal-task').classList.add('open');
+  setTimeout(() => $c('task-title').focus(), 80);
+}
+
+function saveTaskFromModal() {
+  const title = $c('task-title').value.trim();
+  if (!title) { toast('Title required.'); $c('task-title').focus(); return; }
+  const id = $c('task-id').value;
+  const status = $c('task-status').value || 'todo';
+  const wasDone = (S.tasks || []).find(t => t.id === id)?.status === 'done';
+
+  const payload = {
+    title,
+    description: $c('task-description').value.trim(),
+    status,
+    priority: $c('task-priority').value || '',
+    assigneeUserId: $c('task-assignee').value || null,
+    dueDate: $c('task-due-date').value || '',
+    projectId: $c('task-project').value || null,
+    updated: new Date().toISOString(),
+  };
+  // Mark completed_at when transitioning to done; clear when leaving done.
+  if (status === 'done' && !wasDone) payload.completedAt = new Date().toISOString();
+  else if (status !== 'done' && wasDone) payload.completedAt = null;
+
+  if (!S.tasks) S.tasks = [];
+  if (id) {
+    const idx = S.tasks.findIndex(t => t.id === id);
+    if (idx > -1) S.tasks[idx] = { ...S.tasks[idx], ...payload };
+  } else {
+    // New task: assign a sort_order at the bottom of the list.
+    const maxSort = (S.tasks || []).reduce((m, t) => Math.max(m, t.sortOrder || 0), 0);
+    S.tasks.unshift({
+      id: uid(),
+      ...payload,
+      parentTaskId: null,
+      proposalItemId: null,
+      invoiceId: null,
+      customFields: {},
+      tags: [],
+      attachments: [],
+      comments: [],
+      sortOrder: maxSort + 10,
+      completedAt: status === 'done' ? new Date().toISOString() : null,
+      created: new Date().toISOString(),
+      createdByUserId: AUTH.user?.id || null,
+    });
+  }
+  save();
+  closeModal('modal-task');
+  renderTasksTab();
+  toast(id ? 'Task updated.' : 'Task created.');
+}
+
+function deleteTaskFromModal() {
+  const id = $c('task-id').value;
+  if (!id) return;
+  if (!confirm('Delete this task? Comments and attachments will be removed.')) return;
+  S.tasks = (S.tasks || []).filter(t => t.id !== id);
+  save();
+  closeModal('modal-task');
+  renderTasksTab();
+  toast('Task deleted.');
+}
+
+// Inline status toggle from the list row.
+function cycleTaskStatus(taskId) {
+  const t = (S.tasks || []).find(x => x.id === taskId);
+  if (!t) return;
+  const seq = ['todo', 'in_progress', 'done'];
+  const cur = seq.indexOf(t.status);
+  const next = seq[(cur + 1) % seq.length];
+  t.status = next;
+  if (next === 'done') t.completedAt = new Date().toISOString();
+  else if (t.completedAt) t.completedAt = null;
+  t.updated = new Date().toISOString();
+  save();
+  renderTasksTab();
+}
+
+function quickToggleTaskDone(taskId, checked) {
+  const t = (S.tasks || []).find(x => x.id === taskId);
+  if (!t) return;
+  t.status = checked ? 'done' : 'todo';
+  t.completedAt = checked ? new Date().toISOString() : null;
+  t.updated = new Date().toISOString();
+  save();
+  renderTasksTab();
+}
+
+function _tasksFiltered() {
+  const f = _tasksTabFilter;
+  const search = (f.search || '').toLowerCase().trim();
+  return (S.tasks || []).filter(t => {
+    if (f.assignee && (t.assigneeUserId || '') !== f.assignee) return false;
+    if (f.status && t.status !== f.status) return false;
+    if (f.project && (t.projectId || '') !== f.project) return false;
+    if (search) {
+      const hay = (t.title + ' ' + (t.description || '')).toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
 function renderTasksTab() {
   const host = $c('work-tasks-body');
   if (!host) return;
-  const count = (S.tasks || []).length;
-  host.innerHTML = `
-    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:28px 30px;text-align:center">
-      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany);margin-bottom:8px">Tasks</div>
-      <div style="font-family:var(--font-b);font-size:13px;color:var(--text-mid);line-height:1.6;max-width:520px;margin:0 auto">
-        Asana-style task management — board, list, and calendar views with subtasks, comments, @mentions, attachments, and project links — lands here in the next session.
-      </div>
-      <div style="margin-top:14px;font-family:var(--font-b);font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.07em">${count} task${count === 1 ? '' : 's'} on file</div>
+  const filtered = _tasksFiltered();
+  // Sort: incomplete first, then by due date asc (null last), then by sort_order.
+  filtered.sort((a, b) => {
+    const aDone = a.status === 'done', bDone = b.status === 'done';
+    if (aDone !== bDone) return aDone ? 1 : -1;
+    const ad = a.dueDate || '9999-99-99';
+    const bd = b.dueDate || '9999-99-99';
+    if (ad !== bd) return ad.localeCompare(bd);
+    return (a.sortOrder || 0) - (b.sortOrder || 0);
+  });
+
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const memberLabel = (uid) => uid ? (members.find(m => m.user_id === uid)?.display_name || members.find(m => m.user_id === uid)?.email || '—') : '';
+
+  // Filter bar
+  const assigneeOpts = '<option value="">All assignees</option>' +
+    members.map(m => `<option value="${escH(m.user_id)}" ${_tasksTabFilter.assignee === m.user_id ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
+  const statusOpts = '<option value="">All statuses</option>' +
+    TASK_STATUSES.map(s => `<option value="${s.v}" ${_tasksTabFilter.status === s.v ? 'selected' : ''}>${escH(s.l)}</option>`).join('');
+  const projectOpts = '<option value="">All projects</option>' +
+    (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(p => `<option value="${escH(p.id)}" ${_tasksTabFilter.project === p.id ? 'selected' : ''}>${escH(p.name || '(unnamed)')}</option>`).join('');
+
+  const filtersActive = !!(_tasksTabFilter.assignee || _tasksTabFilter.status || _tasksTabFilter.project || _tasksTabFilter.search);
+  const filterBar = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <input type="text" class="fi" placeholder="Search tasks…" value="${escH(_tasksTabFilter.search)}" oninput="setTasksTabFilter('search', this.value)" style="width:220px;font-size:12px;padding:6px 10px">
+      <select class="fi fsel" onchange="setTasksTabFilter('assignee', this.value)" style="font-size:12px;padding:6px 10px;width:160px">${assigneeOpts}</select>
+      <select class="fi fsel" onchange="setTasksTabFilter('status', this.value)" style="font-size:12px;padding:6px 10px;width:140px">${statusOpts}</select>
+      <select class="fi fsel" onchange="setTasksTabFilter('project', this.value)" style="font-size:12px;padding:6px 10px;width:180px">${projectOpts}</select>
+      ${filtersActive ? `<button onclick="clearTasksTabFilters()" style="font-family:var(--font-b);font-size:11px;color:var(--russet);background:none;border:none;cursor:pointer;text-decoration:underline">Clear</button>` : ''}
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button>
     </div>`;
+
+  // Task list
+  if (!filtered.length) {
+    host.innerHTML = filterBar + `
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:32px 30px;text-align:center">
+        <div style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--text-mid);margin-bottom:6px">${(S.tasks || []).length === 0 ? 'No tasks yet' : 'No tasks match the current filters'}</div>
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-light)">${(S.tasks || []).length === 0 ? 'Create your first task to get started.' : 'Adjust the filters above or clear them.'}</div>
+      </div>`;
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = filtered.map(t => {
+    const sColor = taskStatusColor(t.status);
+    const isDone = t.status === 'done';
+    const isOverdue = !isDone && t.dueDate && t.dueDate < today;
+    const dueLabel = t.dueDate ? new Date(t.dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    const projectName = t.projectId ? ((S.projects || []).find(p => p.id === t.projectId)?.name || '') : '';
+    const assigneeName = memberLabel(t.assigneeUserId);
+    const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
+    return `
+      <div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--border);border-left:3px solid ${sColor};border-radius:var(--rs);background:${isDone ? 'rgba(var(--text-rgb),0.03)' : 'var(--white)'};margin-bottom:6px;cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)';this.style.borderLeftColor='${sColor}'" onmouseleave="this.style.borderColor='var(--border)';this.style.borderLeftColor='${sColor}'" onclick="openTaskModal('${t.id}')">
+        <input type="checkbox" ${isDone ? 'checked' : ''} onclick="event.stopPropagation()" onchange="quickToggleTaskDone('${t.id}', this.checked)" style="accent-color:#1a6e3a;width:16px;height:16px;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);font-weight:${isDone ? '400' : '700'};${isDone ? 'text-decoration:line-through;color:var(--text-light)' : ''}">${escH(t.title || '(untitled)')}</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
+            <button onclick="event.stopPropagation();cycleTaskStatus('${t.id}')" title="Click to advance status" style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${sColor}18;color:${sColor};border:none;cursor:pointer">${escH(taskStatusLabel(t.status))}</button>
+            ${pri}
+            ${dueLabel ? `<span style="font-family:var(--font-b);font-size:11px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}${isOverdue ? ' (overdue)' : ''}</span>` : ''}
+            ${assigneeName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">👤 ${escH(assigneeName)}</span>` : ''}
+            ${projectName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--russet)">📁 ${escH(projectName)}</span>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  host.innerHTML = filterBar + `<div>${rows}</div>`;
 }
 let _workSystemEvents = [];          // Cache of recent activity_entries rows (source='system')
 const _workChannels = [];            // Realtime channels, created on first Work view mount
