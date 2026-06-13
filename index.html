@@ -3411,6 +3411,37 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ PRINT PM ITEM MODAL ═════════════════ -->
+<!-- §12 Printable per-item PM page. User picks which sections to include;
+     PDF is generated via jsPDF on Generate. Item name + status always
+     appear; the spec also requires the export timestamp on every page. -->
+<div class="overlay" id="modal-print-pm-item">
+  <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-print-pm-item')">✕</button>
+    <div class="modal-title">Print Item PM Page</div>
+    <input type="hidden" id="ppm-pid">
+    <input type="hidden" id="ppm-spid">
+    <input type="hidden" id="ppm-itemid">
+
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);font-style:italic;margin-bottom:14px;line-height:1.5">
+      Choose which sections to include. The item name, status, and export timestamp are always shown.
+    </div>
+
+    <div id="ppm-section-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" onclick="ppmToggleAll(true)" style="font-size:11px">Select all</button>
+      <button class="btn btn-ghost btn-sm" onclick="ppmToggleAll(false)" style="font-size:11px">Deselect all</button>
+    </div>
+
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-print-pm-item')">Cancel</button>
+      <button class="btn btn-primary" onclick="generatePMItemPDF()">Generate PDF</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ TASK MODAL ═════════════════ -->
 <!-- §13 Session 2: create + edit a task. Subtasks UI deferred to Session 3+;
      the schema supports parent_task_id from day one. Comments, @mentions,
@@ -12223,6 +12254,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;justify-content:flex-end">
           <button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')">Edit Item</button>
           <button class="btn btn-ghost btn-sm" onclick="openNewExpenseForItem('${pid}','${itemId}')" title="Open the expense modal pre-filled with this item">+ Add expense</button>
+          <button class="btn btn-ghost btn-sm" onclick="openPrintPMItemModal('${pid}','${spId}','${itemId}')" title="Generate a printable PDF of this item's PM page">🖨 Print PM</button>
           ${canDeleteItem(itemId) ? `<button class="btn btn-danger btn-sm" onclick="deleteItemFromPM('${pid}','${spId}','${itemId}')" style="font-size:10px">Delete Item</button>` : ''}
         </div>
       </div>
@@ -29416,6 +29448,323 @@ function deletePayment() {
 }
 
 // ─── PDF EXPORT ───────────────────────────────────────
+
+// ─── §12 Printable per-item PM page ─────────────────────────────────────
+
+// Sections available in the picker. `default` = pre-checked when modal opens
+// for the first time in a session. Required sections always render.
+const PPM_SECTIONS = [
+  { id: 'basic',       label: 'Basic Info',          desc: 'Type, qty, allowance flag, room/category',                default: true,  required: true },
+  { id: 'status',      label: 'Status & Flags',      desc: 'Pipeline status + Needs Attention / In Production flags', default: true,  required: false },
+  { id: 'vendor',      label: 'Vendor / Brand / Contact', desc: 'Linked vendor + brand + primary contact',           default: true,  required: false },
+  { id: 'pricing',     label: 'Pricing',             desc: 'Net + client per-unit + line total',                      default: true,  required: false },
+  { id: 'cost_actual', label: 'Cost Actual',         desc: 'Actual cost paid, payment method, vendor order #',        default: true,  required: false },
+  { id: 'freight',     label: 'Freight',             desc: 'Per-item freight charges + actuals',                      default: false, required: false },
+  { id: 'lead_time',   label: 'Lead Time',           desc: 'Weeks min/max, Ordered On, projected vs actual ETA',      default: true,  required: false },
+  { id: 'invoice',     label: 'Invoice References',  desc: 'Invoice numbers this item appears on (with status)',       default: true,  required: false },
+  { id: 'components',  label: 'Components (constructed)', desc: 'Component list for constructed items',                default: true,  required: false },
+  { id: 'description', label: 'Description / Notes', desc: 'Long description + free-form notes',                       default: true,  required: false },
+  { id: 'tracking',    label: 'Tracking Numbers',    desc: 'Carrier + tracking # list',                               default: false, required: false },
+  { id: 'files',       label: 'Files',               desc: 'Attachment file list (names only)',                       default: false, required: false },
+];
+
+let _ppmSelectedSections = null;
+
+function openPrintPMItemModal(pid, spId, itemId) {
+  $c('ppm-pid').value = pid;
+  $c('ppm-spid').value = spId;
+  $c('ppm-itemid').value = itemId;
+  // Default = previous picks if user already opened this in the same session.
+  if (!_ppmSelectedSections) {
+    _ppmSelectedSections = {};
+    PPM_SECTIONS.forEach(s => _ppmSelectedSections[s.id] = s.default);
+  }
+  _renderPPMSectionList();
+  $c('modal-print-pm-item').classList.add('open');
+}
+
+function _renderPPMSectionList() {
+  const host = $c('ppm-section-list');
+  if (!host) return;
+  host.innerHTML = PPM_SECTIONS.map(s => `
+    <label style="display:flex;align-items:flex-start;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--rs);background:${_ppmSelectedSections[s.id] ? 'rgba(150,61,39,0.04)' : 'var(--white)'};cursor:${s.required ? 'not-allowed' : 'pointer'}">
+      <input type="checkbox" ${_ppmSelectedSections[s.id] ? 'checked' : ''} ${s.required ? 'disabled' : ''} onchange="ppmToggleSection('${s.id}', this.checked)" style="accent-color:var(--russet);width:14px;height:14px;margin-top:2px;flex-shrink:0">
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700">${escH(s.label)}${s.required ? ' <span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-weight:400">always shown</span>' : ''}</div>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:2px;line-height:1.4">${escH(s.desc)}</div>
+      </div>
+    </label>`).join('');
+}
+
+function ppmToggleSection(id, on) {
+  _ppmSelectedSections[id] = !!on;
+  _renderPPMSectionList();
+}
+
+function ppmToggleAll(state) {
+  PPM_SECTIONS.forEach(s => { if (!s.required) _ppmSelectedSections[s.id] = state; });
+  _renderPPMSectionList();
+}
+
+async function generatePMItemPDF() {
+  const pid = $c('ppm-pid').value;
+  const spId = $c('ppm-spid').value;
+  const itemId = $c('ppm-itemid').value;
+  const prop = S.proposals[pid];
+  const sp = prop?.spaces.find(s => s.id === spId);
+  const item = sp?.items.find(i => i.id === itemId);
+  const proj = getProject(pid);
+  const client = proj ? (S.clients || []).find(c => c.id === proj.clientId) : null;
+  if (!item) { toast('Item not found.'); return; }
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded.'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 56;
+  let y = 64;
+  const MAHOGANY = [91, 45, 34];
+  const TEXT_DARK = [40, 32, 28];
+  const TEXT_MID = [100, 90, 82];
+  const TEXT_LIGHT = [160, 150, 140];
+  const BORDER = [220, 210, 198];
+
+  // ── Header ─────────────────────────────────────────────────────────────
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...TEXT_LIGHT);
+  doc.text('PROJECT MANAGEMENT — ITEM PAGE', margin, y, { charSpace: 1 });
+  y += 14;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(...MAHOGANY);
+  doc.text(String(item.name || '(unnamed)'), margin, y);
+  y += 22;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11);
+  doc.setTextColor(...TEXT_MID);
+  const subParts = [];
+  if (proj?.name) subParts.push(proj.name);
+  if (client?.name) subParts.push(client.name);
+  if (sp?.name) subParts.push(sp.name);
+  if (subParts.length) {
+    doc.text(subParts.join(' · '), margin, y);
+    y += 16;
+  }
+
+  // ── Always-on: status (right of name) + export timestamp ──────────────
+  const statusLabel = STATUSES.find(s => s.v === item.status)?.l || item.status || '—';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...TEXT_DARK);
+  doc.text('Status: ' + statusLabel, margin, y);
+  const flags = (item.statusFlags || []).map(f => STATUS_FLAGS.find(x => x.v === f)?.l || f).filter(Boolean);
+  if (flags.length) {
+    doc.setTextColor(179, 51, 51);
+    doc.text('  · ' + flags.join(' · '), margin + doc.getTextWidth('Status: ' + statusLabel), y);
+  }
+  // Export timestamp (always shown per spec) — right-aligned.
+  const exportStr = 'Exported ' + new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(...TEXT_LIGHT);
+  doc.text(exportStr, pageW - margin, y, { align: 'right' });
+  y += 18;
+
+  // Divider
+  doc.setDrawColor(...BORDER);
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, pageW - margin, y);
+  y += 14;
+
+  // ── Section helpers ───────────────────────────────────────────────────
+  const ensureRoom = (needed) => {
+    if (y + needed > doc.internal.pageSize.getHeight() - 56) {
+      doc.addPage();
+      y = 64;
+    }
+  };
+  const sectionHeader = (label) => {
+    ensureRoom(28);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...MAHOGANY);
+    doc.text(label.toUpperCase(), margin, y, { charSpace: 1.5 });
+    y += 6;
+    doc.setDrawColor(...MAHOGANY);
+    doc.setLineWidth(0.5);
+    doc.line(margin, y, pageW - margin, y);
+    y += 12;
+  };
+  const kv = (label, value) => {
+    if (value == null || value === '') return;
+    ensureRoom(16);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_MID);
+    doc.text(String(label) + ':', margin, y);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...TEXT_DARK);
+    const text = String(value);
+    const split = doc.splitTextToSize(text, pageW - margin - 160);
+    doc.text(split, margin + 130, y);
+    y += 14 * split.length;
+  };
+  const longText = (text) => {
+    if (!text) return;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_DARK);
+    const split = doc.splitTextToSize(String(text), pageW - margin * 2);
+    ensureRoom(14 * split.length);
+    doc.text(split, margin, y);
+    y += 14 * split.length + 4;
+  };
+
+  // ── Basic Info ────────────────────────────────────────────────────────
+  if (_ppmSelectedSections.basic) {
+    sectionHeader('Basic Info');
+    kv('Type', item.type);
+    if (item.allowance) kv('Allowance', 'Yes');
+    if (item.room) kv('Room', item.room);
+    if (item.category) kv('Category', item.category);
+    const qty = parseFloat(item.qty) || 1;
+    kv('Qty', String(qty) + (item.qtyUnit ? ' ' + item.qtyUnit : ''));
+    y += 6;
+  }
+
+  // ── Description / Notes ──────────────────────────────────────────────
+  if (_ppmSelectedSections.description && (item.description || item.notes)) {
+    sectionHeader('Description / Notes');
+    if (item.description) { longText(item.description); }
+    if (item.notes)       { longText(item.notes); }
+    y += 4;
+  }
+
+  // ── Vendor / Brand / Contact ─────────────────────────────────────────
+  if (_ppmSelectedSections.vendor) {
+    const v = item.vendorId ? (S.vendors || []).find(x => x.id === item.vendorId) : null;
+    const b = item.brandId  ? (S.brands  || []).find(x => x.id === item.brandId)  : null;
+    const c = item.vendorContactId ? (S.vendorContacts || []).find(x => x.id === item.vendorContactId) : null;
+    if (v || b || c) {
+      sectionHeader('Vendor / Brand / Contact');
+      if (v) kv('Vendor', v.name);
+      if (b) kv('Brand', b.name);
+      if (c) kv('Contact', (c.name || '') + (c.title ? ' (' + c.title + ')' : '') + (c.email ? ' · ' + c.email : '') + (c.phone ? ' · ' + c.phone : ''));
+      y += 6;
+    }
+  }
+
+  // ── Pricing ──────────────────────────────────────────────────────────
+  if (_ppmSelectedSections.pricing) {
+    sectionHeader('Pricing');
+    const net = getItemNet ? getItemNet(item) : (parseFloat(item.netPrice) || 0);
+    const clientPrice = typeof getItemClient === 'function' ? getItemClient(item, pid) : 0;
+    const qty = parseFloat(item.qty) || 1;
+    const total = item.type === 'constructed' ? clientPrice : clientPrice * qty;
+    kv('Net (per unit)', net > 0 ? fmt(net) : '—');
+    kv('Client (per unit)', clientPrice > 0 ? fmt(clientPrice) : '—');
+    kv('Line Total', fmt(total));
+    y += 6;
+  }
+
+  // ── Cost Actual ──────────────────────────────────────────────────────
+  if (_ppmSelectedSections.cost_actual) {
+    const hasCost = item.costActual || item.costActualPaymentMethod || item.vendorOrderNumber;
+    if (hasCost) {
+      sectionHeader('Cost Actual');
+      if (item.costActual) kv('Actual Cost Paid', item.costActual);
+      if (item.costActualPaymentMethod) kv('Paid With', item.costActualPaymentMethod);
+      if (item.vendorOrderNumber) kv('Vendor Order #', item.vendorOrderNumber);
+      y += 6;
+    }
+  }
+
+  // ── Lead Time ────────────────────────────────────────────────────────
+  if (_ppmSelectedSections.lead_time) {
+    const lt = (item.leadTimeWeeksMin != null && item.leadTimeWeeksMin !== '') ? item.leadTimeWeeksMin : '';
+    const ltMax = (item.leadTimeWeeksMax != null && item.leadTimeWeeksMax !== '') ? item.leadTimeWeeksMax : '';
+    if (lt !== '' || ltMax !== '' || item.orderedAt || item.leadTimeStartManual) {
+      sectionHeader('Lead Time');
+      if (lt !== '' || ltMax !== '') kv('Weeks', lt + (ltMax !== '' && ltMax !== lt ? '-' + ltMax : ''));
+      if (item.leadTimeStartManual) kv('Start Date Override', item.leadTimeStartManual);
+      if (item.orderedAt) kv('Ordered On', item.orderedAt);
+      y += 6;
+    }
+  }
+
+  // ── Invoice References ──────────────────────────────────────────────
+  if (_ppmSelectedSections.invoice) {
+    const refs = (typeof getItemInvoiceRefs === 'function') ? getItemInvoiceRefs(item.id) : [];
+    if (refs.length) {
+      sectionHeader('Invoice References');
+      refs.forEach(inv => {
+        const draft = inv.status === 'draft' ? ' (draft)' : '';
+        kv('Invoice', (inv.number || '') + draft + ' · ' + (inv.status || ''));
+      });
+      y += 6;
+    }
+  }
+
+  // ── Components (constructed items) ──────────────────────────────────
+  if (_ppmSelectedSections.components && item.type === 'constructed' && Array.isArray(item.components) && item.components.length) {
+    sectionHeader('Components');
+    item.components.forEach(c => {
+      ensureRoom(20);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(...TEXT_DARK);
+      const cQty = parseInt(c.qty) || 1;
+      const cName = (c.name || c.componentType || 'Component') + (cQty > 1 ? ' ×' + cQty : '');
+      doc.text(cName, margin, y);
+      y += 12;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...TEXT_MID);
+      const meta = [];
+      if (c.netCost) meta.push('Net: ' + fmt(parse$(c.netCost)));
+      if (c.costActual) meta.push('Actual: ' + fmt(parse$(c.costActual)));
+      if (c.note) meta.push(c.note);
+      if (meta.length) {
+        const splitMeta = doc.splitTextToSize(meta.join('  ·  '), pageW - margin * 2);
+        doc.text(splitMeta, margin, y);
+        y += 12 * splitMeta.length;
+      } else {
+        y += 4;
+      }
+    });
+    y += 4;
+  }
+
+  // ── Tracking ────────────────────────────────────────────────────────
+  if (_ppmSelectedSections.tracking && Array.isArray(item.trackingNumbers) && item.trackingNumbers.length) {
+    sectionHeader('Tracking');
+    item.trackingNumbers.forEach(t => kv((t.carrier || 'Carrier'), t.number || ''));
+    y += 6;
+  }
+
+  // ── Files ──────────────────────────────────────────────────────────
+  if (_ppmSelectedSections.files && Array.isArray(item.files) && item.files.length) {
+    sectionHeader('Files');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_DARK);
+    item.files.forEach(f => {
+      ensureRoom(14);
+      doc.text('• ' + (f.name || '(unnamed)'), margin, y);
+      y += 14;
+    });
+    y += 4;
+  }
+
+  // Save
+  const fname = `${(proj?.name || 'Project').replace(/[^A-Za-z0-9-_]+/g, '_')}_${(item.name || 'Item').replace(/[^A-Za-z0-9-_]+/g, '_')}_PM.pdf`;
+  doc.save(fname);
+  closeModal('modal-print-pm-item');
+  toast('PM PDF downloaded.');
+}
 
 async function exportInvoicePDF(invId) {
   const inv = (S.invoices||[]).find(i => i.id === invId);
