@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
 
     const { data: inv, error } = await sb
       .from('invoices')
-      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order), invoice_payments(id, date, amount, method, pending)')
+      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order, proposal_item_id), invoice_payments(id, date, amount, method, pending)')
       .eq('payment_token', token)
       .is('deleted_at', null)
       .single();
@@ -94,6 +94,23 @@ Deno.serve(async (req) => {
       ? await sb.from('clients').select('id, name, email, phone, address').eq('id', inv.client_id).maybeSingle()
       : { data: null };
 
+    // §12 Derive a "location" string per line so the pay page can group
+    // line items by space. For each line tied to a proposal item, look up
+    // that item's parent space; lines without a proposal item link get
+    // "Other". Done with a single small spaces query scoped to this project.
+    const lineItemIds = (inv.invoice_line_items || []).map((l: any) => l.proposal_item_id).filter(Boolean);
+    const itemIdToLocation: Record<string, string> = {};
+    if (lineItemIds.length && inv.project_id) {
+      const { data: items } = await sb
+        .from('proposal_items')
+        .select('id, proposal_spaces(name)')
+        .in('id', lineItemIds);
+      (items || []).forEach((it: any) => {
+        const spaceName = it.proposal_spaces?.name || '';
+        if (spaceName) itemIdToLocation[it.id] = spaceName;
+      });
+    }
+
     // Cash-basis Paid / Outstanding: exclude pending=true (in-flight ACH).
     // Pending rows still come through in the payments list below with their
     // flag so the pay page can badge them, but they don't reduce the amount
@@ -137,6 +154,7 @@ Deno.serve(async (req) => {
             qty: Number(l.qty || 1),
             price: Number(l.price || 0),
             taxable: !!l.taxable,
+            location: l.proposal_item_id ? (itemIdToLocation[l.proposal_item_id] || 'Other') : 'Other',
           })),
         payments: (inv.invoice_payments || []).map((p: any) => ({
           date: p.date, amount: Number(p.amount || 0), method: p.method, pending: !!p.pending,

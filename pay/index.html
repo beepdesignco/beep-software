@@ -156,17 +156,34 @@ function render(d) {
   // block (not in the items list).
   const itemLines = invoice.line_items.filter(l => l._reconType !== 'credit');
   const creditLines = invoice.line_items.filter(l => l._reconType === 'credit');
-  const itemsBody = itemLines.map(l => {
-    const total = (l.qty || 1) * (l.price || 0);
-    return `<tr>
-      <td>
-        <div><strong>${escH(l.name)}</strong></div>
-        ${l.description ? `<div class="desc">${escH(l.description)}</div>` : ''}
-        <div class="desc">${l.qty || 1} × ${fmt(l.price || 0)}</div>
-      </td>
-      <td class="qty">${l.qty || 1}</td>
-      <td class="amt">${fmt(total)}</td>
-    </tr>`;
+
+  // §12 Group line items by location. The edge function attaches a
+  // .location string per line — "Other" when the line isn't tied to a
+  // proposal item with a space. Single-group "Other" invoices skip the
+  // header to keep simple invoices clean.
+  const groupOrder = [];
+  const grouped = {};
+  itemLines.forEach(l => {
+    const loc = l.location || 'Other';
+    if (!grouped[loc]) { grouped[loc] = []; groupOrder.push(loc); }
+    grouped[loc].push(l);
+  });
+  const skipHeaders = groupOrder.length <= 1 && groupOrder[0] === 'Other';
+  const itemsBody = groupOrder.map(loc => {
+    const rows = grouped[loc].map(l => {
+      const total = (l.qty || 1) * (l.price || 0);
+      return `<tr>
+        <td>
+          <div><strong>${escH(l.name)}</strong></div>
+          ${l.description ? `<div class="desc">${escH(l.description)}</div>` : ''}
+          <div class="desc">${l.qty || 1} × ${fmt(l.price || 0)}</div>
+        </td>
+        <td class="qty">${l.qty || 1}</td>
+        <td class="amt">${fmt(total)}</td>
+      </tr>`;
+    }).join('');
+    const header = skipHeaders ? '' : `<tr><td colspan="3" style="font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mahogany,#5B2D22);padding:14px 4px 6px;border-bottom:1px solid #ccc">${escH(loc)}</td></tr>`;
+    return header + rows;
   }).join('');
   const creditSum = creditLines.reduce((s, c) => s + (Number(c.qty)||1) * (Number(c.price)||0), 0);
 
