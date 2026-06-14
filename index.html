@@ -7290,6 +7290,12 @@ async function loadFromSupabase() {
     try { detectStripePaymentChangesAndFire(); } catch (e) { console.warn('[payments] detection failed:', e); }
   }
 
+  // §4 backfill: any pre-deploy manual overpayments that didn't get auto-
+  // converted to a project credit get caught up now. Idempotent — skips any
+  // overpayment that already has a credit row on the project tied to the
+  // same invoice. Runs once per load; new payments use the inline path.
+  try { _backfillOverpaymentCredits(); } catch (e) { console.warn('[overpayment-backfill]', e); }
+
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
   if (typeof captureSbShadow === 'function') captureSbShadow();
 
@@ -9975,6 +9981,50 @@ function copyQRCard(btn) {
 
 // §4 Project credits modal — read-only list of credit rows + their source.
 // Apply-to-future-invoice flow will be added later; this is just visibility.
+// §4 backfill: scan every invoice for cases where settled (non-pending,
+// positive) payments exceed inv.total. For each, ensure the project has a
+// credit row tagged to that invoice. Idempotent via sourceInvoiceId match
+// — if a credit already exists for an overpayment on this invoice, skip.
+function _backfillOverpaymentCredits() {
+  if (!Array.isArray(S.invoices) || !Array.isArray(S.projects)) return;
+  let created = 0;
+  S.invoices.forEach(inv => {
+    if (!inv.projectId) return;
+    if (inv.status === 'draft' || inv.status === 'cancelled') return;
+    const settled = (inv.payments || [])
+      .filter(p => !p.pending && Number(p.amount || 0) > 0)
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+    const overage = settled - Number(inv.total || 0);
+    if (overage <= 0.005) return;
+    const proj = (S.projects || []).find(p => p.id === inv.projectId);
+    if (!proj) return;
+    if (!proj.settings) proj.settings = {};
+    if (!Array.isArray(proj.settings.credits)) proj.settings.credits = [];
+    // Idempotency — any existing credit tied to this invoice via source
+    // 'overpayment' or 'overpayment_backfill' means we already caught it.
+    const alreadyLogged = proj.settings.credits.some(c =>
+      c.sourceInvoiceId === inv.id &&
+      (c.source === 'overpayment' || c.source === 'overpayment_backfill')
+    );
+    if (alreadyLogged) return;
+    proj.settings.credits.push({
+      id: uid(),
+      source: 'overpayment_backfill',
+      sourceInvoiceId: inv.id,
+      sourceInvoiceNumber: inv.number,
+      amount: overage,
+      balance: overage,
+      created: new Date().toISOString(),
+      notes: 'Overpayment on invoice ' + (inv.number || '') + ' (caught by backfill)',
+    });
+    created++;
+  });
+  if (created > 0) {
+    save();
+    setTimeout(() => toast(`Backfilled ${created} overpayment credit${created === 1 ? '' : 's'} from prior manual payments.`), 600);
+  }
+}
+
 function openProjectCreditsModal(pid) {
   const proj = getProject(pid);
   if (!proj) return;
@@ -14754,9 +14804,24 @@ function renderPDSettings(proj, pid) {
       </div>
     </div>
     <div class="frow">
-      <div class="fg" style="max-width:140px">
+      <div class="fg" style="max-width:200px">
         <label class="fl">Tax Rate %</label>
-        <input type="number" class="fi" id="pds-taxrate" min="0" step="0.01" value="${proj.taxRate||0}" onchange="savePDSetting('${pid}','taxRate',parseFloat(this.value)||0)">
+        ${(() => {
+          // §7 / test feedback: rate is sourced from the linked tax state.
+          // Read-only display + a hidden input so existing onStateSelectChange
+          // flow can still seed it on first state pick (project create flow).
+          const linkedState = proj.state ? (S.taxStates || []).find(s => (s.name || '').toLowerCase() === (proj.state || '').toLowerCase()) : null;
+          const displayRate = linkedState ? Number(linkedState.taxRate || 0) : Number(proj.taxRate || 0);
+          const sourceLabel = linkedState
+            ? `From "${escH(linkedState.name)}"`
+            : (proj.state ? `Unconfigured state "${escH(proj.state)}" — add it in App Settings → Tax States` : 'Pick a state to set the rate');
+          return `
+            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--rs)">
+              <span style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--pecan)">${displayRate.toFixed(2)}%</span>
+              <span style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">${sourceLabel}</span>
+            </div>
+            <input type="hidden" id="pds-taxrate" value="${displayRate}">`;
+        })()}
       </div>
       <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:15px;flex-wrap:wrap;gap:14px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
@@ -14769,7 +14834,7 @@ function renderPDSettings(proj, pid) {
         </label>
       </div>
     </div>
-    <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:8px">Changes save automatically. Picking a state pulls in its tax rate + defaults; editing the state in App Settings cascades back here.</div>
+    <div style="font-size:11px;color:var(--text-light);font-style:italic;margin-top:8px">Changes save automatically. Tax rate is driven by the linked state in App Settings → Categories → Tax States; edits there cascade back here.</div>
   </div>`;
 }
 
@@ -31091,18 +31156,45 @@ function renderDashboard() {
 
   const today = new Date();
 
-  // ── Revenue (invoice totals split paid vs unpaid, pre-tax vs post-tax)
+  // ── Revenue — cash basis per Baylor's spec: paid revenue is sum of
+  // payments whose DATE falls in the period (not invoice sent date).
+  // Unpaid stays based on invoices sent-in-period that aren't fully
+  // settled — represents work invoiced but not yet collected.
+  //
+  // For each payment we proportionally split into pre-tax vs tax based on
+  // the parent invoice's total composition (since payments don't carry
+  // their own tax split). Excludes pending=true ACH and refunds (negative).
   let revPreTaxPaid = 0, revPreTaxUnpaid = 0;
   let revPostTaxPaid = 0, revPostTaxUnpaid = 0;
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'cancelled') return;
+    if (clientId && inv.clientId !== clientId) return;
+    if (projectId && inv.projectId !== projectId) return;
+    if (clientId && inv.projectId && !clientProjectIds.has(inv.projectId)) return;
+    const total = Number(inv.total || 0);
+    const preTax = (Number(inv.subtotal||0)) + (Number(inv.freight||0)) + (Number(inv.adjacentCharges||0)) - (Number(inv.discount||0));
+    const preTaxFrac = total > 0 ? preTax / total : 0;
+    (inv.payments || []).forEach(p => {
+      if (p.pending) return;
+      if (!p.date) return;
+      const d = new Date(p.date + 'T12:00:00');
+      if (d < from || d > to) return;
+      const amt = Number(p.amount || 0);
+      if (amt <= 0) return; // exclude refunds from "Revenue Paid"
+      revPostTaxPaid += amt;
+      revPreTaxPaid  += amt * preTaxFrac;
+    });
+  });
+  // Unpaid invoiced — invoices sent in period that aren't fully paid.
   activeInvoices.forEach(inv => {
-    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
-    const total = inv.total || 0;
-    const paidFrac = total > 0 ? Math.min(1, paid / total) : 0;
-    const preTax = (inv.subtotal||0) + (inv.freight||0) + (inv.adjacentCharges||0) - (inv.discount||0);
-    revPreTaxPaid += preTax * paidFrac;
-    revPreTaxUnpaid += preTax * (1 - paidFrac);
-    revPostTaxPaid += total * paidFrac;
-    revPostTaxUnpaid += total * (1 - paidFrac);
+    const paid = (inv.payments||[]).filter(p => !p.pending).reduce((s,p) => s + Number(p.amount||0), 0);
+    const total = Number(inv.total || 0);
+    const unpaidAmt = Math.max(0, total - paid);
+    if (unpaidAmt <= 0) return;
+    const preTax = (Number(inv.subtotal||0)) + (Number(inv.freight||0)) + (Number(inv.adjacentCharges||0)) - (Number(inv.discount||0));
+    const preTaxFrac = total > 0 ? preTax / total : 0;
+    revPostTaxUnpaid += unpaidAmt;
+    revPreTaxUnpaid  += unpaidAmt * preTaxFrac;
   });
 
   // ── Outstanding & Overdue
@@ -31136,12 +31228,26 @@ function renderDashboard() {
     (!clientId || p.clientId === clientId) && (!projectId || p.id === projectId)
   );
   const profitRows = projectsInScope.map(p => {
+    // Invoiced — invoices SENT in period (sent-date filter still applies).
     const projInvoices = activeInvoices.filter(inv => inv.projectId === p.id);
-    const revenuePaid = projInvoices.reduce((s,inv) => {
-      const paid = (inv.payments||[]).reduce((sp,pp) => sp + (pp.amount||0), 0);
-      return s + paid;
-    }, 0);
     const invoicedTotal = projInvoices.reduce((s,inv) => s + (inv.total||0), 0);
+    // Revenue Paid — cash basis per spec: sum payments whose date falls in
+    // the period across ANY invoice for this project (not just invoices sent
+    // in period). Excludes pending=true ACH and refunds (negative amounts).
+    let revenuePaid = 0;
+    (S.invoices || []).forEach(inv => {
+      if (inv.projectId !== p.id) return;
+      if (inv.status === 'cancelled') return;
+      (inv.payments || []).forEach(pp => {
+        if (pp.pending) return;
+        if (!pp.date) return;
+        const d = new Date(pp.date + 'T12:00:00');
+        if (d < from || d > to) return;
+        const amt = Number(pp.amount || 0);
+        if (amt <= 0) return;
+        revenuePaid += amt;
+      });
+    });
 
     // Actual cost from PM items (proposal items in proposal spaces)
     const prop = S.proposals?.[p.id];
