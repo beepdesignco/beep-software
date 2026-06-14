@@ -26973,7 +26973,9 @@ function renderInvoiceBuilder() {
   // Freight reconciliation banner — surfaces unsettled credits, overages,
   // and unbilled deferred actuals at invoice creation time. Each line is
   // independent; multiple may show. Hidden when nothing's outstanding.
-  if (inv.projectId) {
+  // Suppressed entirely on paid invoices (reconciliation belongs on the
+  // next invoice, not on one that's already settled).
+  if (inv.projectId && inv.status !== 'paid' && inv.status !== 'cancelled') {
     const recon = getProjectFreightReconState(inv.projectId);
     const lines = [];
     if (recon.projectNetCredit > 0.5) {
@@ -27335,11 +27337,15 @@ function renderInvoiceBuilder() {
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
         <button class="btn btn-primary btn-sm" onclick="openSendInvoiceFromBuilder()">Send Invoice</button>`;
     } else if (inv.status === 'paid') {
+      // §3 cleanup: paid invoices no longer have a standalone "Revert to
+      // Sent" button — the Recording Error option inside the Refund/Credit
+      // modal handles the manual-error case and the modal also offers
+      // Refund + Hold-as-Credit. Single entry point keeps the UX honest.
       actions.innerHTML = `
         ${pdfBtn}
         ${previewBtn}
         ${receiptBtn}
-        <button class="btn btn-secondary btn-sm" onclick="revertToSent()">Revert to Sent Status</button>`;
+        <button class="btn btn-danger btn-sm" onclick="cancelInvoice()">Refund / Credit Invoice</button>`;
     } else if (inv.status === 'partial') {
       actions.innerHTML = `
         ${pdfBtn}
@@ -29675,7 +29681,7 @@ async function generatePMItemPDF() {
     const hasCost = item.costActual || item.costActualPaymentMethod || item.vendorOrderNumber;
     if (hasCost) {
       sectionHeader('Cost Actual');
-      if (item.costActual) kv('Actual Cost Paid', item.costActual);
+      if (item.costActual) kv('Actual Cost Paid', fmt(parse$(item.costActual)));
       if (item.costActualPaymentMethod) kv('Paid With', item.costActualPaymentMethod);
       if (item.vendorOrderNumber) kv('Vendor Order #', item.vendorOrderNumber);
       y += 6;
