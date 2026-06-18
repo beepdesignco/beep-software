@@ -31406,17 +31406,14 @@ function renderDashboard() {
       <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic">Filtered by date range above</div>
     </div>`;
 
-  // KPI row
-  html += `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px">
+  // KPI row — Outstanding is already shown in the Right Now zone above
+  // (all-time, not date-filtered), so dropping it here removes the
+  // visual repetition without losing any information.
+  html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px">
     <div style="${cardStyle}">
       <div style="${statNum};color:#1a6e3a">${fmt(revPostTaxPaid)}</div>
       <div style="${statLabel}">Revenue (Paid)</div>
       <div style="${statSub}">Pre-tax ${fmt(revPreTaxPaid)}</div>
-    </div>
-    <div style="${cardStyle}">
-      <div style="${statNum};color:#c47a20">${fmt(outstandingGross)}</div>
-      <div style="${statLabel}">Outstanding</div>
-      <div style="${statSub}">Pre-tax ${fmt(outstandingPreTax)}</div>
     </div>
     <div style="${cardStyle}">
       <div style="${statNum};color:var(--pecan)">${fmt(expTotal)}</div>
