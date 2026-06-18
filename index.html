@@ -7168,6 +7168,7 @@ async function loadFromSupabase() {
     itemTypesRes, posRes, submittalsRes,
     freightCategoriesRes, freightChargesRes, freightActualsRes, freightSettlementsRes,
     estimatesRes, expenseAllocationsRes, freightActualAllocationsRes,
+    invoiceFreightAllocationsRes,
     tasksRes, taskActivityRes, taskFieldDefsRes, taskDependenciesRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -7191,6 +7192,7 @@ async function loadFromSupabase() {
     sb.from('estimates').select('*').eq('studio_id', studioId).is('deleted_at', null).order('created_at'),
     sb.from('expense_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('freight_actual_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('invoice_freight_allocations').select('*').eq('studio_id', studioId).is('deleted_at', null),
     // §13 task system load — tasks come with comments embedded for one round-trip.
     sb.from('tasks').select('*, task_comments(*)').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('task_activity').select('*').eq('studio_id', studioId).order('created_at', { ascending: false }).limit(500),
@@ -7198,7 +7200,7 @@ async function loadFromSupabase() {
     sb.from('task_dependencies').select('*, tasks!task_dependencies_task_id_fkey(studio_id)'),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -7238,6 +7240,15 @@ async function loadFromSupabase() {
     (_faAllocsByActual[a.freightActualId] = _faAllocsByActual[a.freightActualId] || []).push(a);
   });
   (S.freightActuals || []).forEach(fa => { fa.allocations = _faAllocsByActual[fa.id] || []; });
+  // §1 freight overhaul: fold invoice_freight_allocations onto each invoice
+  // as inv.freightAllocations[]. Per-item collected freight is computed
+  // from these rows (see getItemFreightCollected).
+  const _ifaByInvoice = {};
+  (invoiceFreightAllocationsRes.data || []).forEach(r => {
+    const a = dbInvoiceFreightAllocationToS(r);
+    (_ifaByInvoice[a.invoiceId] = _ifaByInvoice[a.invoiceId] || []).push(a);
+  });
+  (S.invoices || []).forEach(inv => { inv.freightAllocations = _ifaByInvoice[inv.id] || []; });
   // Hydrate _allocationId on invoice line items so the picker reads
   // already-added state correctly. Durable link is the FK on allocations.
   const _lineToAlloc = new Map();
@@ -7632,6 +7643,22 @@ function dbFreightActualAllocationToS(r) {
   };
 }
 
+// §1 freight overhaul: per-item slice of an invoice's freight $. Mirrors
+// freight_actual_allocations on the collected side.
+function dbInvoiceFreightAllocationToS(r) {
+  return {
+    id: r.id,
+    invoiceId: r.invoice_id,
+    proposalItemId: r.proposal_item_id || null,
+    amount: r.amount != null ? Number(r.amount) : 0,
+    sharePct: r.share_pct != null ? Number(r.share_pct) : null,
+    allocationSource: r.allocation_source || 'auto_proportional',
+    notes: r.notes || '',
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+
 function dbExpenseAllocationToS(r) {
   return {
     id: r.id,
@@ -7923,6 +7950,10 @@ function dbItemToS(it) {
     costActual: it.cost_actual != null ? String(it.cost_actual) : '',
     costActualPaymentMethod: it.cost_actual_payment_method || '',
     vendorOrderNumber: it.vendor_order_number || '',
+    // §1 freight overhaul: snapshot frozen at estimate approval. Never
+    // overwritten by later edits; the live freight_charge can drift,
+    // but the client-agreed value stays here.
+    freightApprovedSnapshot: it.freight_approved_snapshot || null,
     additionalCosts: it.additional_costs || [],
     _invoiceIds: it.invoice_ids || [],
     _expenseId: it.expense_id || null,
@@ -8015,6 +8046,7 @@ const _sbShadow = {
   estimates: new Map(),
   expenseAllocations: new Map(),
   freightActualAllocations: new Map(),
+  invoiceFreightAllocations: new Map(),
   purchaseOrders: new Map(),
   submittals: new Map(),
   submittalSigners: new Map(),
@@ -8052,6 +8084,9 @@ function captureSbShadow() {
   _sbShadow.freightActualAllocations = new Map();
   (S.freightActuals || []).forEach(fa => (fa.allocations || []).forEach(a =>
     _sbShadow.freightActualAllocations.set(a.id, { ...snap(a), _freightActualId: fa.id })));
+  _sbShadow.invoiceFreightAllocations = new Map();
+  (S.invoices || []).forEach(inv => (inv.freightAllocations || []).forEach(a =>
+    _sbShadow.invoiceFreightAllocations.set(a.id, { ...snap(a), _invoiceId: inv.id })));
   _sbShadow.purchaseOrders = new Map((S.purchaseOrders || []).map(p => [p.id, snap(p)]));
   _sbShadow.submittals     = new Map((S.submittals     || []).map(s => [s.id, snap({ ...s, signers: undefined })]));
   _sbShadow.submittalSigners = new Map();
@@ -8318,6 +8353,20 @@ function taskFieldDefToDB(f, studioId) {
     options: f.options || {},
     default_value: f.defaultValue || null,
     sort_order: Number(f.sortOrder || 0),
+    deleted_at: null,
+  };
+}
+
+function invoiceFreightAllocationToDB(a, studioId) {
+  return {
+    id: a.id,
+    studio_id: studioId,
+    invoice_id: a.invoiceId,
+    proposal_item_id: a.proposalItemId || null,
+    amount: Number(a.amount || 0),
+    share_pct: a.sharePct != null ? Number(a.sharePct) : null,
+    allocation_source: a.allocationSource || 'auto_proportional',
+    notes: a.notes || null,
     deleted_at: null,
   };
 }
@@ -8593,6 +8642,7 @@ function itemToDB(it) {
     cost_actual: _parseMoney(it.costActual),
     cost_actual_payment_method: it.costActualPaymentMethod || null,
     vendor_order_number: it.vendorOrderNumber || null,
+    freight_approved_snapshot: it.freightApprovedSnapshot || null,
     additional_costs: it.additionalCosts || [],
     invoice_ids: it._invoiceIds || [], expense_id: it._expenseId || null,
     invoice_line_id: it._invoiceLineId || null, invoice_number: it._invoiceNumber || null,
@@ -8705,6 +8755,7 @@ async function syncToSupabase() {
       estimates: new Map(),
       expenseAllocations: new Map(),
       freightActualAllocations: new Map(),
+      invoiceFreightAllocations: new Map(),
     };
     (S.invoices || []).forEach(inv => {
       (inv.lineItems || []).forEach((l, i) => current.invoiceLineItems.set(l.id, { ...l, _invoiceId: inv.id, _sortOrder: i }));
@@ -8741,6 +8792,11 @@ async function syncToSupabase() {
     (S.freightActuals || []).forEach(fa => {
       (fa.allocations || []).forEach(a => {
         current.freightActualAllocations.set(a.id, { ...a, freightActualId: a.freightActualId || fa.id });
+      });
+    });
+    (S.invoices || []).forEach(inv => {
+      (inv.freightAllocations || []).forEach(a => {
+        current.invoiceFreightAllocations.set(a.id, { ...a, invoiceId: a.invoiceId || inv.id });
       });
     });
     (S.documents || []).forEach(d => {
@@ -8827,6 +8883,8 @@ async function syncToSupabase() {
     await syncSafe('expense_allocations', current.expenseAllocations, _sbShadow.expenseAllocations, a => expenseAllocationToDB(a, studioId));
     // freight_actual_allocations after freight_actuals.
     await syncSafe('freight_actual_allocations', current.freightActualAllocations, _sbShadow.freightActualAllocations, a => freightActualAllocationToDB(a, studioId));
+    // invoice_freight_allocations after invoices (FK to invoice_id).
+    await syncSafe('invoice_freight_allocations', current.invoiceFreightAllocations, _sbShadow.invoiceFreightAllocations, a => invoiceFreightAllocationToDB(a, studioId));
     // §13 task system. Tasks first (parent_task_id self-ref allowed since
     // we use ON DELETE SET NULL). Comments and dependencies come after.
     const currentTasks = new Map((S.tasks || []).map(t => [t.id, t]));
@@ -13353,6 +13411,68 @@ function _faAmountForItem(actual, itemId) {
                  .reduce((s, x) => s + (Number(x.amount) || 0), 0);
   }
   return actual.proposalItemId === itemId ? (parseFloat(actual.amount) || 0) : 0;
+}
+
+// ═════════════════ §1 freight overhaul — per-item rollup helpers ═════════════════
+// All three sides of the freight story for a single item:
+//
+//   Applied   = what the client agreed to at estimate approval (snapshot)
+//   Collected = sum of invoice_freight_allocations targeting this item,
+//               across every non-cancelled invoice + every deferred
+//               freight charge that's been billed
+//   Actual    = sum of freight_actual_allocations targeting this item
+//               (via _faActualsForItem, falls back to legacy single-FK)
+//
+// Net = Collected − Actual. Positive = credit owed to project; negative
+// = overage to bill or absorb. Always-nets reconciliation (per spec)
+// rolls the freight net + cost net into a single project number, with
+// the component breakdown always visible.
+
+function getItemFreightApplied(item) {
+  const snap = item?.freightApprovedSnapshot;
+  if (!snap || typeof snap !== 'object') return null;
+  return {
+    dollarValue: Number(snap.dollarValue || 0),
+    percentApplied: snap.percentApplied != null ? Number(snap.percentApplied) : null,
+    approvedAt: snap.approvedAt || null,
+    estimateVersionId: snap.estimateVersionId || null,
+    billingMode: snap.billingMode || null,
+  };
+}
+
+function getItemFreightCollected(itemId) {
+  if (!itemId) return 0;
+  let total = 0;
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'cancelled') return;
+    (inv.freightAllocations || []).forEach(a => {
+      if (a.proposalItemId === itemId) total += Number(a.amount) || 0;
+    });
+  });
+  return total;
+}
+
+function getItemFreightActualSum(itemId) {
+  return _faActualsForItem(itemId).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+}
+
+// Composite reconciliation for one item. Used by the PM rollup, project
+// P/L, and dashboard surfaces. Cheap to call — all three components are
+// in-memory lookups against S.
+function getItemFreightReconciliation(itemId, item) {
+  const applied = item ? getItemFreightApplied(item) : null;
+  const collected = getItemFreightCollected(itemId);
+  const actual = getItemFreightActualSum(itemId);
+  const net = collected - actual;
+  return {
+    appliedDollarValue: applied?.dollarValue || 0,
+    appliedPercent: applied?.percentApplied,
+    collected,
+    actual,
+    net,
+    isCredit: net > 0,
+    isOverage: net < 0,
+  };
 }
 
 // Compute one item's per-category roll-up + an item-level chip.
