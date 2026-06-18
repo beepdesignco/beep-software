@@ -17940,9 +17940,9 @@ function refreshConstructedRollup() {
     const cost = parse$(_modalComponents[i]?.costActual || '');
     const net  = parse$(netEl?.value || '');
     const qty  = parseFloat(qtyEl?.value) || 1;
-    // If costPaid blank, treat as net (matches legacy "leave blank to use net" intent).
-    const perUnit = cost > 0 ? cost : net;
-    actualTotal += perUnit * qty;
+    // costActual is entered as a TOTAL (matches PM detail panel at line 9625),
+    // so don't multiply it by qty. Only the netCost fallback is per-unit.
+    actualTotal += cost > 0 ? cost : net * qty;
   });
   const itemId = $c('ai-id')?.value;
   const billedTotal = itemId ? getItemBilledOnInvoices(itemId) : 0;
