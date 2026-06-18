@@ -3984,6 +3984,41 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ PAYMENT METHOD (CUSTOM) EDITOR MODAL ═════════════════ -->
+<div class="overlay" id="modal-payment-method">
+  <div class="modal" style="width:500px">
+    <button class="modal-x" onclick="closeModal('modal-payment-method')">✕</button>
+    <div class="modal-title" id="pmm-title">Custom Payment Method</div>
+    <input type="hidden" id="pmm-id">
+    <div class="fg">
+      <label class="fl">Label</label>
+      <input type="text" class="fi" id="pmm-label" placeholder="e.g. Zelle, PayPal, Custom wire">
+    </div>
+    <div class="fg">
+      <label class="fl">Kind</label>
+      <select class="fi fsel" id="pmm-kind" onchange="_pmmSyncContentField()">
+        <option value="info">Informational text</option>
+        <option value="link">External link</option>
+      </select>
+    </div>
+    <div class="fg" id="pmm-content-wrap">
+      <label class="fl" id="pmm-content-label">Instructions</label>
+      <textarea class="fi" id="pmm-content-text" style="resize:vertical;min-height:80px;font-size:12px" placeholder="e.g. Zelle to baylor@beepdesign.co — please include invoice # in memo"></textarea>
+      <input type="url" class="fi" id="pmm-content-link" placeholder="https://…" style="display:none">
+    </div>
+    <div class="fg">
+      <label class="fl">Show on these invoice types</label>
+      <div id="pmm-types" style="display:flex;flex-wrap:wrap;gap:14px;padding:6px 2px"></div>
+      <div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">Unchecked types won't see this method on their payment page.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" id="pmm-delete-btn" onclick="deletePaymentMethodFromModal()" style="display:none;margin-right:auto">Delete</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-payment-method')">Cancel</button>
+      <button class="btn btn-primary" onclick="savePaymentMethodFromModal()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════════════ NEW DOCUMENT MODAL ═════════════════ -->
 <!-- ═════════════════ EXPORT LIST MODAL ═════════════════ -->
 <div class="overlay" id="modal-export-list">
@@ -11854,7 +11889,7 @@ function renderTaskDetailPanel(pid, taskId) {
     const sizeStr = f.size < 1024 ? f.size+'B' : f.size < 1048576 ? (f.size/1024).toFixed(0)+'KB' : (f.size/1048576).toFixed(1)+'MB';
     const canView = !f.name.endsWith('.dwg');
     return `
-    <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+    <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name,storagePath:f.storagePath})).replace(/"/g,'&quot;')})"`:''}>
       <span>${icon}</span>
       <span style="color:var(--russet);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.displayName||f.name)}</span>
       <span style="color:var(--text-light)">${sizeStr}</span>
@@ -12052,7 +12087,7 @@ function renderPDManagement(proj, pid) {
       <span style="width:8px"></span>
       ${STATUS_FLAGS.map(f => {
         const active = _pmStatusFilters.includes(f.v);
-        return `<button onclick="togglePMStatusFilter('${f.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?f.color:'var(--border)'};background:${active?f.color+'18':'white'};color:${active?f.color:'var(--text-mid)'}">${f.l}</button>`;
+        return `<button onclick="togglePMStatusFilter('${f.v}')" style="font-size:10px;font-family:var(--font-b);padding:4px 10px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active?f.color+'66':'var(--border)'};background:${active?f.color+'18':'white'};color:${active?f.color:'var(--text-mid)'}">${f.l}</button>`;
       }).join('')}
     </div>
   </div>`;
@@ -12416,7 +12451,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
                 (c.files||[]).map(f => {
                   const icon = f.name.endsWith('.dwg') ? '📐' : (f.type === 'application/pdf' || f.name.endsWith('.pdf')) ? '📄' : '🖼';
                   const canView = !f.name.endsWith('.dwg');
-                  return `<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+                  return `<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-size:11px;font-family:var(--font-b)${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name,storagePath:f.storagePath})).replace(/"/g,'&quot;')})"`:''}>
                     <span>${icon}</span>
                     <span style="color:var(--russet);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(f.displayName||f.name)}</span>
                     <span style="color:var(--text-light);font-size:9px">· ${escH(c.name)}</span>
@@ -12779,7 +12814,7 @@ function renderPDDocuments(proj, pid) {
               const displayName = f.displayName || f.name;
               const canView = !f.name.endsWith('.dwg');
               return `
-              <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name})).replace(/"/g,'&quot;')})"`:''}>
+              <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px${canView?';cursor:pointer':''}" ${canView?`onclick="viewFile(${escH(JSON.stringify({data:f.data,type:f.type,name:f.name,storagePath:f.storagePath})).replace(/"/g,'&quot;')})"`:''}>
                 <span style="font-size:18px">${icon}</span>
                 <div style="flex:1;min-width:0">
                   <div style="font-family:var(--font-b);font-size:11px;color:var(--russet);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(displayName)}</div>
@@ -20427,6 +20462,11 @@ function _getPaymentMethodsConfig() {
   if (!s.paymentMethodsConfig) s.paymentMethodsConfig = { perType: {}, custom: [] };
   if (!s.paymentMethodsConfig.perType) s.paymentMethodsConfig.perType = {};
   if (!Array.isArray(s.paymentMethodsConfig.custom)) s.paymentMethodsConfig.custom = [];
+  // Backwards-compat: custom methods saved before invoice-type scoping default
+  // to applying to all 4 invoice types.
+  s.paymentMethodsConfig.custom.forEach(m => {
+    if (!Array.isArray(m.invoiceTypes)) m.invoiceTypes = PM_INVOICE_TYPES.map(t => t.v);
+  });
   return s.paymentMethodsConfig;
 }
 
@@ -20447,30 +20487,74 @@ function togglePaymentMethodForType(invoiceType, methodKey, enabled) {
   renderPaymentMethodsSettings();
 }
 
-function addCustomPaymentMethod() {
+// Open the add/edit modal for a custom payment method. Pass null id to add.
+function openPaymentMethodModal(id) {
   const cfg = _getPaymentMethodsConfig();
-  cfg.custom.push({ id: uid(), label: '', kind: 'info', content: '' });
+  const isEdit = !!id;
+  const m = isEdit ? cfg.custom.find(x => x.id === id) : null;
+  if (isEdit && !m) return;
+  $c('pmm-title').textContent = isEdit ? 'Edit Custom Payment Method' : 'New Custom Payment Method';
+  $c('pmm-id').value = id || '';
+  $c('pmm-label').value = m?.label || '';
+  $c('pmm-kind').value = m?.kind || 'info';
+  $c('pmm-content-text').value = m?.kind !== 'link' ? (m?.content || '') : '';
+  $c('pmm-content-link').value = m?.kind === 'link' ? (m?.content || '') : '';
+  const selectedTypes = Array.isArray(m?.invoiceTypes) ? m.invoiceTypes : PM_INVOICE_TYPES.map(t => t.v);
+  $c('pmm-types').innerHTML = PM_INVOICE_TYPES.map(t => `
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+      <input type="checkbox" value="${t.v}" ${selectedTypes.includes(t.v) ? 'checked' : ''} style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+      ${escH(t.l)}
+    </label>`).join('');
+  $c('pmm-delete-btn').style.display = isEdit ? '' : 'none';
+  _pmmSyncContentField();
+  $c('modal-payment-method').classList.add('open');
+  setTimeout(() => $c('pmm-label').focus(), 40);
+}
+
+function _pmmSyncContentField() {
+  const kind = $c('pmm-kind').value;
+  const label = $c('pmm-content-label');
+  const text = $c('pmm-content-text');
+  const link = $c('pmm-content-link');
+  if (kind === 'link') {
+    label.textContent = 'URL';
+    text.style.display = 'none';
+    link.style.display = '';
+  } else {
+    label.textContent = 'Instructions';
+    text.style.display = '';
+    link.style.display = 'none';
+  }
+}
+
+function savePaymentMethodFromModal() {
+  const cfg = _getPaymentMethodsConfig();
+  const id = $c('pmm-id').value || uid();
+  const label = $c('pmm-label').value.trim();
+  if (!label) { toast('Label required.'); return; }
+  const kind = $c('pmm-kind').value;
+  const content = (kind === 'link' ? $c('pmm-content-link').value : $c('pmm-content-text').value).trim();
+  const invoiceTypes = Array.from($c('pmm-types').querySelectorAll('input[type=checkbox]:checked')).map(x => x.value);
+  if (!invoiceTypes.length) { toast('Pick at least one invoice type this method applies to.'); return; }
+  let m = cfg.custom.find(x => x.id === id);
+  if (!m) { m = { id }; cfg.custom.push(m); }
+  m.label = label;
+  m.kind = kind;
+  m.content = content;
+  m.invoiceTypes = invoiceTypes;
   save();
+  closeModal('modal-payment-method');
   renderPaymentMethodsSettings();
-  setTimeout(() => {
-    const inputs = document.querySelectorAll('[data-pm-custom-label]');
-    if (inputs.length) inputs[inputs.length - 1].focus();
-  }, 40);
 }
 
-function updateCustomPaymentMethod(id, field, value) {
-  const cfg = _getPaymentMethodsConfig();
-  const m = cfg.custom.find(x => x.id === id);
-  if (!m) return;
-  m[field] = value;
-  save();
-}
-
-function deleteCustomPaymentMethod(id) {
+function deletePaymentMethodFromModal() {
+  const id = $c('pmm-id').value;
+  if (!id) return;
   if (!confirm('Delete this custom payment method?')) return;
   const cfg = _getPaymentMethodsConfig();
   cfg.custom = cfg.custom.filter(x => x.id !== id);
   save();
+  closeModal('modal-payment-method');
   renderPaymentMethodsSettings();
 }
 
@@ -20492,21 +20576,27 @@ function renderPaymentMethodsSettings() {
       ${PM_BUILTIN_METHODS.map(m => `<div style="text-align:center"><input type="checkbox" ${_isMethodEnabledForType(t.v, m.v) ? 'checked' : ''} onchange="togglePaymentMethodForType('${t.v}','${m.v}', this.checked)" style="accent-color:var(--russet);width:16px;height:16px"></div>`).join('')}
     </div>`).join('');
 
-  // Custom methods
-  const customRows = (cfg.custom || []).map(m => `
-    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px;margin-bottom:8px">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-        <input type="text" data-pm-custom-label class="fi" value="${escH(m.label || '')}" placeholder="Label (e.g. PayPal, Zelle, custom wire)" onchange="updateCustomPaymentMethod('${m.id}','label',this.value.trim())" style="flex:1;font-size:13px;font-weight:700">
-        <select class="fi fsel" onchange="updateCustomPaymentMethod('${m.id}','kind',this.value); renderPaymentMethodsSettings()" style="width:160px;font-size:11px">
-          <option value="info"  ${m.kind === 'info'  ? 'selected' : ''}>Informational text</option>
-          <option value="link"  ${m.kind === 'link'  ? 'selected' : ''}>External link</option>
-        </select>
-        <button class="btn btn-danger btn-sm" onclick="deleteCustomPaymentMethod('${m.id}')" style="font-size:10px">Remove</button>
+  // Custom methods — view-mode rows. Editing happens in the modal.
+  const typeLabel = v => (PM_INVOICE_TYPES.find(t => t.v === v) || {}).l || v;
+  const customRows = (cfg.custom || []).map(m => {
+    const types = Array.isArray(m.invoiceTypes) ? m.invoiceTypes : PM_INVOICE_TYPES.map(t => t.v);
+    const allTypes = types.length === PM_INVOICE_TYPES.length;
+    const typesLabel = allTypes ? 'All invoice types' : types.map(typeLabel).join(', ');
+    const contentPreview = (m.content || '').slice(0, 80) + ((m.content || '').length > 80 ? '…' : '');
+    const kindLabel = m.kind === 'link' ? 'Link' : 'Info';
+    return `
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <div style="font-family:var(--font-b);font-size:13px;font-weight:700;color:var(--text-dark)">${escH(m.label || '(untitled)')}</div>
+          <span style="font-size:9px;font-family:var(--font-b);background:rgba(var(--text-rgb),0.06);color:var(--text-mid);padding:2px 7px;border-radius:8px;letter-spacing:0.04em">${kindLabel}</span>
+        </div>
+        <div style="font-size:10px;color:var(--text-light);font-family:var(--font-b);margin-bottom:3px">Applies to: ${escH(typesLabel)}</div>
+        ${contentPreview ? `<div style="font-size:11px;color:var(--text-mid);font-family:var(--font-b);font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(contentPreview)}</div>` : '<div style="font-size:10px;color:var(--text-light);font-style:italic">No content set</div>'}
       </div>
-      ${m.kind === 'link'
-        ? `<input type="url" class="fi" value="${escH(m.content || '')}" placeholder="https://…" onchange="updateCustomPaymentMethod('${m.id}','content',this.value.trim())" style="font-size:12px">`
-        : `<textarea class="fi" placeholder="Instructions shown to the client (e.g. Zelle to baylor@beepdesign.co)" onchange="updateCustomPaymentMethod('${m.id}','content',this.value.trim())" style="font-size:12px;min-height:60px;resize:vertical">${escH(m.content || '')}</textarea>`}
-    </div>`).join('');
+      <button class="btn btn-secondary btn-sm" onclick="openPaymentMethodModal('${m.id}')" style="font-size:10px">Edit</button>
+    </div>`;
+  }).join('');
 
   host.innerHTML = `
     <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Per Invoice Type</div>
@@ -20515,7 +20605,7 @@ function renderPaymentMethodsSettings() {
 
     <div style="margin-top:24px;display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Custom Payment Methods</div>
-      <button class="btn btn-primary btn-sm" onclick="addCustomPaymentMethod()" style="font-size:11px">+ Add Custom Method</button>
+      <button class="btn btn-primary btn-sm" onclick="openPaymentMethodModal(null)" style="font-size:11px">+ Add Custom Method</button>
     </div>
     ${customRows || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:8px 0">No custom methods yet. Add one to show wire instructions, Zelle info, or a link to an external payment portal.</div>'}`;
 }
