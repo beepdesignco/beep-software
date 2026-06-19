@@ -3680,6 +3680,18 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ BUDGET → FREIGHT PER-ITEM MODAL ═════════════════ -->
+<!-- Opens when the user clicks the "Actuals (Raw)" cell on an invoice
+     card in Budget → Freight. Shows per-item Collected / Actual / Δ
+     for items billed on that specific invoice. -->
+<div class="overlay" id="modal-budget-freight-items">
+  <div class="modal" style="width:640px;max-height:80vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-budget-freight-items')">✕</button>
+    <div class="modal-title" id="modal-budget-freight-items-title">Freight Actuals</div>
+    <div id="modal-budget-freight-items-body"></div>
+  </div>
+</div>
+
 <!-- ═════════════════ INVITE MEMBER MODAL ═════════════════ -->
 <div class="overlay" id="modal-invite-member">
   <div class="modal" style="width:480px">
