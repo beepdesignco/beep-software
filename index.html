@@ -1366,7 +1366,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-pdtab="addressbook" onclick="setProjDetailTab('addressbook')" style="margin-bottom:-1px">Address Book</button>
         <button class="view-tab" data-pdtab="documents" onclick="setProjDetailTab('documents')" style="margin-bottom:-1px">Documents</button>
         <button class="view-tab" data-pdtab="expenses" onclick="setProjDetailTab('expenses')" style="margin-bottom:-1px">Expenses</button>
-        <button class="view-tab" data-pdtab="freight" onclick="setProjDetailTab('freight')" style="margin-bottom:-1px">Freight</button>
+        <button class="view-tab" data-pdtab="budget" onclick="setProjDetailTab('budget')" style="margin-bottom:-1px">Budget</button>
         <button class="view-tab" data-pdtab="settings" onclick="setProjDetailTab('settings')" style="margin-bottom:-1px">Settings</button>
       </div>
       <div class="contacts-body" id="pd-body" style="padding:22px 30px 40px"><!-- rendered by JS --></div>
@@ -10061,6 +10061,10 @@ function showView(v) {
 // ═════════════════════════════════════════════════════════════
 
 let _projDetailTab = 'overview';
+// Budget sub-tab state. Defaults to Freight (the original tab content
+// lives here). Items sub-page is a stub for now — Baylor's per-invoice
+// spec lands in the Freight sub-page first per [[project_freight_model]].
+let _pdBudgetTab = 'freight';
 
 function openProjectDetail(pid) {
   S._detailProjectId = pid;
@@ -10115,7 +10119,9 @@ function renderProjectDetail() {
   if (_projDetailTab === 'addressbook') body.innerHTML = renderPDAddressBook(proj, pid);
   if (_projDetailTab === 'documents')   body.innerHTML = renderPDDocuments(proj, pid);
   if (_projDetailTab === 'expenses')    body.innerHTML = renderPDExpenses(proj, pid);
-  if (_projDetailTab === 'freight')     body.innerHTML = renderPDFreight(proj, pid);
+  if (_projDetailTab === 'budget')      body.innerHTML = renderPDBudget(proj, pid);
+  // Backwards-compat: any persisted 'freight' tab state still resolves.
+  if (_projDetailTab === 'freight')     { _projDetailTab = 'budget'; body.innerHTML = renderPDBudget(proj, pid); }
   if (_projDetailTab === 'settings')    body.innerHTML = renderPDSettings(proj, pid);
 
   // Set up drag-and-drop for Quick References
@@ -13930,7 +13936,7 @@ function onFreightFilterChange(field, value) {
   _freightTabFilters[field] = value;
   // Update only the content container so the filter inputs keep focus
   // (search input would lose cursor position on every keystroke otherwise).
-  if (S.currentView === 'project-detail' && _projDetailTab === 'freight') {
+  if (S.currentView === 'project-detail' && _projDetailTab === 'budget' && _pdBudgetTab === 'freight') {
     const pid = S._detailProjectId || $c('pd-id')?.value;
     if (pid) renderFreightTabContent(pid);
   }
@@ -13938,7 +13944,7 @@ function onFreightFilterChange(field, value) {
 
 function clearFreightFilters() {
   _freightTabFilters = { space: '', itemType: '', freightStatus: '', search: '' };
-  if (S.currentView === 'project-detail' && _projDetailTab === 'freight') {
+  if (S.currentView === 'project-detail' && _projDetailTab === 'budget' && _pdBudgetTab === 'freight') {
     renderProjectDetail();
   }
 }
@@ -14058,6 +14064,42 @@ function _computeFreightSummaryFromItems(items, pid) {
 // Convenience wrapper: project-scoped settlement summary for the banner.
 function getProjectFreightReconState(pid) {
   return computeProjectFreightSummary(pid);
+}
+
+// Budget tab — wraps the existing Freight ledger inside a sub-tab nav.
+// Items sub-page is a stub for now; per Baylor's 2026-06-19 spec, the
+// Freight sub-page will be expanded into a per-invoice rollup, then the
+// Items page will mirror the same structure with cost data.
+function setProjBudgetTab(tab) {
+  _pdBudgetTab = tab;
+  renderProjectDetail();
+}
+
+function renderPDBudget(proj, pid) {
+  const tabs = [
+    { id: 'freight', label: 'Freight' },
+    { id: 'items',   label: 'Items' },
+  ];
+  const navHtml = `
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px">
+      ${tabs.map(t => `
+        <button class="view-tab ${_pdBudgetTab === t.id ? 'active' : ''}" onclick="setProjBudgetTab('${t.id}')" style="margin-bottom:-1px;font-size:11px">${escH(t.label)}</button>
+      `).join('')}
+    </div>`;
+  let body = '';
+  if (_pdBudgetTab === 'freight') body = renderPDFreight(proj, pid);
+  else if (_pdBudgetTab === 'items') body = renderPDBudgetItems(proj, pid);
+  return navHtml + body;
+}
+
+function renderPDBudgetItems(proj, pid) {
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:10px">Items — coming soon</div>
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);line-height:1.6;max-width:500px;margin:0 auto">
+        Per-invoice item financial rollup will mirror the Freight page structure: Proposal Net / Invoiced / Net Actual / Margin per invoice, with per-item drill-down. Project totals at the top.
+      </div>
+    </div>`;
 }
 
 function renderPDFreight(proj, pid) {
