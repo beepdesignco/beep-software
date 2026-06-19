@@ -32360,8 +32360,9 @@ function renderReportContent(from, to) {
     return s + (i.total - paid);
   }, 0);
 
-  // Total invoiced in period
-  const totalInvoiced = invoices.filter(i=>i.status!=='draft').reduce((s,i) => s + i.total, 0);
+  // Total invoiced in period — exclude drafts AND cancelled (cancelled
+  // invoices are voided, they don't count as revenue/invoiced totals).
+  const totalInvoiced = invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').reduce((s,i) => s + i.total, 0);
 
   // Tax collected by state
   const taxByState = {};
@@ -32380,9 +32381,9 @@ function renderReportContent(from, to) {
     }
   });
 
-  // Revenue by project
+  // Revenue by project — exclude drafts AND cancelled.
   const revByProject = {};
-  invoices.filter(i=>i.status!=='draft').forEach(inv => {
+  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').forEach(inv => {
     const proj = S.projects.find(p => p.id === inv.projectId);
     const name = proj?.name || 'Unlinked';
     if (!revByProject[name]) revByProject[name] = { total:0, paid:0, outstanding:0 };
@@ -32392,9 +32393,9 @@ function renderReportContent(from, to) {
     revByProject[name].outstanding += (inv.total - paid);
   });
 
-  // Revenue by client
+  // Revenue by client — exclude drafts AND cancelled.
   const revByClient = {};
-  invoices.filter(i=>i.status!=='draft').forEach(inv => {
+  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').forEach(inv => {
     const client = (S.clients||[]).find(c => c.id === inv.clientId);
     const name = client?.name || 'No Client';
     if (!revByClient[name]) revByClient[name] = { total:0, paid:0, outstanding:0 };
