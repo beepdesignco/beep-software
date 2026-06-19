@@ -7344,6 +7344,8 @@ async function loadFromSupabase() {
   // §1 Phase B — backfill freight allocations for any sent invoice that
   // pre-dates the allocation system. Idempotent across loads.
   try { _backfillFreightAllocations(); } catch (e) { console.warn('[freight-allocation-backfill]', e); }
+  // §1 Phase A.2 — snapshot freight applied on already-locked estimates.
+  try { _backfillFreightApprovedSnapshots(); } catch (e) { console.warn('[freight-snapshot-backfill]', e); }
 
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
   if (typeof captureSbShadow === 'function') captureSbShadow();
@@ -14112,7 +14114,16 @@ function _renderFreightReconStrip(item, pid) {
       ${sub ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${sub}</div>` : ''}
     </div>`;
   const estimatedVal = recon.appliedDollarValue > 0 ? fmt(recon.appliedDollarValue) : '—';
-  const estimatedSub = recon.appliedPercent != null ? `${recon.appliedPercent}% at approval` : '';
+  // When both estimated and collected exist, surface the billed amount as
+  // a subline so the proposal-vs-billed spread is visible in-place
+  // (locked decision 2026-06-18). Falls back to the % at approval label
+  // when nothing's been billed yet.
+  let estimatedSub = '';
+  if (recon.appliedDollarValue > 0 && hasCollectedRows) {
+    estimatedSub = `billed ${fmt(recon.collected)}`;
+  } else if (recon.appliedPercent != null) {
+    estimatedSub = `${recon.appliedPercent}% at approval`;
+  }
   const collectedVal = hasCollectedRows ? fmt(recon.collected) : '—';
   const actualVal = hasActuals ? fmt(recon.actual) : '—';
   let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
@@ -17434,6 +17445,66 @@ function applyBatchStatusUpdate() {
   }
 }
 
+// §1 Phase A.2 — given a locked estimate snapshot, compute each in-scope
+// item's freight share and write it to `item.freightApprovedSnapshot`.
+// First-write-wins: existing snapshots are preserved (an item that was
+// already approved on a prior estimate keeps its original commitment;
+// later approvals on the same project add snapshots only for items that
+// didn't have one).
+//
+// Pool: every snapshot item in scope NOT in `est.exclusions.freight`.
+// Per-item $ = item_subtotal × pct / 100, where pct is parsed from the
+// "Freight Estimate (X% of subtotal)" line label and subtotal comes from
+// the frozen snapshot item (netPrice × qty).
+function _writeFreightApprovedSnapshots(est) {
+  if (!est) return 0;
+  const freightLine = (est.estimationLines || []).find(l => /freight estimate/i.test(l.label || ''));
+  if (!freightLine) return 0;
+  const pctMatch = (freightLine.label || '').match(/\(([\d.]+)%/);
+  const pct = pctMatch ? parseFloat(pctMatch[1]) : null;
+  if (!pct || pct <= 0) return 0;
+  const exclusions = new Set((est.exclusions && est.exclusions.freight) || []);
+  let written = 0;
+  (est.spaces || []).forEach(snapSpace => {
+    (snapSpace.items || []).forEach(snapItem => {
+      if (exclusions.has(snapItem.id)) return;
+      const liveItem = _findItemById(snapItem.id);
+      if (!liveItem) return;
+      if (liveItem.freightApprovedSnapshot) return; // first-write-wins
+      const itemSubtotal = (parseFloat(snapItem.netPrice) || 0) * (parseFloat(snapItem.qty) || 1);
+      if (itemSubtotal <= 0) return;
+      const itemFreight = itemSubtotal * pct / 100;
+      if (itemFreight <= 0) return;
+      liveItem.freightApprovedSnapshot = {
+        approvedAt: est.proposedAt || est.savedAt || new Date().toISOString(),
+        estimateVersionId: est.id,
+        percentApplied: pct,
+        dollarValue: Math.round(itemFreight * 100) / 100,
+        itemSubtotalAtApproval: Math.round(itemSubtotal * 100) / 100,
+        billingMode: 'percent',
+      };
+      written++;
+    });
+  });
+  return written;
+}
+
+// One-shot backfill: for every estimate that's already locked, run the
+// snapshot writer. Items already carrying a snapshot stay untouched.
+function _backfillFreightApprovedSnapshots() {
+  let totalWritten = 0;
+  Object.values(S.proposals || {}).forEach(prop => {
+    (prop.estimates || []).forEach(est => {
+      if (est.status !== 'proposed' && est.status !== 'approved') return;
+      totalWritten += _writeFreightApprovedSnapshots(est);
+    });
+  });
+  if (totalWritten > 0) {
+    save();
+    setTimeout(() => toast(`Backfilled ${totalWritten} freight snapshot${totalWritten === 1 ? '' : 's'} from already-locked estimates.`), 900);
+  }
+}
+
 function _lockEstimateWithStatus(pid, estId, targetStatus) {
   const prop = S.proposals[pid];
   const est = prop?.estimates?.find(e => e.id === estId);
@@ -17448,8 +17519,12 @@ function _lockEstimateWithStatus(pid, estId, targetStatus) {
   if (!ok) return;
   est.status = targetStatus;
   est.proposedAt = new Date().toISOString();
+  // §1 Phase A.2 — capture per-item freight snapshot at lock moment.
+  // First-write-wins: items already carrying a snapshot from a prior
+  // locked estimate keep their original commitment.
+  const snapped = _writeFreightApprovedSnapshots(est);
   save();
-  toast(`"${est.name}" locked as ${targetStatus}.`);
+  toast(`"${est.name}" locked as ${targetStatus}.${snapped ? ` ${snapped} freight snapshot${snapped===1?'':'s'} captured.` : ''}`);
   if (typeof renderProjectDetail === 'function' && document.getElementById('view-project-detail')?.classList.contains('active')) {
     renderProjectDetail();
   } else if (typeof renderPropBody === 'function') {
