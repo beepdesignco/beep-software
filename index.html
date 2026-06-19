@@ -14101,8 +14101,11 @@ function setProjBudgetTab(tab) {
 
 function renderPDBudget(proj, pid) {
   const tabs = [
-    { id: 'freight', label: 'Freight' },
-    { id: 'items',   label: 'Items' },
+    { id: 'overview', label: 'Overview' },
+    { id: 'expenses', label: 'Expenses' },
+    { id: 'time',     label: 'Time' },
+    { id: 'freight',  label: 'Freight' },
+    { id: 'items',    label: 'Items' },
   ];
   const navHtml = `
     <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px">
@@ -14111,9 +14114,36 @@ function renderPDBudget(proj, pid) {
       `).join('')}
     </div>`;
   let body = '';
-  if (_pdBudgetTab === 'freight') body = renderPDBudgetFreight(proj, pid);
-  else if (_pdBudgetTab === 'items') body = renderPDBudgetItems(proj, pid);
+  if      (_pdBudgetTab === 'overview') body = renderPDBudgetOverview(proj, pid);
+  else if (_pdBudgetTab === 'expenses') body = renderPDBudgetExpenses(proj, pid);
+  else if (_pdBudgetTab === 'time')     body = renderPDBudgetTime(proj, pid);
+  else if (_pdBudgetTab === 'freight')  body = renderPDBudgetFreight(proj, pid);
+  else if (_pdBudgetTab === 'items')    body = renderPDBudgetItems(proj, pid);
   return navHtml + body;
+}
+
+// Reusable "coming soon" stub for Budget sub-tabs that aren't built yet.
+function _renderBudgetComingSoon(title, body) {
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:10px">${escH(title)} — coming soon</div>
+      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);line-height:1.6;max-width:520px;margin:0 auto">${body}</div>
+    </div>`;
+}
+
+function renderPDBudgetOverview(proj, pid) {
+  return _renderBudgetComingSoon('Overview',
+    'Project-level financial summary will roll up totals from Freight, Items, Expenses, and Time — projected vs actual, total billed vs collected, profit margin, and credits/overages to apply or bill on the next invoice.');
+}
+
+function renderPDBudgetExpenses(proj, pid) {
+  return _renderBudgetComingSoon('Expenses',
+    'Expense tracking will move here from the current top-level Expenses surface, scoped to this project, with edits to the categorization and rollup. Unbilled / pass-through / non-billable breakdowns stay tracked separately per the center-of-gravity framing.');
+}
+
+function renderPDBudgetTime(proj, pid) {
+  return _renderBudgetComingSoon('Time',
+    'Time entries scoped to this project from the global time tracker, plus per-employee profitability (billed rate vs internal cost) per project. Surfaces team-level margin alongside project margin.');
 }
 
 // ═════════════════ §1 Budget → Freight (Baylor 2026-06-19 spec) ═════════════════
@@ -14579,13 +14609,8 @@ function openBudgetAssociatedItemsModal(invoiceId) {
 }
 
 function renderPDBudgetItems(proj, pid) {
-  return `
-    <div style="background:var(--white);border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center">
-      <div style="font-family:var(--font-h);font-weight:900;font-size:18px;text-transform:uppercase;letter-spacing:0.04em;color:var(--mahogany);margin-bottom:10px">Items — coming soon</div>
-      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);line-height:1.6;max-width:500px;margin:0 auto">
-        Per-invoice item financial rollup will mirror the Freight page structure: Proposal Net / Invoiced / Net Actual / Margin per invoice, with per-item drill-down. Project totals at the top.
-      </div>
-    </div>`;
+  return _renderBudgetComingSoon('Items',
+    'Per-invoice item financial rollup mirrors the Freight page structure: Proposal Net / Invoiced / Net Actual / Margin per invoice, with per-item drill-down. Project totals at the top.');
 }
 
 function renderPDFreight(proj, pid) {
