@@ -14494,45 +14494,84 @@ function openBudgetAssociatedItemsModal(invoiceId) {
   const pid = inv.projectId;
   const fin = getInvoiceFreightFinancials(inv, pid);
   if (!fin) return;
-  const itemName = (id) => {
+  const itemNameHtml = (id) => {
     const it = _findItemById(id);
     if (!it) return '(missing item)';
     const space = Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
     return `${escH(it.name || '(unnamed)')}<span style="color:var(--text-light);font-size:10px">${space ? ' · '+escH(space.name||'') : ''}</span>`;
   };
-  // Only items that have adjacent activity contribute to this modal.
-  const rows = fin.perItemRows.filter(r => r.adjacentRaw > 0).slice().sort((a, b) => b.adjacentRaw - a.adjacentRaw);
-  const totals = rows.reduce((s, r) => ({
-    raw: s.raw + r.adjacentRaw,
-    marked: s.marked + r.adjacentMarked,
-  }), { raw: 0, marked: 0 });
-  // Display as negative because these are studio expenses (per spec,
-  // associated charges roll into the Δ as overage).
-  const trsHtml = rows.map(r => {
-    const blendedPct = r.adjacentRaw > 0 ? Math.round(((r.adjacentMarked / r.adjacentRaw) - 1) * 1000) / 10 : 0;
-    return `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${itemName(r.itemId)}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#b33">${_bfFmt(-r.adjacentRaw)}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#b33">${_bfFmt(-r.adjacentMarked)}${blendedPct > 0 ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;font-weight:400;margin-top:1px">+${blendedPct}%</div>` : ''}</td>
-    </tr>`;
-  }).join('');
+  const catName = (catId) => (S.freightCategories || []).find(c => c.id === catId)?.name || '(uncategorized)';
+
+  // Re-derive per-item-per-category breakdown so each (item, category)
+  // adjacent actual gets its own row. Only items whose most-recent
+  // billing invoice is THIS one contribute (matches the rollup math).
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const itemSet = new Set(fin.itemIdsOnInvoice);
+  const groupsByItem = new Map(); // itemId -> Map(categoryId -> {raw, marked, markupPct})
+  itemSet.forEach(itemId => {
+    const mostRecent = _itemMostRecentInvoice(itemId);
+    if (!mostRecent || mostRecent.id !== inv.id) return;
+    _faActualsForItem(itemId).forEach(a => {
+      if (a.freightCategoryId === primaryCatId) return; // skip primary freight
+      const catId = a.freightCategoryId || '__nocat__';
+      const amt = Number(a.amount) || 0;
+      if (amt <= 0) return;
+      const markupPct = _faActualMarkupPct(a, pid);
+      const marked = amt * (1 + markupPct / 100);
+      if (!groupsByItem.has(itemId)) groupsByItem.set(itemId, new Map());
+      const catMap = groupsByItem.get(itemId);
+      const cur = catMap.get(catId) || { raw: 0, marked: 0, markupPct };
+      cur.raw += amt;
+      cur.marked += marked;
+      cur.markupPct = markupPct; // last write wins — actuals in same cat share the same rate
+      catMap.set(catId, cur);
+    });
+  });
+
+  // Flatten into rows for display. Sort by raw amount desc within item,
+  // items themselves sorted by total adjacent raw desc.
+  const itemOrder = Array.from(groupsByItem.entries())
+    .map(([itemId, catMap]) => ({
+      itemId,
+      total: Array.from(catMap.values()).reduce((s, c) => s + c.raw, 0),
+      cats: Array.from(catMap.entries()).map(([catId, v]) => ({ catId, ...v })).sort((a, b) => b.raw - a.raw),
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  let trsHtml = '';
+  let totalsRaw = 0, totalsMarked = 0;
+  itemOrder.forEach((g, gIdx) => {
+    g.cats.forEach((c, cIdx) => {
+      totalsRaw += c.raw;
+      totalsMarked += c.marked;
+      const isFirstCatForItem = cIdx === 0;
+      trsHtml += `<tr style="border-top:${isFirstCatForItem ? '1px solid var(--border)' : '1px dashed rgba(var(--text-rgb),0.10)'}">
+        <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);vertical-align:top">${isFirstCatForItem ? itemNameHtml(g.itemId) : '<span style="color:var(--text-light)">↳</span>'}</td>
+        <td style="padding:6px 8px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);vertical-align:top">${escH(catName(c.catId))}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#b33;vertical-align:top">${_bfFmt(-c.raw)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#b33;vertical-align:top">${_bfFmt(-c.marked)}${c.markupPct > 0 ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;font-weight:400;margin-top:1px">+${c.markupPct}%</div>` : ''}</td>
+      </tr>`;
+    });
+  });
+
   $c('modal-budget-associated-items-title').textContent = `Associated Charges — ${inv.number || '(no number)'}`;
   $c('modal-budget-associated-items-body').innerHTML = `
-    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5;margin-bottom:14px">Tariffs, crating, processing fees, and other freight-adjacent vendor bills tagged to items billed on this invoice. Marked-up uses each actual's category markup default.</div>
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5;margin-bottom:14px">Tariffs, crating, processing fees, and other freight-adjacent vendor bills tagged to items billed on this invoice. Each category uses its own markup default from App Settings.</div>
     <table style="width:100%;border-collapse:collapse">
       <thead>
         <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
           <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700">Item</th>
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700">Category</th>
           <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Raw</th>
           <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Marked-up</th>
         </tr>
       </thead>
-      <tbody>${trsHtml || '<tr><td colspan="3" style="padding:20px;text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No associated/adjacent charges logged for items on this invoice.</td></tr>'}</tbody>
-      ${rows.length ? `<tfoot>
+      <tbody>${trsHtml || '<tr><td colspan="4" style="padding:20px;text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No associated/adjacent charges logged for items on this invoice.</td></tr>'}</tbody>
+      ${trsHtml ? `<tfoot>
         <tr style="border-top:2px solid var(--pecan)">
-          <td style="padding:8px;font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Total</td>
-          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totals.raw)}</td>
-          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totals.marked)}</td>
+          <td colspan="2" style="padding:8px;font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Total</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totalsRaw)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totalsMarked)}</td>
         </tr>
       </tfoot>` : ''}
     </table>`;
