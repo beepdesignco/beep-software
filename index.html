@@ -14166,15 +14166,15 @@ function renderFreightItemRow(item, sp, ledger, pid) {
     </div>`;
 }
 
-// §1 Phase D reconciliation strip — Estimated / Collected / Actual /
-// Net for one item. Lives at the top of the freight card (and the cost
-// card once we mirror this). Always-nets: net = collected − actual,
-// component breakdown stays in the per-category table below.
+// §1 reconciliation strip — Collected / Actuals / Net for one item.
+// Three cells, no proposal-side data. Net cell labels itself as credit
+// or overage in-line (color + sublabel). Per Baylor's simplification
+// 2026-06-18: proposal-side "Estimated" reference dropped from the
+// strip; it lives on the proposal page where it belongs.
 function _renderFreightReconStrip(item, pid) {
   const recon = getItemFreightReconciliation(item.id, item);
-  // Distinguish "no actuals logged" from "actual logged at $0" — the
-  // latter is real data (per spec, $0 actuals turn the full collected
-  // amount into a credit), so the cell should show "$0", not "—".
+  // Distinguish "no actuals/collected" from "value happens to be $0" —
+  // the latter is real data (a logged $0 actual + collected = full credit).
   const hasActuals = _faActualsForItem(item.id).length > 0;
   const hasCollectedRows = (S.invoices || []).some(inv =>
     inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
@@ -14182,22 +14182,11 @@ function _renderFreightReconStrip(item, pid) {
   const cell = (label, value, color, sub) => `
     <div style="flex:1;min-width:0">
       <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">${label}</div>
-      <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:${color||'var(--text-dark)'};line-height:1.1">${value}</div>
-      ${sub ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${sub}</div>` : ''}
+      <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${color||'var(--text-dark)'};line-height:1.1">${value}</div>
+      ${sub ? `<div style="font-family:var(--font-b);font-size:10px;color:${color||'var(--text-light)'};font-style:italic;margin-top:2px">${sub}</div>` : ''}
     </div>`;
-  const estimatedVal = recon.appliedDollarValue > 0 ? fmt(recon.appliedDollarValue) : '—';
-  // When both estimated and collected exist, surface the billed amount as
-  // a subline so the proposal-vs-billed spread is visible in-place
-  // (locked decision 2026-06-18). Falls back to the % at approval label
-  // when nothing's been billed yet.
-  let estimatedSub = '';
-  if (recon.appliedDollarValue > 0 && hasCollectedRows) {
-    estimatedSub = `billed ${fmt(recon.collected)}`;
-  } else if (recon.appliedPercent != null) {
-    estimatedSub = `${recon.appliedPercent}% at approval`;
-  }
   const collectedVal = hasCollectedRows ? fmt(recon.collected) : '—';
-  const actualVal = hasActuals ? fmt(recon.actual) : '—';
+  const actualsVal = hasActuals ? fmt(recon.actual) : '—';
   let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
   if (hasCollectedRows || hasActuals) {
     const absNet = Math.abs(recon.net);
@@ -14207,20 +14196,22 @@ function _renderFreightReconStrip(item, pid) {
   }
   return `
     <div style="display:flex;gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px">
-      ${cell('Estimated', estimatedVal, 'var(--pecan)', estimatedSub)}
       ${cell('Collected', collectedVal, 'var(--text-dark)')}
-      ${cell('Actual', actualVal, 'var(--text-dark)')}
-      ${cell('Net', netVal, netColor, netSub)}
+      ${cell('Actuals', actualsVal, 'var(--text-dark)')}
+      ${cell('Credit / Overage', netVal, netColor, netSub)}
     </div>`;
 }
 
-// Compact freight section for the PM item detail panel — same data as
-// the project Freight tab's per-item row, scoped to this item only.
+// Compact freight section for the PM item detail panel. Per Baylor's
+// simplification 2026-06-18: three-cell strip (Collected / Actuals /
+// Credit-Overage) over the logged-actuals list. The legacy proposal-side
+// per-category breakdown was retired here — proposal data lives on the
+// proposal page where it belongs. Each logged-actual row stays clickable
+// to open the freight-actual edit modal.
 function renderItemFreightCard(item, pid, spId) {
-  const charges = _faChargesForItem(item);
   const actuals = _faActualsForItem(item.id);
   const collected = getItemFreightCollected(item.id);
-  const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0 || collected > 0;
+  const hasActivity = actuals.length > 0 || collected > 0;
   if (!hasActivity) {
     return `
     <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
@@ -14228,47 +14219,17 @@ function renderItemFreightCard(item, pid, spId) {
         <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Freight</div>
         <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
       </div>
-      <div style="font-size:11px;color:var(--text-light);font-style:italic">No freight charges, actuals, or collected freight on this item yet.</div>
+      <div style="font-size:11px;color:var(--text-light);font-style:italic">No freight collected or actuals on this item yet.</div>
     </div>`;
   }
-  const ledger = computeItemFreightLedger(item, pid);
-  // §1 Phase D — chip reads Collected vs Actual (new spec), not the old
-  // Charged vs Actual. The actionable "Overage to bill" / "Credit
-  // available" message reflects what's owed/owing in real money terms.
-  const chip = _faChipFromRecon(item, pid);
-  const reconStrip = _renderFreightReconStrip(item, pid);
-  const grid = ledger.rows.map(r => `
-    <tr style="border-top:1px solid var(--border)">
-      <td style="padding:5px 6px;color:var(--text-dark);font-weight:600">${escH(r.categoryName)}</td>
-      <td style="padding:5px 6px">${_faStateBadge(r.dominantState)}</td>
-      <td style="padding:5px 6px;text-align:right;color:var(--text-dark)">${r.charged > 0 ? fmt(r.charged) : '—'}</td>
-      <td style="padding:5px 6px;text-align:right;color:var(--text-dark)">${r.actualRaw > 0 ? fmt(r.actualRaw) : '—'}</td>
-      <td style="padding:5px 6px;text-align:right">${_faVarianceCell(r)}</td>
-    </tr>`).join('');
   return `
     <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
         <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Freight</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          ${chip}
-          <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
-        </div>
+        <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
       </div>
-      ${reconStrip}
-      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">By category (proposal-side breakdown — quote vs actual)</div>
-      <table style="width:100%;font-family:var(--font-b);font-size:11px;border-collapse:collapse">
-        <thead>
-          <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
-            <th style="text-align:left;padding:4px 6px;font-weight:700">Category</th>
-            <th style="text-align:left;padding:4px 6px;font-weight:700">Status</th>
-            <th style="text-align:right;padding:4px 6px;font-weight:700">Quoted</th>
-            <th style="text-align:right;padding:4px 6px;font-weight:700">Actual</th>
-            <th style="text-align:right;padding:4px 6px;font-weight:700">Quote vs Actual</th>
-          </tr>
-        </thead>
-        <tbody>${grid}</tbody>
-      </table>
-      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+      ${_renderFreightReconStrip(item, pid)}
+      <div style="margin-top:6px">
         <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">Logged actuals</div>
         ${_faActualsListForItem(item.id)}
       </div>
