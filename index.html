@@ -3680,41 +3680,6 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
-<!-- ═════════════════ FREIGHT FROM NET MODAL ═════════════════ -->
-<!-- Enter vendor net + apply markup to compute the gross freight $ to
-     bill on this invoice. Lets standalone known freight be entered the
-     way most users actually think about it: "vendor charged me $X, I
-     mark it up Y%." Result populates inv-freight as the gross amount. -->
-<div class="overlay" id="modal-freight-from-net">
-  <div class="modal" style="width:440px">
-    <button class="modal-x" onclick="closeModal('modal-freight-from-net')">✕</button>
-    <div class="modal-title">Calculate Freight from Net Cost</div>
-    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5;margin-bottom:14px">
-      Enter what the vendor charged you (net) and the markup you want to apply. The gross fills the invoice's Freight field. The retainer flow is separate — use that instead if you're billing a % of subtotal.
-    </div>
-    <div class="frow">
-      <div class="fg">
-        <label class="fl">Vendor Net Cost</label>
-        <input type="text" class="fi" id="ffn-net" placeholder="$0.00" oninput="_recalcFreightFromNet()">
-      </div>
-      <div class="fg">
-        <label class="fl">Markup %</label>
-        <input type="number" class="fi" id="ffn-markup" min="0" step="1" oninput="_recalcFreightFromNet()">
-      </div>
-    </div>
-    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark);margin-top:8px">
-      <input type="checkbox" id="ffn-cost-only" onchange="_ffnToggleCostOnly()" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
-      Bill Cost Only <span style="color:var(--text-light);font-style:italic">(forces 0% markup)</span>
-    </label>
-    <div id="ffn-preview" style="background:rgba(45,122,74,0.06);border:1px solid rgba(45,122,74,0.20);border-radius:var(--r);padding:12px 14px;margin-top:14px;font-family:var(--font-b);font-size:13px;color:var(--text-dark);line-height:1.6"></div>
-    <div class="modal-footer">
-      <div style="flex:1"></div>
-      <button class="btn btn-secondary" onclick="closeModal('modal-freight-from-net')">Cancel</button>
-      <button class="btn btn-primary" onclick="applyFreightFromNet()">Apply</button>
-    </div>
-  </div>
-</div>
-
 <!-- ═════════════════ INVITE MEMBER MODAL ═════════════════ -->
 <div class="overlay" id="modal-invite-member">
   <div class="modal" style="width:480px">
@@ -15335,53 +15300,6 @@ function applyFreightRetainer() {
   toast(itemIds.length
     ? `Freight retainer applied to ${itemIds.length} item${itemIds.length === 1 ? '' : 's'}.`
     : 'Freight retainer cleared.');
-}
-
-// ─── Freight from Net modal ──
-// Lets the user enter a vendor net + markup % to compute the gross
-// freight $ to bill on this invoice. Doesn't touch the retainer
-// (separate concept) and doesn't mutate the proposal — it just fills
-// the inv-freight DOM input with the calculated gross. recalcInvoice()
-// at the end picks up the new value the same way a manual type would.
-function openFreightFromNetModal() {
-  const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
-  const pid = inv?.projectId;
-  const defaultMarkup = getProjectFreightMarkupPct(pid);
-  $c('ffn-net').value = '';
-  $c('ffn-markup').value = defaultMarkup;
-  $c('ffn-cost-only').checked = false;
-  _recalcFreightFromNet();
-  $c('modal-freight-from-net').classList.add('open');
-  setTimeout(() => $c('ffn-net').focus(), 60);
-}
-
-function _ffnToggleCostOnly() {
-  const off = $c('ffn-cost-only').checked;
-  const mEl = $c('ffn-markup');
-  if (off) { mEl.dataset.prev = mEl.value; mEl.value = 0; mEl.disabled = true; }
-  else { if (mEl.dataset.prev != null) mEl.value = mEl.dataset.prev; mEl.disabled = false; }
-  _recalcFreightFromNet();
-}
-
-function _recalcFreightFromNet() {
-  const net = parse$($c('ffn-net').value);
-  const markup = parseFloat($c('ffn-markup').value) || 0;
-  const gross = net * (1 + markup / 100);
-  $c('ffn-preview').innerHTML = net > 0
-    ? `Net <strong>${fmt(net)}</strong> × ${markup}% markup = <strong style="color:#1a6e3a;font-size:15px">${fmt(gross)}</strong> gross<br><span style="color:var(--text-light);font-size:11px;font-style:italic">Apply will set the invoice's Freight to ${fmt(gross)}.</span>`
-    : `<span style="color:var(--text-light);font-style:italic">Enter a net amount to preview.</span>`;
-}
-
-function applyFreightFromNet() {
-  const net = parse$($c('ffn-net').value);
-  if (net <= 0) { toast('Enter a net cost greater than 0.'); return; }
-  const markup = parseFloat($c('ffn-markup').value) || 0;
-  const gross = net * (1 + markup / 100);
-  const fEl = $c('inv-freight');
-  if (fEl) fEl.value = gross.toFixed(2);
-  closeModal('modal-freight-from-net');
-  recalcInvoice();
-  toast(`Freight set to ${fmt(gross)} (net ${fmt(net)} + ${markup}% markup).`);
 }
 
 function renderPDSettings(proj, pid) {
@@ -27954,10 +27872,7 @@ function renderInvoiceBuilder() {
       <div class="fg" style="flex:1">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
           <label class="fl" style="margin-bottom:0">Freight</label>
-          <div style="display:flex;align-items:center;gap:6px">
-            <button class="btn btn-ghost btn-sm" onclick="openFreightFromNetModal()" style="font-size:10px;padding:3px 8px;border:1px solid var(--pecan);color:var(--pecan);background:transparent" title="Enter the vendor net + apply markup to compute the gross billed amount">Calc from Net</button>
-            ${hasInvItems ? `<button class="btn btn-ghost btn-sm" onclick="openFreightRetainerModal()" style="font-size:10px;padding:3px 8px;border:1px solid var(--russet);color:var(--russet);background:transparent">Bill as Retainer (%)</button>` : ''}
-          </div>
+          ${hasInvItems ? `<button class="btn btn-ghost btn-sm" onclick="openFreightRetainerModal()" style="font-size:10px;padding:3px 8px;border:1px solid var(--russet);color:var(--russet);background:transparent">Bill as Retainer (%)</button>` : ''}
         </div>
         <input type="text" class="fi" id="inv-freight" value="${inv.freight||''}" placeholder="$0.00" onchange="recalcInvoice()">
       </div>
