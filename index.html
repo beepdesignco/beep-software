@@ -7341,6 +7341,9 @@ async function loadFromSupabase() {
   // overpayment that already has a credit row on the project tied to the
   // same invoice. Runs once per load; new payments use the inline path.
   try { _backfillOverpaymentCredits(); } catch (e) { console.warn('[overpayment-backfill]', e); }
+  // §1 Phase B — backfill freight allocations for any sent invoice that
+  // pre-dates the allocation system. Idempotent across loads.
+  try { _backfillFreightAllocations(); } catch (e) { console.warn('[freight-allocation-backfill]', e); }
 
   // Snapshot what's currently in Supabase so diff-sync knows the baseline.
   if (typeof captureSbShadow === 'function') captureSbShadow();
@@ -10075,6 +10078,32 @@ function copyQRCard(btn) {
 // §4 Project credits modal — read-only list of credit rows + their source.
 // Apply-to-future-invoice flow will be added later; this is just visibility.
 // §4 backfill: scan every invoice for cases where settled (non-pending,
+// §1 Phase B backfill — one-shot scan that calls allocateInvoiceFreight
+// for any non-draft, non-cancelled invoice with freight > 0 that doesn't
+// yet have an auto_proportional row. Runs once per load; subsequent
+// loads skip invoices that already have auto allocations. Manual +
+// deferred_billed rows are never touched (allocateInvoiceFreight only
+// drops auto rows before re-deriving).
+function _backfillFreightAllocations() {
+  if (!Array.isArray(S.invoices)) return;
+  let backfilled = 0;
+  S.invoices.forEach(inv => {
+    if (inv.status === 'draft' || inv.status === 'cancelled') return;
+    const freightTotal = Number(inv.freight) || 0;
+    if (freightTotal <= 0) return;
+    const hasAuto = (inv.freightAllocations || []).some(a => a.allocationSource === 'auto_proportional');
+    if (hasAuto) return;
+    allocateInvoiceFreight(inv);
+    if ((inv.freightAllocations || []).some(a => a.allocationSource === 'auto_proportional')) {
+      backfilled++;
+    }
+  });
+  if (backfilled > 0) {
+    save();
+    setTimeout(() => toast(`Backfilled freight allocations for ${backfilled} invoice${backfilled === 1 ? '' : 's'}.`), 700);
+  }
+}
+
 // positive) payments exceed inv.total. For each, ensure the project has a
 // credit row tagged to that invoice. Idempotent via sourceInvoiceId match
 // — if a credit already exists for an overpayment on this invoice, skip.
