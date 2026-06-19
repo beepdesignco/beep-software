@@ -14115,7 +14115,6 @@ function renderPDFreight(proj, pid) {
       </select>
       <select class="fi fsel" onchange="onFreightFilterChange('freightStatus', this.value)" style="font-size:12px;padding:6px 10px;width:auto">
         <option value="">All freight statuses</option>
-        <option value="known"     ${f.freightStatus === 'known' ? 'selected' : ''}>Known</option>
         <option value="allowance" ${f.freightStatus === 'allowance' ? 'selected' : ''}>Allowance</option>
         <option value="deferred"  ${f.freightStatus === 'deferred' ? 'selected' : ''}>Deferred</option>
       </select>
@@ -14187,13 +14186,15 @@ function renderFreightSummaryHeader(s) {
 }
 
 function _faStateBadge(state) {
+  // Known was retired 2026-06-19; existing rows render as Allowance.
+  // Picker only offers Deferred / Allowance / None going forward.
+  const norm = state === 'known' ? 'allowance' : state;
   const map = {
-    known:     { label: 'Known',     color: '#1a6e3a', bg: 'rgba(26,110,58,0.10)' },
     allowance: { label: 'Allowance', color: '#7A4A10', bg: 'rgba(122,74,16,0.10)' },
     deferred:  { label: 'Deferred',  color: '#2d5a8a', bg: 'rgba(45,90,138,0.10)' },
     none:      { label: 'None',      color: 'var(--text-light)', bg: 'rgba(var(--text-rgb),0.06)' },
   };
-  const m = map[state] || map.none;
+  const m = map[norm] || map.none;
   return `<span style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:2px 7px;border-radius:8px;color:${m.color};background:${m.bg}">${m.label}</span>`;
 }
 
@@ -15107,10 +15108,22 @@ function openFreightRetainerModal() {
   const existingPct = existingRetainer && existingRetainer.pct != null
     ? Number(existingRetainer.pct) : null;
 
+  // §1 2026-06-19 — explicit 'none' freight state means the item never
+  // ships (service, labor, digital, etc.) and should never enter a
+  // retainer pool. Items with NO freight row at all stay eligible —
+  // those are implicitly deferred per Baylor's model.
+  const isExplicitNoneFreight = (item) => {
+    const charges = (S.freightCharges || []).filter(c =>
+      c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryId
+    );
+    return charges.length > 0 && charges.every(c => c.state === 'none');
+  };
+
   const rows = [];
   (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
     if (!_invSelectedProposalItems.has(item.id)) return;
     if (isFreightItem(item)) return; // freight-typed line items aren't retainer-eligible
+    if (isExplicitNoneFreight(item)) return; // explicit None never joins the pool
     const qty = parseFloat(item.qty) || 1;
     const subtotal = getItemClient(item, pid) * qty;
     const existing = (S.freightCharges || []).find(c =>
@@ -15187,9 +15200,10 @@ function _freightRetainerBadge(r) {
   if (e.state === 'allowance' && e.valueType === 'percent' && e.value != null && e.value !== '') {
     return { text: `Proposal has ${Number(e.value)}% allowance — selecting bills the retainer % here instead (proposal unchanged)`, color: '#6a6a6a' };
   }
+  // 'known' was retired 2026-06-19 — treat as allowance for display.
   if (e.state === 'known' && e.value != null && e.value !== '') {
-    const v = e.valueType === 'percent' ? `${e.value}%` : `$${Number(e.value).toFixed(2)}`;
-    return { text: `Proposal has known freight (${v}) — selecting bills the retainer % here instead (proposal unchanged)`, color: '#b35a00' };
+    const v = e.valueType === 'percent' ? `${Number(e.value)}% allowance` : `$${Number(e.value).toFixed(2)} manual allowance`;
+    return { text: `Proposal has ${v} — selecting bills the retainer % here instead (proposal unchanged)`, color: '#b35a00' };
   }
   if (e.state === 'deferred') return { text: 'Proposal: deferred — selecting bills the retainer % here', color: '#6a6a6a' };
   return null;
@@ -15241,7 +15255,7 @@ function renderFreightRetainerPreview() {
         if (r.existing && r.existing.value != null && r.existing.value !== '') {
           const v = r.existing.valueType === 'percent' ? `${r.existing.value}%` : `$${Number(r.existing.value).toFixed(2)}`;
           if (r.existing.state === 'allowance') kind = `${v} allowance (proposal)`;
-          else if (r.existing.state === 'known') kind = `${v} known (proposal, marked up)`;
+          else if (r.existing.state === 'known') kind = `${v} allowance (proposal, marked up)`;
         }
         nonRetainerSources.push({ name: r.itemName, space: r.spaceName, amount: amt, kind });
       }
@@ -18209,7 +18223,6 @@ function renderModalFreight() {
           <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
           <select class="fi fsel" id="frt-state" onchange="onFreightStateChange(this.value)">
             <option value="" ${!f.state ? 'selected' : ''}>— Pick a status —</option>
-            <option value="known"     ${f.state === 'known' ? 'selected' : ''}>Known</option>
             <option value="allowance" ${f.state === 'allowance' ? 'selected' : ''}>Allowance</option>
             <option value="deferred"  ${f.state === 'deferred' ? 'selected' : ''}>Deferred</option>
             <option value="none"      ${f.state === 'none' ? 'selected' : ''}>None</option>
@@ -18303,7 +18316,6 @@ function renderModalAdjacent() {
             <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
             <select class="fi fsel" onchange="onAdjacentStateChange(${i}, this.value)">
               <option value="" ${!row.state ? 'selected' : ''}>— Pick a status —</option>
-              <option value="known"     ${row.state === 'known' ? 'selected' : ''}>Known</option>
               <option value="allowance" ${row.state === 'allowance' ? 'selected' : ''}>Allowance</option>
               <option value="deferred"  ${row.state === 'deferred' ? 'selected' : ''}>Deferred</option>
               <option value="none"      ${row.state === 'none' ? 'selected' : ''}>None</option>
@@ -18569,7 +18581,6 @@ function renderComponentFreight(c) {
           <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
           <select class="fi fsel" onchange="onComponentFreightStateChange('${c.id}', this.value)">
             <option value="" ${!f.state ? 'selected' : ''}>— Pick a status —</option>
-            <option value="known"     ${f.state === 'known' ? 'selected' : ''}>Known</option>
             <option value="allowance" ${f.state === 'allowance' ? 'selected' : ''}>Allowance</option>
             <option value="deferred"  ${f.state === 'deferred' ? 'selected' : ''}>Deferred</option>
             <option value="none"      ${f.state === 'none' ? 'selected' : ''}>None</option>
@@ -18635,7 +18646,6 @@ function renderComponentAdjacent(c) {
             <label class="fl">Freight Cost Status <span style="color:#b33">*</span></label>
             <select class="fi fsel" onchange="onComponentAdjacentStateChange('${c.id}', ${i}, this.value)">
               <option value="" ${!row.state ? 'selected' : ''}>— Pick a status —</option>
-              <option value="known"     ${row.state === 'known' ? 'selected' : ''}>Known</option>
               <option value="allowance" ${row.state === 'allowance' ? 'selected' : ''}>Allowance</option>
               <option value="deferred"  ${row.state === 'deferred' ? 'selected' : ''}>Deferred</option>
               <option value="none"      ${row.state === 'none' ? 'selected' : ''}>None</option>
