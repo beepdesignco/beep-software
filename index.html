@@ -9742,6 +9742,71 @@ function calcItemActualCost(item) {
   return primary + itemFreight + itemAdd;
 }
 
+// §1 / §2 item cost helpers — goods-only (no freight, no tagged expenses).
+// Used by the item cost reconciliation strip on the PM detail page.
+
+function getItemGoodsCostActual(item) {
+  if (!item) return 0;
+  if (item.type === 'constructed') {
+    return (item.components || []).reduce((s, c) => s + parse$(c.costActual || ''), 0);
+  }
+  return parse$(item.costActual || '');
+}
+
+// Marked-up actual = "what we would have billed the client if we'd
+// known actuals upfront." Uses each row's effective markup so constructed
+// items with mixed-markup components stay accurate.
+function getItemGoodsCostActualMarkedUp(item, pid) {
+  if (!item) return 0;
+  if (item.type === 'constructed') {
+    return (item.components || []).reduce((s, c) => {
+      const actual = parse$(c.costActual || '');
+      const mk = componentEffectiveMarkup(c, item, pid);
+      return s + actual * (1 + mk / 100);
+    }, 0);
+  }
+  const actual = parse$(item.costActual || '');
+  const mk = effectiveMarkup(item, pid);
+  return actual * (1 + mk / 100);
+}
+
+// Composite cost reconciliation for one item — mirrors the freight
+// reconciliation so the cost strip and freight strip read the same way.
+function getItemCostReconciliation(item, pid) {
+  if (!item) return null;
+  const proposalNet = calcProposalNetCost(item);
+  const invoiced = getItemBilledOnInvoices(item.id);
+  const rawActual = getItemGoodsCostActual(item);
+  const realActual = Math.round(getItemGoodsCostActualMarkedUp(item, pid) * 100) / 100;
+  // For sublabel: use item-level effective markup. Constructed items with
+  // mixed-markup components — show "blended" in the label.
+  let markupPct = effectiveMarkup(item, pid);
+  let isBlended = false;
+  if (item.type === 'constructed' && rawActual > 0) {
+    // Detect mixed component markup
+    const ms = new Set((item.components || []).map(c => componentEffectiveMarkup(c, item, pid)));
+    if (ms.size > 1) {
+      markupPct = Math.round(((realActual / rawActual) - 1) * 1000) / 10;
+      isBlended = true;
+    }
+  }
+  const rawNet = invoiced - rawActual;
+  const realNet = invoiced - realActual;
+  return {
+    proposalNet,
+    invoiced,
+    rawActual,
+    realActual,
+    markupPct,
+    isBlendedMarkup: isBlended,
+    rawNet,
+    realNet,
+    net: realNet,
+    isCredit: realNet > 0,
+    isOverage: realNet < 0,
+  };
+}
+
 function hasAnyActualInput(item) {
   if (!item) return false;
   if ((item.costActual || '').toString().trim()) return true;
@@ -9771,6 +9836,47 @@ function renderAdditionalCostsList(costs, onFieldSave, onRemove, onAdd) {
     ${rows || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:2px 0">No additional costs.</div>'}
     <button class="btn btn-ghost btn-sm" onclick="${onAdd()}" style="font-size:11px;margin-top:4px;padding:4px 10px">+ Add cost</button>
   `;
+}
+
+// §1 / §2 item cost reconciliation strip — Proposal Net / Invoiced /
+// Net Actual / Net (margin or loss). Symmetric with the freight strip.
+// "Net" cell = Invoiced − (Net Actual × (1 + item markup)) — i.e., the
+// gap between what was billed and what would have been billed if you'd
+// known actuals upfront. Same color-coding rules as freight.
+function _renderItemCostReconStrip(item, pid) {
+  const recon = getItemCostReconciliation(item, pid);
+  if (!recon) return '';
+  const hasInvoiced = recon.invoiced > 0;
+  const hasActual = recon.rawActual > 0;
+  if (!hasInvoiced && !hasActual && recon.proposalNet === 0) return '';
+  const cell = (label, value, color, sub) => `
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">${label}</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:17px;color:${color||'var(--text-dark)'};line-height:1.1">${value}</div>
+      ${sub ? `<div style="font-family:var(--font-b);font-size:10px;color:${color||'var(--text-light)'};font-style:italic;margin-top:2px">${sub}</div>` : ''}
+    </div>`;
+  const proposalVal = recon.proposalNet > 0 ? fmt(recon.proposalNet) : '—';
+  const invoicedVal = hasInvoiced ? fmt(recon.invoiced) : '—';
+  const actualVal = hasActual ? fmt(recon.rawActual) : '—';
+  const actualSub = hasActual
+    ? (recon.markupPct > 0
+        ? `+${recon.markupPct}% ${recon.isBlendedMarkup ? 'blended' : 'markup'} → ${fmt(recon.realActual)}`
+        : 'no markup')
+    : '';
+  let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
+  if (hasInvoiced || hasActual) {
+    const absNet = Math.abs(recon.realNet);
+    if (recon.isCredit) { netVal = '+' + fmt(absNet); netColor = '#1a6e3a'; netSub = 'margin'; }
+    else if (recon.isOverage) { netVal = '−' + fmt(absNet); netColor = '#b33'; netSub = 'loss'; }
+    else { netVal = fmt(0); netColor = 'var(--text-mid)'; netSub = 'balanced'; }
+  }
+  return `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:12px">
+      ${cell('Proposal Net', proposalVal, 'var(--text-dark)')}
+      ${cell('Invoiced', invoicedVal, 'var(--text-dark)')}
+      ${cell('Net Actual', actualVal, 'var(--text-dark)', actualSub)}
+      ${cell('Margin / Loss', netVal, netColor, netSub)}
+    </div>`;
 }
 
 function renderCostTrackingCard(pid, spId, itemId, item) {
@@ -9844,10 +9950,7 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
     return `
     <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Cost Tracking</div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-family:var(--font-b);font-size:12px">
-        <span style="color:var(--text-mid)">Proposal Net Cost</span>
-        <span style="color:var(--text-dark);font-weight:700">${fmt(proposalNet)}</span>
-      </div>
+      ${_renderItemCostReconStrip(item, pid)}
       ${compRows ? `
       <table style="width:100%;border-collapse:collapse;margin-bottom:10px">
         <thead><tr>
@@ -9874,11 +9977,8 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
   return `
   <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
     <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Cost Tracking</div>
+    ${_renderItemCostReconStrip(item, pid)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div>
-        <label class="fl">Proposal Net Cost</label>
-        <div style="font-family:var(--font-h);font-weight:700;font-size:15px;color:var(--text-dark);padding:6px 0">${fmt(proposalNet)}</div>
-      </div>
       <div>
         <label class="fl">Actual Cost Paid</label>
         <input type="text" class="fi" value="${escH(item.costActual||'')}" placeholder="$0.00" onchange="savePMField('${pid}','${spId}','${itemId}','costActual',this.value.trim())">
@@ -13497,10 +13597,12 @@ function getItemFreightActualSum(itemId) {
   return _faActualsForItem(itemId).reduce((s, a) => s + (Number(a.amount) || 0), 0);
 }
 
-// Effective freight markup % for a project. Project override wins; falls
-// back to the studio-wide default; 0 if neither set. Stored on
-// proj.settings.freightMarkupPct (per-project) and studio_info
-// .defaultFreightMarkupPct (studio-wide).
+// Effective freight markup % for the PRIMARY Freight category on a
+// project. Project override wins; falls back to the studio-wide default;
+// 0 if neither set. Stored on proj.settings.freightMarkupPct (per-project)
+// and studio_info.defaultFreightMarkupPct (studio-wide). Non-primary
+// freight categories (Tariff, Crating, etc.) use their own per-category
+// defaultMarkupPct from S.freightCategories — see _faActualMarkupPct.
 function getProjectFreightMarkupPct(pid) {
   const proj = pid ? getProject(pid) : null;
   const projVal = proj?.settings?.freightMarkupPct;
@@ -13510,28 +13612,58 @@ function getProjectFreightMarkupPct(pid) {
   return 0;
 }
 
-// Composite reconciliation for one item. Returns both raw (vendor cost)
-// and real (vendor cost + project freight markup) sides so the strip
-// can show both. Credit/Overage classification uses the REAL net —
-// that's the actionable number per spec, because if you'd known the
-// actual upfront you'd have billed the marked-up amount.
+// Markup % for a single freight actual based on its category. Primary
+// Freight pulls the project freight markup (above). Every other category
+// keeps its existing per-category defaultMarkupPct in App Settings.
+function _faActualMarkupPct(actual, pid) {
+  const catId = actual.freightCategoryId;
+  const primaryId = getPrimaryFreightCategoryId();
+  if (catId && catId === primaryId) return getProjectFreightMarkupPct(pid);
+  const cat = (S.freightCategories || []).find(c => c.id === catId);
+  return cat?.defaultMarkupPct != null ? Number(cat.defaultMarkupPct) : 0;
+}
+
+// Composite reconciliation for one item. Returns raw + real on both
+// sides. Real = each actual marked up by its OWN category's markup %
+// (primary Freight uses project markup; others use their category
+// default). Strip's sublabel shows blended rate when categories mix.
+// Credit/Overage classification uses the REAL net — the actionable
+// recovery gap per spec.
 function getItemFreightReconciliation(itemId, item, pid) {
   const applied = item ? getItemFreightApplied(item) : null;
   const collected = getItemFreightCollected(itemId);
-  const rawActual = getItemFreightActualSum(itemId);
-  const markupPct = getProjectFreightMarkupPct(pid);
-  const realActual = Math.round(rawActual * (1 + markupPct / 100) * 100) / 100;
+  const actualRows = _faActualsForItem(itemId);
+  let rawActual = 0;
+  let realActual = 0;
+  const markupSet = new Set();
+  actualRows.forEach(a => {
+    const amt = Number(a.amount) || 0;
+    const pct = _faActualMarkupPct(a, pid);
+    rawActual += amt;
+    realActual += amt * (1 + pct / 100);
+    markupSet.add(pct);
+  });
+  rawActual = Math.round(rawActual * 100) / 100;
+  realActual = Math.round(realActual * 100) / 100;
+  let markupPct = 0, isBlended = false;
+  if (markupSet.size === 1) {
+    markupPct = [...markupSet][0];
+  } else if (markupSet.size > 1) {
+    markupPct = rawActual > 0 ? Math.round(((realActual / rawActual) - 1) * 1000) / 10 : 0;
+    isBlended = true;
+  }
   const rawNet = collected - rawActual;
   const realNet = collected - realActual;
   return {
     appliedDollarValue: applied?.dollarValue || 0,
     appliedPercent: applied?.percentApplied,
     collected,
-    actual: rawActual,         // backward-compat alias
+    actual: rawActual,
     rawActual,
     realActual,
     markupPct,
-    net: realNet,              // chip/headline use real
+    isBlendedMarkup: isBlended,
+    net: realNet,
     rawNet,
     realNet,
     isCredit: realNet > 0,
@@ -14214,7 +14346,11 @@ function _renderFreightReconStrip(item, pid) {
   const collectedVal = hasCollectedRows ? fmt(recon.collected) : '—';
   const rawActualsVal = hasActuals ? fmt(recon.rawActual) : '—';
   const realActualsVal = hasActuals ? fmt(recon.realActual) : '—';
-  const realActualsSub = hasActuals && recon.markupPct > 0 ? `+${recon.markupPct}% markup` : (hasActuals ? 'no markup' : '');
+  const realActualsSub = hasActuals
+    ? (recon.markupPct > 0
+        ? `+${recon.markupPct}% ${recon.isBlendedMarkup ? 'blended' : 'markup'}`
+        : 'no markup')
+    : '';
   let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
   if (hasCollectedRows || hasActuals) {
     const absNet = Math.abs(recon.realNet);
