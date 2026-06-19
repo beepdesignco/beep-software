@@ -14092,12 +14092,45 @@ function renderFreightItemRow(item, sp, ledger, pid) {
     </div>`;
 }
 
+// §1 Phase D reconciliation strip — Estimated / Collected / Actual /
+// Net for one item. Lives at the top of the freight card (and the cost
+// card once we mirror this). Always-nets: net = collected − actual,
+// component breakdown stays in the per-category table below.
+function _renderFreightReconStrip(item, pid) {
+  const recon = getItemFreightReconciliation(item.id, item);
+  const cell = (label, value, color, sub) => `
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">${label}</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:${color||'var(--text-dark)'};line-height:1.1">${value}</div>
+      ${sub ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${sub}</div>` : ''}
+    </div>`;
+  const estimatedVal = recon.appliedDollarValue > 0 ? fmt(recon.appliedDollarValue) : '—';
+  const estimatedSub = recon.appliedPercent != null ? `${recon.appliedPercent}% at approval` : '';
+  const collectedVal = recon.collected > 0 ? fmt(recon.collected) : '—';
+  const actualVal = recon.actual > 0 ? fmt(recon.actual) : '—';
+  let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
+  if (recon.collected > 0 || recon.actual > 0) {
+    const absNet = Math.abs(recon.net);
+    if (recon.isCredit) { netVal = '+' + fmt(absNet); netColor = '#1a6e3a'; netSub = 'credit'; }
+    else if (recon.isOverage) { netVal = '−' + fmt(absNet); netColor = '#b33'; netSub = 'overage'; }
+    else { netVal = fmt(0); netColor = 'var(--text-mid)'; netSub = 'balanced'; }
+  }
+  return `
+    <div style="display:flex;gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px">
+      ${cell('Estimated', estimatedVal, 'var(--pecan)', estimatedSub)}
+      ${cell('Collected', collectedVal, 'var(--text-dark)')}
+      ${cell('Actual', actualVal, 'var(--text-dark)')}
+      ${cell('Net', netVal, netColor, netSub)}
+    </div>`;
+}
+
 // Compact freight section for the PM item detail panel — same data as
 // the project Freight tab's per-item row, scoped to this item only.
 function renderItemFreightCard(item, pid, spId) {
   const charges = _faChargesForItem(item);
   const actuals = _faActualsForItem(item.id);
-  const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0;
+  const collected = getItemFreightCollected(item.id);
+  const hasActivity = charges.some(c => c.state !== 'none') || actuals.length > 0 || collected > 0;
   if (!hasActivity) {
     return `
     <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
@@ -14105,11 +14138,12 @@ function renderItemFreightCard(item, pid, spId) {
         <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Freight</div>
         <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
       </div>
-      <div style="font-size:11px;color:var(--text-light);font-style:italic">No freight charges or actuals on this item.</div>
+      <div style="font-size:11px;color:var(--text-light);font-style:italic">No freight charges, actuals, or collected freight on this item yet.</div>
     </div>`;
   }
   const ledger = computeItemFreightLedger(item, pid);
   const chip = _faChip(ledger.chip, item, pid);
+  const reconStrip = _renderFreightReconStrip(item, pid);
   const grid = ledger.rows.map(r => `
     <tr style="border-top:1px solid var(--border)">
       <td style="padding:5px 6px;color:var(--text-dark);font-weight:600">${escH(r.categoryName)}</td>
@@ -14127,6 +14161,8 @@ function renderItemFreightCard(item, pid, spId) {
           <button class="btn btn-ghost btn-sm" onclick="openNewFreightActual('${pid}', { itemId: '${item.id}' })" style="font-size:10px;padding:4px 8px">+ Log actual</button>
         </div>
       </div>
+      ${reconStrip}
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">By category (proposal-side breakdown)</div>
       <table style="width:100%;font-family:var(--font-b);font-size:11px;border-collapse:collapse">
         <thead>
           <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
