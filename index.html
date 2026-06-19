@@ -1806,6 +1806,10 @@ tr:hover .row-btns { opacity:1; }
           <div class="fg" style="margin-top:8px"><label class="fl">Wire Transfer Instructions <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— shown when a client chooses to pay by wire (bank, routing #, account #)</span></label>
             <textarea class="fi" id="as-studio-wire" style="min-height:80px;resize:vertical" onchange="saveStudioField('wireInstructions',this.value.trim())" placeholder="Bank: Chase&#10;Routing #: 021000021&#10;Account #: 1234567890&#10;Account Holder: Beep Design LLC"></textarea>
           </div>
+          <div class="fg" style="margin-top:8px;max-width:240px">
+            <label class="fl">Default Freight Markup % <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— applied to vendor freight bills when reconciling. 0 = opt out studio-wide.</span></label>
+            <input type="number" class="fi" id="as-studio-freight-markup" min="0" step="1" onchange="saveStudioField('defaultFreightMarkupPct', this.value === '' ? null : (parseFloat(this.value) || 0))" placeholder="0">
+          </div>
           <div class="fg" style="margin-top:8px">
             <label class="fl">PO Sidemark Template <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— default sidemark on new POs (manual override always wins)</span></label>
             <input type="text" class="fi" id="as-studio-sidemark-tpl" onchange="saveStudioField('sidemarkTemplate',this.value.trim())" placeholder="{client.lastName}-{space.name}">
@@ -13493,22 +13497,45 @@ function getItemFreightActualSum(itemId) {
   return _faActualsForItem(itemId).reduce((s, a) => s + (Number(a.amount) || 0), 0);
 }
 
-// Composite reconciliation for one item. Used by the PM rollup, project
-// P/L, and dashboard surfaces. Cheap to call — all three components are
-// in-memory lookups against S.
-function getItemFreightReconciliation(itemId, item) {
+// Effective freight markup % for a project. Project override wins; falls
+// back to the studio-wide default; 0 if neither set. Stored on
+// proj.settings.freightMarkupPct (per-project) and studio_info
+// .defaultFreightMarkupPct (studio-wide).
+function getProjectFreightMarkupPct(pid) {
+  const proj = pid ? getProject(pid) : null;
+  const projVal = proj?.settings?.freightMarkupPct;
+  if (projVal != null && projVal !== '') return Number(projVal) || 0;
+  const studioVal = (S.studio || {}).defaultFreightMarkupPct;
+  if (studioVal != null && studioVal !== '') return Number(studioVal) || 0;
+  return 0;
+}
+
+// Composite reconciliation for one item. Returns both raw (vendor cost)
+// and real (vendor cost + project freight markup) sides so the strip
+// can show both. Credit/Overage classification uses the REAL net —
+// that's the actionable number per spec, because if you'd known the
+// actual upfront you'd have billed the marked-up amount.
+function getItemFreightReconciliation(itemId, item, pid) {
   const applied = item ? getItemFreightApplied(item) : null;
   const collected = getItemFreightCollected(itemId);
-  const actual = getItemFreightActualSum(itemId);
-  const net = collected - actual;
+  const rawActual = getItemFreightActualSum(itemId);
+  const markupPct = getProjectFreightMarkupPct(pid);
+  const realActual = Math.round(rawActual * (1 + markupPct / 100) * 100) / 100;
+  const rawNet = collected - rawActual;
+  const realNet = collected - realActual;
   return {
     appliedDollarValue: applied?.dollarValue || 0,
     appliedPercent: applied?.percentApplied,
     collected,
-    actual,
-    net,
-    isCredit: net > 0,
-    isOverage: net < 0,
+    actual: rawActual,         // backward-compat alias
+    rawActual,
+    realActual,
+    markupPct,
+    net: realNet,              // chip/headline use real
+    rawNet,
+    realNet,
+    isCredit: realNet > 0,
+    isOverage: realNet < 0,
   };
 }
 
@@ -14062,20 +14089,20 @@ function _faChip(chip, item, pid) {
 // estimate" rather than "what's actually owed to/from the client."
 // Used in place of _faChip on the PM item freight card.
 function _faChipFromRecon(item, pid) {
-  const recon = getItemFreightReconciliation(item.id, item);
+  const recon = getItemFreightReconciliation(item.id, item, pid);
   const hasActuals = _faActualsForItem(item.id).length > 0;
   const hasCollected = (S.invoices || []).some(inv =>
     inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
   );
   if (!hasActuals && !hasCollected) return '';
   const SPOT_ON = 0.5;
-  if (Math.abs(recon.net) <= SPOT_ON) {
+  if (Math.abs(recon.realNet) <= SPOT_ON) {
     return _faChip({ kind: 'spot' }, item, pid);
   }
   if (recon.isCredit) {
-    return _faChip({ kind: 'credit', amount: recon.net }, item, pid);
+    return _faChip({ kind: 'credit', amount: recon.realNet }, item, pid);
   }
-  return _faChip({ kind: 'overage', amount: Math.abs(recon.net) }, item, pid);
+  return _faChip({ kind: 'overage', amount: Math.abs(recon.realNet) }, item, pid);
 }
 
 function _faVarianceCell(row) {
@@ -14166,15 +14193,14 @@ function renderFreightItemRow(item, sp, ledger, pid) {
     </div>`;
 }
 
-// §1 reconciliation strip — Collected / Actuals / Net for one item.
-// Three cells, no proposal-side data. Net cell labels itself as credit
-// or overage in-line (color + sublabel). Per Baylor's simplification
-// 2026-06-18: proposal-side "Estimated" reference dropped from the
-// strip; it lives on the proposal page where it belongs.
+// §1 reconciliation strip — Collected / Raw Actuals / Real Actuals /
+// Credit-Overage. Raw = vendor bills as-is. Real = vendor bills marked
+// up by the project's freight markup % (or studio default). Net cell
+// uses real, because that's the actionable recovery gap — what you'd
+// have billed if you'd known actuals upfront.
 function _renderFreightReconStrip(item, pid) {
-  const recon = getItemFreightReconciliation(item.id, item);
-  // Distinguish "no actuals/collected" from "value happens to be $0" —
-  // the latter is real data (a logged $0 actual + collected = full credit).
+  const recon = getItemFreightReconciliation(item.id, item, pid);
+  // Distinguish "no actuals/collected" from "value happens to be $0".
   const hasActuals = _faActualsForItem(item.id).length > 0;
   const hasCollectedRows = (S.invoices || []).some(inv =>
     inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
@@ -14182,22 +14208,25 @@ function _renderFreightReconStrip(item, pid) {
   const cell = (label, value, color, sub) => `
     <div style="flex:1;min-width:0">
       <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">${label}</div>
-      <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${color||'var(--text-dark)'};line-height:1.1">${value}</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:17px;color:${color||'var(--text-dark)'};line-height:1.1">${value}</div>
       ${sub ? `<div style="font-family:var(--font-b);font-size:10px;color:${color||'var(--text-light)'};font-style:italic;margin-top:2px">${sub}</div>` : ''}
     </div>`;
   const collectedVal = hasCollectedRows ? fmt(recon.collected) : '—';
-  const actualsVal = hasActuals ? fmt(recon.actual) : '—';
+  const rawActualsVal = hasActuals ? fmt(recon.rawActual) : '—';
+  const realActualsVal = hasActuals ? fmt(recon.realActual) : '—';
+  const realActualsSub = hasActuals && recon.markupPct > 0 ? `+${recon.markupPct}% markup` : (hasActuals ? 'no markup' : '');
   let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
   if (hasCollectedRows || hasActuals) {
-    const absNet = Math.abs(recon.net);
+    const absNet = Math.abs(recon.realNet);
     if (recon.isCredit) { netVal = '+' + fmt(absNet); netColor = '#1a6e3a'; netSub = 'credit'; }
     else if (recon.isOverage) { netVal = '−' + fmt(absNet); netColor = '#b33'; netSub = 'overage'; }
     else { netVal = fmt(0); netColor = 'var(--text-mid)'; netSub = 'balanced'; }
   }
   return `
-    <div style="display:flex;gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px">
       ${cell('Collected', collectedVal, 'var(--text-dark)')}
-      ${cell('Actuals', actualsVal, 'var(--text-dark)')}
+      ${cell('Raw Actuals', rawActualsVal, 'var(--text-dark)')}
+      ${cell('Real Actuals', realActualsVal, 'var(--text-dark)', realActualsSub)}
       ${cell('Credit / Overage', netVal, netColor, netSub)}
     </div>`;
 }
@@ -15149,6 +15178,10 @@ function renderPDSettings(proj, pid) {
         <input type="number" class="fi" id="pds-markup" min="0" step="1" value="${proj.markupPct != null ? proj.markupPct : 25}" onchange="savePDSetting('${pid}','markupPct',parseFloat(this.value)||25)">
       </div>
       <div class="fg">
+        <label class="fl">Freight Markup % <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— blank uses studio default (${(S.studio||{}).defaultFreightMarkupPct != null ? Number((S.studio||{}).defaultFreightMarkupPct) : 0}%); 0 = opt out</span></label>
+        <input type="number" class="fi" id="pds-freight-markup" min="0" step="1" value="${proj.settings?.freightMarkupPct != null ? proj.settings.freightMarkupPct : ''}" placeholder="(studio default)" onchange="savePDFreightMarkup('${pid}', this.value)">
+      </div>
+      <div class="fg">
         <label class="fl">State <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">${proj.state ? '(locked — tax behavior depends on this)' : '(defaults pulled from App Settings → Categories → Tax States)'}</span></label>
         ${proj.state
           ? `<div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);padding:8px 12px;background:rgba(var(--text-rgb),0.04);border:1px solid var(--border);border-radius:var(--rs);display:flex;align-items:center;gap:6px"><span style="font-size:11px">🔒</span>${escH(proj.state)}</div>`
@@ -15196,6 +15229,20 @@ function savePDSetting(pid, key, val) {
   p[key] = val;
   save();
   toast('Setting updated.');
+}
+
+function savePDFreightMarkup(pid, raw) {
+  const p = S.projects.find(x => x.id === pid);
+  if (!p) return;
+  if (!p.settings) p.settings = {};
+  if (raw === '' || raw == null) {
+    p.settings.freightMarkupPct = null;
+  } else {
+    const num = parseFloat(raw);
+    p.settings.freightMarkupPct = isNaN(num) ? null : num;
+  }
+  save();
+  toast('Freight markup updated.');
 }
 
 // State change on the PD Settings tab. Uses the unified state-select flow:
@@ -22595,6 +22642,8 @@ function loadStudioSettings() {
     const el = $c(id);
     if (el) el.value = s[key] || '';
   });
+  const fmEl = $c('as-studio-freight-markup');
+  if (fmEl) fmEl.value = s.defaultFreightMarkupPct != null ? s.defaultFreightMarkupPct : '';
   renderStudioLogoPreview();
   renderStudioWatermarks();
 }
