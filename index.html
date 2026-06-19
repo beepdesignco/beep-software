@@ -3692,6 +3692,18 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ BUDGET → ASSOCIATED CHARGES PER-ITEM MODAL ═════════════════ -->
+<!-- Opens when the user clicks the Associated Charges Raw or Marked-up
+     cell on an invoice card. Shows per-item adjacent (tariff, crating,
+     processing, etc.) actuals raw + marked-up. -->
+<div class="overlay" id="modal-budget-associated-items">
+  <div class="modal" style="width:660px;max-height:80vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-budget-associated-items')">✕</button>
+    <div class="modal-title" id="modal-budget-associated-items-title">Associated Charges</div>
+    <div id="modal-budget-associated-items-body"></div>
+  </div>
+</div>
+
 <!-- ═════════════════ INVITE MEMBER MODAL ═════════════════ -->
 <div class="overlay" id="modal-invite-member">
   <div class="modal" style="width:480px">
@@ -14402,8 +14414,8 @@ function _bfInvoiceCardDetail(f, pid) {
       <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin:12px 0 6px">Associated Charges</div>
       <table style="width:100%;border-collapse:collapse">
         <tbody>
-          ${row('Raw', _bfFmt(f.associatedRaw), null, _bfRowColor(f.associatedRaw))}
-          ${row('Marked-up', _bfFmt(f.associatedMarkedUp), 'per-category markup applied', _bfRowColor(f.associatedMarkedUp))}
+          ${row('Raw', `<span style="cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--pecan)" onclick="event.stopPropagation(); openBudgetAssociatedItemsModal('${inv.id}')">${_bfFmt(f.associatedRaw)}</span>`, 'click for per-item breakdown', _bfRowColor(f.associatedRaw))}
+          ${row('Marked-up', `<span style="cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--pecan)" onclick="event.stopPropagation(); openBudgetAssociatedItemsModal('${inv.id}')">${_bfFmt(f.associatedMarkedUp)}</span>`, 'per-category markup applied', _bfRowColor(f.associatedMarkedUp))}
         </tbody>
       </table>
       <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:flex;justify-content:space-between;align-items:baseline">
@@ -14468,6 +14480,63 @@ function openBudgetFreightItemsModal(invoiceId) {
       </tfoot>
     </table>`;
   $c('modal-budget-freight-items').classList.add('open');
+}
+
+// Per-item adjacent/associated-charges modal — opens from clicking either
+// the Raw or Marked-up cell in the Associated Charges section of an
+// invoice card. Mirrors the freight modal but breaks down the tariff /
+// crating / processing actuals per item, with both raw and marked-up
+// values side by side. Marked-up uses each actual's category markup so
+// items with adjacents across multiple categories blend correctly.
+function openBudgetAssociatedItemsModal(invoiceId) {
+  const inv = (S.invoices || []).find(i => i.id === invoiceId);
+  if (!inv) return;
+  const pid = inv.projectId;
+  const fin = getInvoiceFreightFinancials(inv, pid);
+  if (!fin) return;
+  const itemName = (id) => {
+    const it = _findItemById(id);
+    if (!it) return '(missing item)';
+    const space = Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
+    return `${escH(it.name || '(unnamed)')}<span style="color:var(--text-light);font-size:10px">${space ? ' · '+escH(space.name||'') : ''}</span>`;
+  };
+  // Only items that have adjacent activity contribute to this modal.
+  const rows = fin.perItemRows.filter(r => r.adjacentRaw > 0).slice().sort((a, b) => b.adjacentRaw - a.adjacentRaw);
+  const totals = rows.reduce((s, r) => ({
+    raw: s.raw + r.adjacentRaw,
+    marked: s.marked + r.adjacentMarked,
+  }), { raw: 0, marked: 0 });
+  // Display as negative because these are studio expenses (per spec,
+  // associated charges roll into the Δ as overage).
+  const trsHtml = rows.map(r => {
+    const blendedPct = r.adjacentRaw > 0 ? Math.round(((r.adjacentMarked / r.adjacentRaw) - 1) * 1000) / 10 : 0;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${itemName(r.itemId)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#b33">${_bfFmt(-r.adjacentRaw)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#b33">${_bfFmt(-r.adjacentMarked)}${blendedPct > 0 ? `<div style="font-family:var(--font-b);font-size:9px;color:var(--text-light);font-style:italic;font-weight:400;margin-top:1px">+${blendedPct}%</div>` : ''}</td>
+    </tr>`;
+  }).join('');
+  $c('modal-budget-associated-items-title').textContent = `Associated Charges — ${inv.number || '(no number)'}`;
+  $c('modal-budget-associated-items-body').innerHTML = `
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5;margin-bottom:14px">Tariffs, crating, processing fees, and other freight-adjacent vendor bills tagged to items billed on this invoice. Marked-up uses each actual's category markup default.</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700">Item</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Raw</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Marked-up</th>
+        </tr>
+      </thead>
+      <tbody>${trsHtml || '<tr><td colspan="3" style="padding:20px;text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No associated/adjacent charges logged for items on this invoice.</td></tr>'}</tbody>
+      ${rows.length ? `<tfoot>
+        <tr style="border-top:2px solid var(--pecan)">
+          <td style="padding:8px;font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Total</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totals.raw)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totals.marked)}</td>
+        </tr>
+      </tfoot>` : ''}
+    </table>`;
+  $c('modal-budget-associated-items').classList.add('open');
 }
 
 function renderPDBudgetItems(proj, pid) {
