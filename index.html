@@ -9922,14 +9922,12 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
       ${expensesListHTML}
     </div>`;
 
-  const variancePill = hasActual ? `
-    <div style="margin-top:10px;padding-top:10px;border-top:2px solid var(--pecan);display:flex;justify-content:space-between;align-items:baseline">
-      <div>
-        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Total Actual Cost</div>
-        <div style="font-family:var(--font-b);font-size:10px;color:${varColor};margin-top:2px">Variance vs proposal: ${variance >= 0 ? '+' : ''}${fmt(variance)}${varPct != null ? ' (' + (varPct >= 0 ? '+' : '') + varPct.toFixed(1) + '%)' : ''}</div>
-      </div>
-      <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${varColor}">${fmt(actualTotal)}</div>
-    </div>` : '';
+  // Legacy "Total Actual Cost / Variance vs proposal" pill removed 2026-06-18 —
+  // the reconciliation strip at the top of this card now carries the
+  // actionable Margin/Loss number against Invoiced (not against the
+  // proposal estimate). Proposal data stays as a reference on the
+  // proposal page where it belongs.
+  const variancePill = '';
 
   if (item.type === 'constructed') {
     // Per-component summary + order-level freight/additional
