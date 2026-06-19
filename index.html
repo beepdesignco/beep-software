@@ -14098,6 +14098,13 @@ function renderFreightItemRow(item, sp, ledger, pid) {
 // component breakdown stays in the per-category table below.
 function _renderFreightReconStrip(item, pid) {
   const recon = getItemFreightReconciliation(item.id, item);
+  // Distinguish "no actuals logged" from "actual logged at $0" — the
+  // latter is real data (per spec, $0 actuals turn the full collected
+  // amount into a credit), so the cell should show "$0", not "—".
+  const hasActuals = _faActualsForItem(item.id).length > 0;
+  const hasCollectedRows = (S.invoices || []).some(inv =>
+    inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
+  );
   const cell = (label, value, color, sub) => `
     <div style="flex:1;min-width:0">
       <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">${label}</div>
@@ -14106,10 +14113,10 @@ function _renderFreightReconStrip(item, pid) {
     </div>`;
   const estimatedVal = recon.appliedDollarValue > 0 ? fmt(recon.appliedDollarValue) : '—';
   const estimatedSub = recon.appliedPercent != null ? `${recon.appliedPercent}% at approval` : '';
-  const collectedVal = recon.collected > 0 ? fmt(recon.collected) : '—';
-  const actualVal = recon.actual > 0 ? fmt(recon.actual) : '—';
+  const collectedVal = hasCollectedRows ? fmt(recon.collected) : '—';
+  const actualVal = hasActuals ? fmt(recon.actual) : '—';
   let netVal = '—', netColor = 'var(--text-mid)', netSub = '';
-  if (recon.collected > 0 || recon.actual > 0) {
+  if (hasCollectedRows || hasActuals) {
     const absNet = Math.abs(recon.net);
     if (recon.isCredit) { netVal = '+' + fmt(absNet); netColor = '#1a6e3a'; netSub = 'credit'; }
     else if (recon.isOverage) { netVal = '−' + fmt(absNet); netColor = '#b33'; netSub = 'overage'; }
