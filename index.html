@@ -10093,8 +10093,14 @@ function _backfillFreightAllocations() {
     if (inv.status === 'draft' || inv.status === 'cancelled') return;
     const freightTotal = Number(inv.freight) || 0;
     if (freightTotal <= 0) return;
-    const hasAuto = (inv.freightAllocations || []).some(a => a.allocationSource === 'auto_proportional');
-    if (hasAuto) return;
+    // Drift detection — re-allocate if the existing auto rows don't sum
+    // to the invoice's freight (catches legacy buggy allocations from
+    // before the mixed-mode fix landed). If the sum is within a cent,
+    // assume it's already correct.
+    const autoSum = (inv.freightAllocations || [])
+      .filter(a => a.allocationSource === 'auto_proportional')
+      .reduce((s, a) => s + Number(a.amount || 0), 0);
+    if (Math.abs(autoSum - freightTotal) < 0.01 && autoSum > 0) return;
     allocateInvoiceFreight(inv);
     if ((inv.freightAllocations || []).some(a => a.allocationSource === 'auto_proportional')) {
       backfilled++;
@@ -13506,76 +13512,120 @@ function getItemFreightReconciliation(itemId, item) {
   };
 }
 
-// §1 Phase B — auto-allocate an invoice's freight $ across its
-// freight-poolable line items, proportional to (qty × price).
+// Per-line freight contribution for §1 Phase B allocation. Used only
+// for the standalone path (retainer pool gets a proportional share, not
+// a per-line lookup).
+//   • Component lines look up just that component's primary-Freight
+//     freight_charges rows. Constructed items billed via multiple
+//     component lines therefore each get their own slice.
+//   • Whole-item lines fall through to getItemFreightForInvoice, which
+//     rolls up the item-level + component-level freight for the whole.
+function _getLineFreightContribution(line, parentItem, pid) {
+  if (line.proposalComponentId) {
+    const primaryCatId = getPrimaryFreightCategoryId();
+    if (!primaryCatId) return 0;
+    const comp = (parentItem.components || []).find(c => c.id === line.proposalComponentId);
+    if (!comp) return 0;
+    const proj = getProject(pid);
+    const rows = (S.freightCharges || []).filter(c =>
+      c.parentType === 'component' &&
+      c.parentId === line.proposalComponentId &&
+      c.categoryId === primaryCatId
+    );
+    return rows.reduce((s, c) => s + _calcComponentFreightChargeMarkedUp(c, comp, parentItem, pid, proj), 0);
+  }
+  return getItemFreightForInvoice(parentItem, pid) || 0;
+}
+
+// §1 Phase B — auto-allocate an invoice's freight $ across its line
+// items. Three modes handled in one pass:
 //
-// Idempotent: drops any prior 'auto_proportional' allocation rows for
-// this invoice and re-derives. 'manual' + 'deferred_billed' rows are
-// preserved untouched.
+//   • Pure retainer: every line in inv.freightRetainer.item_ids splits
+//     the invoice's freight $ proportional to their qty×price.
+//   • Pure per-item: no retainer; each line's allocation is whatever
+//     getItemFreightForInvoice returns for its linked proposal item
+//     (allowance / known-amount survives as the per-item slice).
+//   • MIXED: some lines are in a retainer pool, others have their own
+//     per-item freight charge (allowance/known). Standalone allowances
+//     come off the top; whatever inv.freight has left over is the
+//     retainer pool, split proportionally across the retainer items.
 //
-// Determining the pool:
-//   - Mode B (retainer): inv.freightRetainer.item_ids is the explicit
-//     pool — those items selected in the retainer modal.
-//   - Mode A (known $): everything on the invoice that links to a
-//     proposal_item that ISN'T freight-typed and isn't flagged
-//     state='none' for the primary freight category.
-//
-// Lines without a proposalItemId (custom one-off lines) get nothing.
-// Cancelled invoices skip the entire pass.
+// Idempotent: drops prior 'auto_proportional' rows and re-derives.
+// 'manual' + 'deferred_billed' rows are preserved untouched.
+// Cancelled invoices skip entirely.
 function allocateInvoiceFreight(inv) {
   if (!inv || inv.status === 'cancelled') return;
   if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
 
-  // Drop only the auto rows — preserve any manual or deferred-billed rows.
   inv.freightAllocations = inv.freightAllocations.filter(a => a.allocationSource !== 'auto_proportional');
 
   const freightTotal = Number(inv.freight) || 0;
-  if (freightTotal <= 0) return; // nothing to allocate
+  if (freightTotal <= 0) return;
 
-  const retainerItemIds = inv.freightRetainer?.item_ids;
-  const usingRetainer = Array.isArray(retainerItemIds) && retainerItemIds.length > 0;
-  const primaryCatId = usingRetainer ? null : getPrimaryFreightCategoryId();
+  const pid = inv.projectId;
+  const retainerItemIds = (inv.freightRetainer && Array.isArray(inv.freightRetainer.item_ids))
+    ? new Set(inv.freightRetainer.item_ids) : null;
 
-  // Build pool of (line, subtotal) tuples — lines eligible for a slice.
-  const poolEntries = [];
+  // Walk every line. Mark each as either standalone-allowance (carries its
+  // own quoted freight from the proposal side) or retainer-pool (splits
+  // leftover proportionally below). Component lines are looked up at the
+  // component level so a constructed item billed via multiple component
+  // lines doesn't double-count its parent's freight on each line.
+  const entries = [];
   (inv.lineItems || []).forEach(l => {
     if (!l.proposalItemId) return;
-    let eligible;
-    if (usingRetainer) {
-      eligible = retainerItemIds.includes(l.proposalItemId);
+    const linkedItem = _findItemById(l.proposalItemId);
+    if (!linkedItem) return;
+    if (isFreightItem(linkedItem)) return;
+    const inRetainer = retainerItemIds && retainerItemIds.has(l.proposalItemId);
+    if (inRetainer) {
+      const lineSubtotal = (Number(l.qty) || 1) * (Number(l.price) || 0);
+      entries.push({ line: l, itemId: l.proposalItemId, kind: 'retainer', subtotal: lineSubtotal });
     } else {
-      const item = _findItemById(l.proposalItemId);
-      if (!item) { eligible = false; }
-      else if (isFreightItem(item)) { eligible = false; }
-      else {
-        const charge = (S.freightCharges || []).find(c =>
-          c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryCatId
-        );
-        eligible = !(charge && charge.state === 'none');
+      const quoted = _getLineFreightContribution(l, linkedItem, pid);
+      if (quoted > 0) {
+        entries.push({ line: l, itemId: l.proposalItemId, kind: 'standalone', amount: quoted });
       }
     }
-    if (!eligible) return;
-    const lineSubtotal = (Number(l.qty) || 1) * (Number(l.price) || 0);
-    if (lineSubtotal <= 0) return;
-    poolEntries.push({ line: l, subtotal: lineSubtotal });
   });
 
-  const poolSubtotal = poolEntries.reduce((s, e) => s + e.subtotal, 0);
-  if (poolSubtotal <= 0) return;
+  if (!entries.length) return;
 
-  // Allocate. Last row absorbs rounding so the sum lands exactly on freightTotal.
-  let runningTotal = 0;
-  poolEntries.forEach((entry, idx) => {
-    const share = entry.subtotal / poolSubtotal;
-    let amount = Math.round(freightTotal * share * 100) / 100;
-    if (idx === poolEntries.length - 1) amount = Math.round((freightTotal - runningTotal) * 100) / 100;
-    runningTotal += amount;
+  // Standalone items are billed their quoted amount. Retainer pool gets
+  // whatever's left over so the per-item sum lands on inv.freight.
+  const standaloneSum = entries.filter(e => e.kind === 'standalone').reduce((s, e) => s + e.amount, 0);
+  const retainerEntries = entries.filter(e => e.kind === 'retainer');
+  const retainerSubtotal = retainerEntries.reduce((s, e) => s + e.subtotal, 0);
+  const retainerPool = Math.max(0, freightTotal - standaloneSum);
+
+  // Write. Track running total so the last row can absorb rounding drift.
+  const allocs = [];
+  entries.forEach(e => {
+    let amount;
+    if (e.kind === 'standalone') {
+      amount = Math.round(e.amount * 100) / 100;
+    } else {
+      amount = retainerSubtotal > 0
+        ? Math.round(retainerPool * (e.subtotal / retainerSubtotal) * 100) / 100
+        : 0;
+    }
+    allocs.push({ itemId: e.itemId, amount });
+  });
+
+  const runningSum = allocs.reduce((s, a) => s + a.amount, 0);
+  const drift = Math.round((freightTotal - runningSum) * 100) / 100;
+  if (allocs.length && Math.abs(drift) >= 0.01) {
+    allocs[allocs.length - 1].amount = Math.round((allocs[allocs.length - 1].amount + drift) * 100) / 100;
+  }
+
+  allocs.forEach(a => {
+    if (a.amount <= 0) return;
     inv.freightAllocations.push({
       id: uid(),
       invoiceId: inv.id,
-      proposalItemId: entry.line.proposalItemId,
-      amount,
-      sharePct: Math.round(share * 10000) / 100,
+      proposalItemId: a.itemId,
+      amount: a.amount,
+      sharePct: freightTotal > 0 ? Math.round((a.amount / freightTotal) * 10000) / 100 : 0,
       allocationSource: 'auto_proportional',
       notes: '',
       created: new Date().toISOString(),
@@ -14006,6 +14056,28 @@ function _faChip(chip, item, pid) {
   return `<span style="font-size:11px;font-family:var(--font-b);font-weight:700;padding:5px 12px;border-radius:14px;color:${m.color};background:${m.bg};border:1px solid ${m.color}30">${m.label}</span>`;
 }
 
+// §1 Phase D — spec-aligned chip computed from the new reconciliation
+// helpers (Collected − Actual). The original _faChip uses the legacy
+// "Charged − Actual" comparison, which answered "how off was our
+// estimate" rather than "what's actually owed to/from the client."
+// Used in place of _faChip on the PM item freight card.
+function _faChipFromRecon(item, pid) {
+  const recon = getItemFreightReconciliation(item.id, item);
+  const hasActuals = _faActualsForItem(item.id).length > 0;
+  const hasCollected = (S.invoices || []).some(inv =>
+    inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
+  );
+  if (!hasActuals && !hasCollected) return '';
+  const SPOT_ON = 0.5;
+  if (Math.abs(recon.net) <= SPOT_ON) {
+    return _faChip({ kind: 'spot' }, item, pid);
+  }
+  if (recon.isCredit) {
+    return _faChip({ kind: 'credit', amount: recon.net }, item, pid);
+  }
+  return _faChip({ kind: 'overage', amount: Math.abs(recon.net) }, item, pid);
+}
+
 function _faVarianceCell(row) {
   if (row.dominantState === 'deferred') {
     if (row.actualRaw === 0) return '<span style="color:var(--text-light);font-style:italic">awaiting actuals</span>';
@@ -14160,7 +14232,10 @@ function renderItemFreightCard(item, pid, spId) {
     </div>`;
   }
   const ledger = computeItemFreightLedger(item, pid);
-  const chip = _faChip(ledger.chip, item, pid);
+  // §1 Phase D — chip reads Collected vs Actual (new spec), not the old
+  // Charged vs Actual. The actionable "Overage to bill" / "Credit
+  // available" message reflects what's owed/owing in real money terms.
+  const chip = _faChipFromRecon(item, pid);
   const reconStrip = _renderFreightReconStrip(item, pid);
   const grid = ledger.rows.map(r => `
     <tr style="border-top:1px solid var(--border)">
@@ -14180,15 +14255,15 @@ function renderItemFreightCard(item, pid, spId) {
         </div>
       </div>
       ${reconStrip}
-      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">By category (proposal-side breakdown)</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:6px">By category (proposal-side breakdown — quote vs actual)</div>
       <table style="width:100%;font-family:var(--font-b);font-size:11px;border-collapse:collapse">
         <thead>
           <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
             <th style="text-align:left;padding:4px 6px;font-weight:700">Category</th>
             <th style="text-align:left;padding:4px 6px;font-weight:700">Status</th>
-            <th style="text-align:right;padding:4px 6px;font-weight:700">Charged</th>
+            <th style="text-align:right;padding:4px 6px;font-weight:700">Quoted</th>
             <th style="text-align:right;padding:4px 6px;font-weight:700">Actual</th>
-            <th style="text-align:right;padding:4px 6px;font-weight:700">Variance</th>
+            <th style="text-align:right;padding:4px 6px;font-weight:700">Quote vs Actual</th>
           </tr>
         </thead>
         <tbody>${grid}</tbody>
