@@ -14087,9 +14087,375 @@ function renderPDBudget(proj, pid) {
       `).join('')}
     </div>`;
   let body = '';
-  if (_pdBudgetTab === 'freight') body = renderPDFreight(proj, pid);
+  if (_pdBudgetTab === 'freight') body = renderPDBudgetFreight(proj, pid);
   else if (_pdBudgetTab === 'items') body = renderPDBudgetItems(proj, pid);
   return navHtml + body;
+}
+
+// ═════════════════ §1 Budget → Freight (Baylor 2026-06-19 spec) ═════════════════
+// Per-invoice financial tracking page: project total card on top,
+// collapsible per-invoice cards below. Clicking the Actuals number opens
+// the per-item drill-down modal.
+
+// Set of invoice IDs currently expanded. Persists across re-renders within
+// this session. Default: collapsed.
+let _pdBudgetFreightExpanded = new Set();
+
+function toggleBudgetFreightInvoice(invoiceId) {
+  if (_pdBudgetFreightExpanded.has(invoiceId)) _pdBudgetFreightExpanded.delete(invoiceId);
+  else _pdBudgetFreightExpanded.add(invoiceId);
+  renderProjectDetail();
+}
+
+// Attribute an item's freight actuals to a specific invoice — the most
+// recent non-cancelled invoice that billed the item via a freightAllocation
+// row. Items billed on only one invoice attribute there; items billed
+// across multiple attribute to the latest. Items with no invoice billing
+// (vendor billed before invoicing client) attribute to null and roll up
+// only into the project total.
+function _itemMostRecentInvoice(itemId) {
+  let mostRecent = null;
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'cancelled') return;
+    const hasItem = (inv.freightAllocations || []).some(a => a.proposalItemId === itemId);
+    if (!hasItem) return;
+    const sentA = inv.sentDate || inv.created || '';
+    const sentB = mostRecent ? (mostRecent.sentDate || mostRecent.created || '') : '';
+    if (!mostRecent || sentA > sentB) mostRecent = inv;
+  });
+  return mostRecent;
+}
+
+// All financials for one invoice's freight + adjacent picture. Returns null
+// for draft/cancelled invoices (those don't contribute).
+function getInvoiceFreightFinancials(inv, pid) {
+  if (!inv || inv.status === 'cancelled' || inv.status === 'draft') return null;
+
+  const allocs = inv.freightAllocations || [];
+  const collectedTotal = allocs.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+
+  // Allowances vs Retainer split. Retainer pool is explicit on the invoice;
+  // any allocation NOT in that pool came from a standalone allowance/known.
+  const retainerSet = new Set((inv.freightRetainer && Array.isArray(inv.freightRetainer.item_ids))
+    ? inv.freightRetainer.item_ids : []);
+  let collectedRetainer = 0;
+  let collectedAllowance = 0;
+  allocs.forEach(a => {
+    const amt = Number(a.amount) || 0;
+    if (retainerSet.has(a.proposalItemId)) collectedRetainer += amt;
+    else collectedAllowance += amt;
+  });
+
+  // Item set on this invoice. Attribute actuals only when this invoice is
+  // each item's most recent billing — otherwise they'd double-count when
+  // an item appears on two invoices.
+  const itemIdsOnInvoice = Array.from(new Set(allocs.map(a => a.proposalItemId).filter(Boolean)));
+  const primaryCatId = getPrimaryFreightCategoryId();
+  let actualsRaw = 0, actualsMarkedUp = 0;
+  let adjacentRaw = 0, adjacentMarkedUp = 0;
+  const perItemRows = [];
+
+  itemIdsOnInvoice.forEach(itemId => {
+    const mostRecent = _itemMostRecentInvoice(itemId);
+    if (!mostRecent || mostRecent.id !== inv.id) return;
+    const actualRows = _faActualsForItem(itemId);
+    let itemPrimaryRaw = 0, itemPrimaryMarked = 0;
+    let itemAdjRaw = 0, itemAdjMarked = 0;
+    actualRows.forEach(a => {
+      const amt = Number(a.amount) || 0;
+      const markupPct = _faActualMarkupPct(a, pid);
+      const marked = amt * (1 + markupPct / 100);
+      if (a.freightCategoryId === primaryCatId) {
+        itemPrimaryRaw += amt;
+        itemPrimaryMarked += marked;
+      } else {
+        itemAdjRaw += amt;
+        itemAdjMarked += marked;
+      }
+    });
+    actualsRaw += itemPrimaryRaw;
+    actualsMarkedUp += itemPrimaryMarked;
+    adjacentRaw += itemAdjRaw;
+    adjacentMarkedUp += itemAdjMarked;
+    // Per-item row for the modal.
+    const collectedForItem = allocs.filter(a => a.proposalItemId === itemId).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    perItemRows.push({
+      itemId,
+      collected: collectedForItem,
+      actualRaw: itemPrimaryRaw,
+      actualMarked: itemPrimaryMarked,
+      adjacentRaw: itemAdjRaw,
+      adjacentMarked: itemAdjMarked,
+    });
+  });
+
+  const freightTax = inv.freightTaxable
+    ? (Number(inv.freight) || 0) * ((Number(inv.taxRate) || 0) / 100)
+    : 0;
+
+  const collectedVsRawDelta = collectedTotal - actualsRaw;
+  const collectedVsMarkedUpDelta = collectedTotal - actualsMarkedUp;
+  // Associated charges are studio expenses — display as negative since
+  // they reduce the net (almost always 0 or negative per spec).
+  const associatedRaw = -adjacentRaw;
+  const associatedMarkedUp = -adjacentMarkedUp;
+  // Overall invoice Δ = freight credit/overage (real) + associated (with markup).
+  const invoiceDelta = collectedVsMarkedUpDelta + associatedMarkedUp;
+
+  return {
+    invoice: inv,
+    collected: { total: collectedTotal, allowance: collectedAllowance, retainer: collectedRetainer },
+    actualsRaw, actualsMarkedUp,
+    adjacentRaw, adjacentMarkedUp,
+    associatedRaw, associatedMarkedUp,
+    freightTax,
+    collectedVsRawDelta, collectedVsMarkedUpDelta,
+    invoiceDelta,
+    itemIdsOnInvoice,
+    perItemRows,
+    markupPct: getProjectFreightMarkupPct(pid),
+  };
+}
+
+// Sum every non-draft non-cancelled invoice into project totals.
+function getProjectFreightFinancials(pid) {
+  const invs = (S.invoices || []).filter(i => i.projectId === pid);
+  const perInvoice = invs.map(inv => getInvoiceFreightFinancials(inv, pid)).filter(Boolean);
+  const sum = (key) => perInvoice.reduce((s, f) => s + (f[key] || 0), 0);
+  return {
+    perInvoice,
+    collected: {
+      total: perInvoice.reduce((s, f) => s + f.collected.total, 0),
+      allowance: perInvoice.reduce((s, f) => s + f.collected.allowance, 0),
+      retainer: perInvoice.reduce((s, f) => s + f.collected.retainer, 0),
+    },
+    actualsRaw: sum('actualsRaw'),
+    actualsMarkedUp: sum('actualsMarkedUp'),
+    associatedRaw: sum('associatedRaw'),
+    associatedMarkedUp: sum('associatedMarkedUp'),
+    freightTax: sum('freightTax'),
+    collectedVsRawDelta: sum('collectedVsRawDelta'),
+    collectedVsMarkedUpDelta: sum('collectedVsMarkedUpDelta'),
+    overallDelta: sum('invoiceDelta'),
+    markupPct: getProjectFreightMarkupPct(pid),
+  };
+}
+
+function _bfDeltaPill(delta) {
+  if (Math.abs(delta) < 0.005) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-mid)">${fmt(0)} balanced</span>`;
+  if (delta > 0) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#1a6e3a">+${fmt(delta)} credit</span>`;
+  return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">−${fmt(Math.abs(delta))} overage</span>`;
+}
+
+function _bfFmt(n) {
+  if (n == null || isNaN(n)) return '—';
+  if (Math.abs(n) < 0.005) return fmt(0);
+  return (n < 0 ? '−' : '') + fmt(Math.abs(n));
+}
+
+function _bfRowColor(n) {
+  if (n == null || Math.abs(n) < 0.005) return 'var(--text-dark)';
+  return n > 0 ? '#1a6e3a' : '#b33';
+}
+
+function renderPDBudgetFreight(proj, pid) {
+  const fin = getProjectFreightFinancials(pid);
+  if (!fin.perInvoice.length) {
+    return `
+      <div style="background:var(--white);border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center">
+        <div style="font-family:var(--font-h);font-weight:900;font-size:16px;color:var(--mahogany);margin-bottom:8px">No invoices on this project yet</div>
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);max-width:480px;margin:0 auto;line-height:1.6">Send an invoice and log freight actuals on the PM item pages to see this rollup populate.</div>
+      </div>`;
+  }
+  return _bfProjectTotalCard(fin, pid) + _bfPerInvoiceList(fin, pid);
+}
+
+function _bfProjectTotalCard(fin, pid) {
+  const overallColor = _bfRowColor(fin.overallDelta);
+  const overallLabel = Math.abs(fin.overallDelta) < 0.005 ? 'balanced'
+    : fin.overallDelta > 0 ? 'credit available to apply' : 'overage to bill';
+  const collBreakdown = (fin.collected.allowance > 0 || fin.collected.retainer > 0)
+    ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px;font-style:italic">Allowances ${fmt(fin.collected.allowance)} · Retainer ${fmt(fin.collected.retainer)}</div>`
+    : '';
+  const markupLabel = fin.markupPct > 0 ? ` (+${fin.markupPct}% markup)` : '';
+  const row = (label, value, sub) => `
+    <tr>
+      <td style="padding:5px 0;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${escH(label)}${sub ? `<div style="font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sub)}</div>` : ''}</td>
+      <td style="padding:5px 0;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${value}</td>
+    </tr>`;
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:22px 26px;border:1px solid var(--border);margin-bottom:20px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:14px">Project Total</div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Overall Δ</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${overallColor};line-height:1">${_bfFmt(fin.overallDelta)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:${overallColor};margin-top:3px;font-style:italic">${overallLabel}</div>
+        </div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);text-align:right;line-height:1.6">
+          = Collected vs Marked-up ${_bfFmt(fin.collectedVsMarkedUpDelta)}<br>
+          + Associated (markup) ${_bfFmt(fin.associatedMarkedUp)}
+        </div>
+      </div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:8px">Detail across all non-cancelled invoices</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>
+          ${row('Freight Collected', fmt(fin.collected.total))}
+          ${(fin.collected.allowance > 0 || fin.collected.retainer > 0) ? `<tr><td colspan="2" style="padding:0 0 6px 12px">${collBreakdown.replace('margin-top:2px;', 'margin-top:0;')}</td></tr>` : ''}
+          ${row('Freight Actuals (Raw)', _bfFmt(fin.actualsRaw))}
+          ${row('Freight Actuals (Marked-up)', _bfFmt(fin.actualsMarkedUp), markupLabel)}
+          ${row('Freight Tax Collected', _bfFmt(fin.freightTax))}
+          ${row('Associated Charges (Raw)', _bfFmt(fin.associatedRaw))}
+          ${row('Associated Charges (Marked-up)', _bfFmt(fin.associatedMarkedUp))}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function _bfPerInvoiceList(fin, pid) {
+  // Most recent first.
+  const sorted = fin.perInvoice.slice().sort((a, b) => {
+    const da = a.invoice.sentDate || a.invoice.created || '';
+    const db = b.invoice.sentDate || b.invoice.created || '';
+    return db.localeCompare(da);
+  });
+  // Also surface cancelled invoices as gray entries so they're visible but
+  // excluded from the math.
+  const cancelled = (S.invoices || []).filter(i => i.projectId === pid && i.status === 'cancelled');
+  return `
+    <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Per Invoice</div>
+    ${sorted.map(f => _bfInvoiceCard(f, pid)).join('')}
+    ${cancelled.map(inv => `
+      <div style="background:rgba(var(--text-rgb),0.03);border:1px dashed var(--border);border-radius:var(--rl);padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-light)"><strong style="color:var(--text-mid)">${escH(inv.number || '(no number)')}</strong> · cancelled <span style="font-style:italic">(excluded from math)</span></div>
+      </div>`).join('')}`;
+}
+
+function _bfInvoiceCard(f, pid) {
+  const inv = f.invoice;
+  const expanded = _pdBudgetFreightExpanded.has(inv.id);
+  const statusLabel = inv.status === 'paid' ? 'paid'
+                    : inv.status === 'partial' ? 'partial'
+                    : inv.status === 'sent' ? 'sent (unpaid)' : escH(inv.status);
+  const sentDate = inv.sentDate ? new Date(inv.sentDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : 'unsent';
+  const chev = expanded ? '▾' : '▸';
+  const header = `
+    <div onclick="toggleBudgetFreightInvoice('${inv.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer" onmouseover="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseout="this.style.background=''">
+      <span style="font-family:var(--font-h);font-size:13px;color:var(--text-light);width:14px">${chev}</span>
+      <div style="flex:1">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany)">${escH(inv.number || '(no number)')}</div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sentDate)} · ${statusLabel}</div>
+      </div>
+      <div style="text-align:right">
+        ${_bfDeltaPill(f.invoiceDelta)}
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">collected ${fmt(f.collected.total)}</div>
+      </div>
+    </div>`;
+  const detail = expanded ? _bfInvoiceCardDetail(f, pid) : '';
+  return `
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:10px;overflow:hidden">
+      ${header}
+      ${detail}
+    </div>`;
+}
+
+function _bfInvoiceCardDetail(f, pid) {
+  const inv = f.invoice;
+  const markupLabel = f.markupPct > 0 ? `+${f.markupPct}% project freight markup` : 'no project freight markup';
+  const collBreakdown = (f.collected.allowance > 0 || f.collected.retainer > 0)
+    ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px;padding-left:6px">↳ Allowances ${fmt(f.collected.allowance)} · Retainer ${fmt(f.collected.retainer)}</div>`
+    : '';
+  const row = (label, value, sub, valueColor) => `
+    <tr>
+      <td style="padding:5px 6px;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${escH(label)}${sub ? `<div style="font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sub)}</div>` : ''}</td>
+      <td style="padding:5px 6px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:${valueColor || 'var(--text-dark)'}">${value}</td>
+    </tr>`;
+  return `
+    <div style="padding:0 16px 14px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin:12px 0 6px">Freight</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>
+          ${row('Collected', fmt(f.collected.total))}
+          ${(f.collected.allowance > 0 || f.collected.retainer > 0) ? `<tr><td colspan="2" style="padding:0 6px 4px">${collBreakdown}</td></tr>` : ''}
+          ${row('Actuals (Raw)', `<span style="cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--pecan)" onclick="event.stopPropagation(); openBudgetFreightItemsModal('${inv.id}')">${_bfFmt(f.actualsRaw)}</span>`, 'click for per-item breakdown')}
+          ${row('Actuals (Marked-up)', _bfFmt(f.actualsMarkedUp), markupLabel)}
+          ${row('Δ vs Raw Actuals', _bfFmt(f.collectedVsRawDelta), null, _bfRowColor(f.collectedVsRawDelta))}
+          ${row('Δ vs Marked-up', _bfFmt(f.collectedVsMarkedUpDelta), null, _bfRowColor(f.collectedVsMarkedUpDelta))}
+        </tbody>
+      </table>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin:12px 0 6px">Tax</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>${row('Freight Tax Collected', _bfFmt(f.freightTax))}</tbody>
+      </table>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin:12px 0 6px">Associated Charges</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>
+          ${row('Raw', _bfFmt(f.associatedRaw), null, _bfRowColor(f.associatedRaw))}
+          ${row('Marked-up', _bfFmt(f.associatedMarkedUp), 'per-category markup applied', _bfRowColor(f.associatedMarkedUp))}
+        </tbody>
+      </table>
+      <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:flex;justify-content:space-between;align-items:baseline">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Invoice Δ (overall)</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">= Δ vs Marked-up + Associated (markup)</div>
+        </div>
+        <div>${_bfDeltaPill(f.invoiceDelta)}</div>
+      </div>
+    </div>`;
+}
+
+// Per-item modal: opens from clicking an invoice's Actuals (Raw) cell.
+// Shows per-item Collected / Raw Actual / Δ for items on that invoice.
+function openBudgetFreightItemsModal(invoiceId) {
+  const inv = (S.invoices || []).find(i => i.id === invoiceId);
+  if (!inv) return;
+  const pid = inv.projectId;
+  const fin = getInvoiceFreightFinancials(inv, pid);
+  if (!fin) return;
+  const itemName = (id) => {
+    const it = _findItemById(id);
+    if (!it) return '(missing item)';
+    const space = Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
+    return `${escH(it.name || '(unnamed)')} <span style="color:var(--text-light);font-size:10px">${space ? ' · '+escH(space.name||'') : ''}</span>`;
+  };
+  const rows = fin.perItemRows.slice().sort((a, b) => b.collected - a.collected);
+  const totals = rows.reduce((s, r) => ({
+    collected: s.collected + r.collected,
+    actualRaw: s.actualRaw + r.actualRaw,
+    delta: s.delta + (r.collected - r.actualRaw),
+  }), { collected: 0, actualRaw: 0, delta: 0 });
+  const trsHtml = rows.map(r => {
+    const delta = r.collected - r.actualRaw;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${itemName(r.itemId)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.collected)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${_bfFmt(r.actualRaw)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:${_bfRowColor(delta)}">${_bfFmt(delta)}</td>
+    </tr>`;
+  }).join('');
+  const host = $c('modal-budget-freight-items-body');
+  $c('modal-budget-freight-items-title').textContent = `Freight Actuals — ${inv.number || '(no number)'}`;
+  host.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700">Item</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Collected</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Actual (raw)</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Δ</th>
+        </tr>
+      </thead>
+      <tbody>${trsHtml || '<tr><td colspan="4" style="padding:20px;text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No items billed for freight on this invoice.</td></tr>'}</tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--pecan)">
+          <td style="padding:8px;font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Total</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-dark)">${fmt(totals.collected)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-dark)">${_bfFmt(totals.actualRaw)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:${_bfRowColor(totals.delta)}">${_bfFmt(totals.delta)}</td>
+        </tr>
+      </tfoot>
+    </table>`;
+  $c('modal-budget-freight-items').classList.add('open');
 }
 
 function renderPDBudgetItems(proj, pid) {
