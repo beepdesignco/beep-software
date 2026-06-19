@@ -13475,6 +13475,84 @@ function getItemFreightReconciliation(itemId, item) {
   };
 }
 
+// §1 Phase B — auto-allocate an invoice's freight $ across its
+// freight-poolable line items, proportional to (qty × price).
+//
+// Idempotent: drops any prior 'auto_proportional' allocation rows for
+// this invoice and re-derives. 'manual' + 'deferred_billed' rows are
+// preserved untouched.
+//
+// Determining the pool:
+//   - Mode B (retainer): inv.freightRetainer.item_ids is the explicit
+//     pool — those items selected in the retainer modal.
+//   - Mode A (known $): everything on the invoice that links to a
+//     proposal_item that ISN'T freight-typed and isn't flagged
+//     state='none' for the primary freight category.
+//
+// Lines without a proposalItemId (custom one-off lines) get nothing.
+// Cancelled invoices skip the entire pass.
+function allocateInvoiceFreight(inv) {
+  if (!inv || inv.status === 'cancelled') return;
+  if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
+
+  // Drop only the auto rows — preserve any manual or deferred-billed rows.
+  inv.freightAllocations = inv.freightAllocations.filter(a => a.allocationSource !== 'auto_proportional');
+
+  const freightTotal = Number(inv.freight) || 0;
+  if (freightTotal <= 0) return; // nothing to allocate
+
+  const retainerItemIds = inv.freightRetainer?.item_ids;
+  const usingRetainer = Array.isArray(retainerItemIds) && retainerItemIds.length > 0;
+  const primaryCatId = usingRetainer ? null : getPrimaryFreightCategoryId();
+
+  // Build pool of (line, subtotal) tuples — lines eligible for a slice.
+  const poolEntries = [];
+  (inv.lineItems || []).forEach(l => {
+    if (!l.proposalItemId) return;
+    let eligible;
+    if (usingRetainer) {
+      eligible = retainerItemIds.includes(l.proposalItemId);
+    } else {
+      const item = _findItemById(l.proposalItemId);
+      if (!item) { eligible = false; }
+      else if (isFreightItem(item)) { eligible = false; }
+      else {
+        const charge = (S.freightCharges || []).find(c =>
+          c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryCatId
+        );
+        eligible = !(charge && charge.state === 'none');
+      }
+    }
+    if (!eligible) return;
+    const lineSubtotal = (Number(l.qty) || 1) * (Number(l.price) || 0);
+    if (lineSubtotal <= 0) return;
+    poolEntries.push({ line: l, subtotal: lineSubtotal });
+  });
+
+  const poolSubtotal = poolEntries.reduce((s, e) => s + e.subtotal, 0);
+  if (poolSubtotal <= 0) return;
+
+  // Allocate. Last row absorbs rounding so the sum lands exactly on freightTotal.
+  let runningTotal = 0;
+  poolEntries.forEach((entry, idx) => {
+    const share = entry.subtotal / poolSubtotal;
+    let amount = Math.round(freightTotal * share * 100) / 100;
+    if (idx === poolEntries.length - 1) amount = Math.round((freightTotal - runningTotal) * 100) / 100;
+    runningTotal += amount;
+    inv.freightAllocations.push({
+      id: uid(),
+      invoiceId: inv.id,
+      proposalItemId: entry.line.proposalItemId,
+      amount,
+      sharePct: Math.round(share * 10000) / 100,
+      allocationSource: 'auto_proportional',
+      notes: '',
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+    });
+  });
+}
+
 // Compute one item's per-category roll-up + an item-level chip.
 function computeItemFreightLedger(item, pid) {
   const proj = getProject(pid);
@@ -28892,6 +28970,15 @@ function saveInvoiceFromBuilder(status, opts = {}) {
     }
   }
 
+  // §1 Phase B — re-derive freight allocations on every non-draft save so
+  // edits to a sent invoice (freight $, line items, pool selection) stay
+  // in sync. Drafts skip — allocations only matter once the invoice is
+  // live to the client. processInvoiceSentAutomations also calls this on
+  // the draft→sent transition; both paths are idempotent.
+  if (inv.status !== 'draft' && inv.status !== 'cancelled') {
+    allocateInvoiceFreight(inv);
+  }
+
   save();
   if (navigate) {
     showView('invoices');
@@ -30431,6 +30518,11 @@ function processInvoiceSentAutomations(inv) {
   if (!prop) return;
   let updatedCount = 0;
   let addedCount = 0;
+
+  // §1 Phase B — derive per-item freight allocations for this invoice.
+  // Runs after every send so the data layer always reflects the invoice's
+  // current freight pool. Idempotent + only touches auto_proportional rows.
+  allocateInvoiceFreight(inv);
 
   // Track which proposal items are on this invoice (store on the items themselves)
   inv.lineItems.forEach(line => {
