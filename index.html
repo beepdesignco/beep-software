@@ -7368,15 +7368,19 @@ async function loadFromSupabase() {
   // converted to a project credit get caught up now. Idempotent — skips any
   // overpayment that already has a credit row on the project tied to the
   // same invoice. Runs once per load; new payments use the inline path.
+  // Snapshot what's currently in Supabase so diff-sync knows the baseline.
+  // MUST run BEFORE the backfills below — otherwise the backfill writes
+  // happen, captureSbShadow snapshots S WITH the backfilled values, and
+  // the resulting diff is empty so nothing reaches the DB. That caused
+  // freight snapshots to silently re-write on every refresh.
+  if (typeof captureSbShadow === 'function') captureSbShadow();
+
   try { _backfillOverpaymentCredits(); } catch (e) { console.warn('[overpayment-backfill]', e); }
   // §1 Phase B — backfill freight allocations for any sent invoice that
   // pre-dates the allocation system. Idempotent across loads.
   try { _backfillFreightAllocations(); } catch (e) { console.warn('[freight-allocation-backfill]', e); }
   // §1 Phase A.2 — snapshot freight applied on already-locked estimates.
   try { _backfillFreightApprovedSnapshots(); } catch (e) { console.warn('[freight-snapshot-backfill]', e); }
-
-  // Snapshot what's currently in Supabase so diff-sync knows the baseline.
-  if (typeof captureSbShadow === 'function') captureSbShadow();
 
   // Initial Work Queue badge
   if (typeof updateWorkBadge === 'function') {
