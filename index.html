@@ -7687,6 +7687,7 @@ function dbInvoiceFreightAllocationToS(r) {
     id: r.id,
     invoiceId: r.invoice_id,
     proposalItemId: r.proposal_item_id || null,
+    proposalComponentId: r.proposal_component_id || null,
     amount: r.amount != null ? Number(r.amount) : 0,
     sharePct: r.share_pct != null ? Number(r.share_pct) : null,
     allocationSource: r.allocation_source || 'auto_proportional',
@@ -8400,6 +8401,7 @@ function invoiceFreightAllocationToDB(a, studioId) {
     studio_id: studioId,
     invoice_id: a.invoiceId,
     proposal_item_id: a.proposalItemId || null,
+    proposal_component_id: a.proposalComponentId || null,
     amount: Number(a.amount || 0),
     share_pct: a.sharePct != null ? Number(a.sharePct) : null,
     allocation_source: a.allocationSource || 'auto_proportional',
@@ -10236,7 +10238,15 @@ function _backfillFreightAllocations() {
     const autoSum = (inv.freightAllocations || [])
       .filter(a => a.allocationSource === 'auto_proportional')
       .reduce((s, a) => s + Number(a.amount || 0), 0);
-    if (Math.abs(autoSum - freightTotal) < 0.01 && autoSum > 0) return;
+    const sumOk = Math.abs(autoSum - freightTotal) < 0.01 && autoSum > 0;
+    // Component-id backfill — if any invoice line is component-level but
+    // its corresponding auto allocation row is missing proposalComponentId,
+    // re-allocate to populate the new column (added in phase0_40).
+    const hasComponentLines = (inv.lineItems || []).some(l => l.proposalComponentId);
+    const autoRows = (inv.freightAllocations || []).filter(a => a.allocationSource === 'auto_proportional');
+    const componentIdsMissing = hasComponentLines && autoRows.length > 0 &&
+      autoRows.every(a => !a.proposalComponentId);
+    if (sumOk && !componentIdsMissing) return;
     allocateInvoiceFreight(inv);
     if ((inv.freightAllocations || []).some(a => a.allocationSource === 'auto_proportional')) {
       backfilled++;
@@ -13771,11 +13781,11 @@ function allocateInvoiceFreight(inv) {
     const inRetainer = retainerItemIds && retainerItemIds.has(l.proposalItemId);
     if (inRetainer) {
       const lineSubtotal = (Number(l.qty) || 1) * (Number(l.price) || 0);
-      entries.push({ line: l, itemId: l.proposalItemId, kind: 'retainer', subtotal: lineSubtotal });
+      entries.push({ line: l, itemId: l.proposalItemId, componentId: l.proposalComponentId || null, kind: 'retainer', subtotal: lineSubtotal });
     } else {
       const quoted = _getLineFreightContribution(l, linkedItem, pid);
       if (quoted > 0) {
-        entries.push({ line: l, itemId: l.proposalItemId, kind: 'standalone', amount: quoted });
+        entries.push({ line: l, itemId: l.proposalItemId, componentId: l.proposalComponentId || null, kind: 'standalone', amount: quoted });
       }
     }
   });
@@ -13800,7 +13810,7 @@ function allocateInvoiceFreight(inv) {
         ? Math.round(retainerPool * (e.subtotal / retainerSubtotal) * 100) / 100
         : 0;
     }
-    allocs.push({ itemId: e.itemId, amount });
+    allocs.push({ itemId: e.itemId, componentId: e.componentId, amount });
   });
 
   const runningSum = allocs.reduce((s, a) => s + a.amount, 0);
@@ -13815,6 +13825,7 @@ function allocateInvoiceFreight(inv) {
       id: uid(),
       invoiceId: inv.id,
       proposalItemId: a.itemId,
+      proposalComponentId: a.componentId || null,
       amount: a.amount,
       sharePct: freightTotal > 0 ? Math.round((a.amount / freightTotal) * 10000) / 100 : 0,
       allocationSource: 'auto_proportional',
@@ -14568,38 +14579,115 @@ function _bfRenderMissingSection(inv, kind, kindLabel) {
     </details>`;
 }
 
-// Per-item modal: opens from clicking an invoice's Actuals (Raw) cell.
-// Shows per-item Collected / Raw Actual / Δ for items on that invoice.
+// Per-line freight actual matching. For a component line, an actual
+// must be tagged to that specific proposalComponentId. For an item
+// line, an actual must be tagged to the proposalItemId with no
+// componentId set, OR have a split-allocation slice targeting the
+// item. Returns { sumRaw, count } for the primary Freight category.
+function _lineFreightActualSums(line, pid, primaryCatId) {
+  let sumRaw = 0;
+  let count = 0;
+  (S.freightActuals || []).forEach(a => {
+    if (a.freightCategoryId !== primaryCatId) return;
+    let matchAmt = 0;
+    let matched = false;
+    if (line.proposalComponentId) {
+      if (a.proposalComponentId === line.proposalComponentId) {
+        matchAmt = Number(a.amount) || 0;
+        matched = true;
+      }
+    } else {
+      if (a.proposalItemId === line.proposalItemId && !a.proposalComponentId) {
+        matchAmt = Number(a.amount) || 0;
+        matched = true;
+      } else if ((a.allocations || []).some(x => x.proposalItemId === line.proposalItemId)) {
+        matchAmt = (a.allocations || [])
+          .filter(x => x.proposalItemId === line.proposalItemId)
+          .reduce((s, x) => s + (Number(x.amount) || 0), 0);
+        matched = true;
+      }
+    }
+    if (matched) { sumRaw += matchAmt; count++; }
+  });
+  return { sumRaw, count };
+}
+
+// Per-line modal: opens from clicking an invoice's Actuals (Raw) cell.
+// One row per BILLED LINE — constructed items split into component
+// lines now show each component as its own row ("FLW Sectional · Fabric").
 function openBudgetFreightItemsModal(invoiceId) {
   const inv = (S.invoices || []).find(i => i.id === invoiceId);
   if (!inv) return;
   const pid = inv.projectId;
   const fin = getInvoiceFreightFinancials(inv, pid);
   if (!fin) return;
-  const itemName = (id) => {
-    const it = _findItemById(id);
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const spaceForItem = (id) => Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
+  const labelForLine = (line) => {
+    const it = _findItemById(line.proposalItemId);
     if (!it) return '(missing item)';
-    const space = Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
-    return `${escH(it.name || '(unnamed)')} <span style="color:var(--text-light);font-size:10px">${space ? ' · '+escH(space.name||'') : ''}</span>`;
+    const space = spaceForItem(line.proposalItemId);
+    let base = `${escH(it.name || '(unnamed)')}`;
+    if (line.proposalComponentId) {
+      const comp = (it.components || []).find(c => c.id === line.proposalComponentId);
+      if (comp) base += ` <span style="color:var(--text-mid);font-size:11px">· ${escH(comp.name || '(component)')}</span>`;
+    }
+    if (space) base += ` <span style="color:var(--text-light);font-size:10px">· ${escH(space.name || '')}</span>`;
+    return base;
   };
-  const rows = fin.perItemRows.slice().sort((a, b) => b.collected - a.collected);
+
+  // Per-line rows. Skip lines without proposalItemId (custom one-off lines)
+  // and freight-typed items.
+  const lines = (inv.lineItems || []).filter(l => {
+    if (!l.proposalItemId) return false;
+    const it = _findItemById(l.proposalItemId);
+    return it && !isFreightItem(it);
+  });
+
+  const rows = lines.map(l => {
+    // Collected: match an auto/manual allocation row by (itemId, componentId).
+    // Allocations from before phase0_40 won't have componentId; for those, a
+    // component line will fall back to the parent's allocation share (close
+    // enough until the backfill repopulates).
+    let alloc = (inv.freightAllocations || []).find(a =>
+      a.proposalItemId === l.proposalItemId &&
+      (a.proposalComponentId || null) === (l.proposalComponentId || null)
+    );
+    if (!alloc && l.proposalComponentId) {
+      // Legacy: component line, no componentId on allocation — match parent
+      // (will be replaced after backfill re-allocates).
+      alloc = (inv.freightAllocations || []).find(a =>
+        a.proposalItemId === l.proposalItemId && !a.proposalComponentId
+      );
+    }
+    const collected = alloc ? (Number(alloc.amount) || 0) : 0;
+    const actuals = _lineFreightActualSums(l, pid, primaryCatId);
+    return {
+      line: l,
+      label: labelForLine(l),
+      collected,
+      actualRaw: actuals.sumRaw,
+      actualCount: actuals.count,
+    };
+  });
+
+  rows.sort((a, b) => b.collected - a.collected);
+
   const totals = rows.reduce((s, r) => ({
     collected: s.collected + r.collected,
     actualRaw: s.actualRaw + r.actualRaw,
-    delta: s.delta + (r.collected - r.actualRaw),
-  }), { collected: 0, actualRaw: 0, delta: 0 });
+  }), { collected: 0, actualRaw: 0 });
+  totals.delta = totals.collected - totals.actualRaw;
+
   const trsHtml = rows.map(r => {
-    // No actual logged → display "—" rather than $0.00 so the user can
-    // tell at a glance which lines still need attention. Δ is also
-    // unknown until an actual exists.
-    const hasActual = r.actualRowCount > 0;
+    const hasActual = r.actualCount > 0;
     const actualCell = hasActual ? fmt(r.actualRaw) : '<span style="color:var(--text-light)">—</span>';
     const delta = r.collected - r.actualRaw;
     const deltaCell = hasActual
       ? `<span style="color:${_bfRowColor(delta)}">${_bfFmt(delta)}</span>`
       : '<span style="color:var(--text-light)">—</span>';
     return `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${itemName(r.itemId)}</td>
+      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${r.label}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.collected)}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${actualCell}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px">${deltaCell}</td>
