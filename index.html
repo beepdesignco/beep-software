@@ -14222,6 +14222,10 @@ function getInvoiceFreightFinancials(inv, pid) {
     const actualRows = _faActualsForItem(itemId);
     let itemPrimaryRaw = 0, itemPrimaryMarked = 0;
     let itemAdjRaw = 0, itemAdjMarked = 0;
+    // Row counts distinguish "no actual logged" (count === 0) from
+    // "actual logged at $0" (count > 0, sum === 0). The modal renders
+    // the former as "—" and the latter as "$0.00" per Baylor's spec.
+    let primaryRowCount = 0, adjacentRowCount = 0;
     actualRows.forEach(a => {
       const amt = Number(a.amount) || 0;
       const markupPct = _faActualMarkupPct(a, pid);
@@ -14229,9 +14233,11 @@ function getInvoiceFreightFinancials(inv, pid) {
       if (a.freightCategoryId === primaryCatId) {
         itemPrimaryRaw += amt;
         itemPrimaryMarked += marked;
+        primaryRowCount++;
       } else {
         itemAdjRaw += amt;
         itemAdjMarked += marked;
+        adjacentRowCount++;
       }
     });
     actualsRaw += itemPrimaryRaw;
@@ -14245,8 +14251,10 @@ function getInvoiceFreightFinancials(inv, pid) {
       collected: collectedForItem,
       actualRaw: itemPrimaryRaw,
       actualMarked: itemPrimaryMarked,
+      actualRowCount: primaryRowCount,
       adjacentRaw: itemAdjRaw,
       adjacentMarked: itemAdjMarked,
+      adjacentRowCount,
     });
   });
 
@@ -14577,12 +14585,20 @@ function openBudgetFreightItemsModal(invoiceId) {
     delta: s.delta + (r.collected - r.actualRaw),
   }), { collected: 0, actualRaw: 0, delta: 0 });
   const trsHtml = rows.map(r => {
+    // No actual logged → display "—" rather than $0.00 so the user can
+    // tell at a glance which lines still need attention. Δ is also
+    // unknown until an actual exists.
+    const hasActual = r.actualRowCount > 0;
+    const actualCell = hasActual ? fmt(r.actualRaw) : '<span style="color:var(--text-light)">—</span>';
     const delta = r.collected - r.actualRaw;
+    const deltaCell = hasActual
+      ? `<span style="color:${_bfRowColor(delta)}">${_bfFmt(delta)}</span>`
+      : '<span style="color:var(--text-light)">—</span>';
     return `<tr style="border-top:1px solid var(--border)">
       <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${itemName(r.itemId)}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.collected)}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${_bfFmt(r.actualRaw)}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:${_bfRowColor(delta)}">${_bfFmt(delta)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${actualCell}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px">${deltaCell}</td>
     </tr>`;
   }).join('');
   const host = $c('modal-budget-freight-items-body');
