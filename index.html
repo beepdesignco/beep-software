@@ -14162,17 +14162,19 @@ function toggleBudgetFreightInvoice(invoiceId) {
 }
 
 // Attribute an item's freight actuals to a specific invoice — the most
-// recent non-cancelled invoice that billed the item via a freightAllocation
-// row. Items billed on only one invoice attribute there; items billed
-// across multiple attribute to the latest. Items with no invoice billing
-// (vendor billed before invoicing client) attribute to null and roll up
-// only into the project total.
+// recent non-cancelled, non-draft invoice that billed the item. "Billed"
+// means EITHER an allocation row OR a line item linking to the item.
+// The line-item path matters for items whose freight wasn't allocated
+// (component freight was deferred, item wasn't in the retainer pool, etc.)
+// — they still belong attribution-wise to the invoice that billed them
+// so their actuals don't fall into the void.
 function _itemMostRecentInvoice(itemId) {
   let mostRecent = null;
   (S.invoices || []).forEach(inv => {
-    if (inv.status === 'cancelled') return;
-    const hasItem = (inv.freightAllocations || []).some(a => a.proposalItemId === itemId);
-    if (!hasItem) return;
+    if (inv.status === 'cancelled' || inv.status === 'draft') return;
+    const hasAlloc = (inv.freightAllocations || []).some(a => a.proposalItemId === itemId);
+    const hasLine  = (inv.lineItems || []).some(l => l.proposalItemId === itemId);
+    if (!hasAlloc && !hasLine) return;
     const sentA = inv.sentDate || inv.created || '';
     const sentB = mostRecent ? (mostRecent.sentDate || mostRecent.created || '') : '';
     if (!mostRecent || sentA > sentB) mostRecent = inv;
@@ -14200,10 +14202,15 @@ function getInvoiceFreightFinancials(inv, pid) {
     else collectedAllowance += amt;
   });
 
-  // Item set on this invoice. Attribute actuals only when this invoice is
-  // each item's most recent billing — otherwise they'd double-count when
-  // an item appears on two invoices.
-  const itemIdsOnInvoice = Array.from(new Set(allocs.map(a => a.proposalItemId).filter(Boolean)));
+  // Item set on this invoice. Built from BOTH allocations AND line items —
+  // an item billed via a line that didn't generate a freightAllocation
+  // row (e.g., a constructed item's component was deferred on the proposal
+  // and the parent wasn't in the retainer pool) still belongs in this set
+  // so its actuals get attributed. Actuals are only counted when this
+  // invoice is the item's most recent billing per _itemMostRecentInvoice.
+  const itemIdsFromAllocs = allocs.map(a => a.proposalItemId).filter(Boolean);
+  const itemIdsFromLines  = (inv.lineItems || []).map(l => l.proposalItemId).filter(Boolean);
+  const itemIdsOnInvoice = Array.from(new Set([...itemIdsFromAllocs, ...itemIdsFromLines]));
   const primaryCatId = getPrimaryFreightCategoryId();
   let actualsRaw = 0, actualsMarkedUp = 0;
   let adjacentRaw = 0, adjacentMarkedUp = 0;
