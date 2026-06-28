@@ -14848,10 +14848,16 @@ function toggleBudgetItemsInvoice(invoiceId) {
   renderProjectDetail();
 }
 
-// Per-line cost actual + markup. Component lines pull from the component
-// directly; item-level lines (readymade or whole-item billed constructed)
-// pull from the item. Returns the raw cost + markup % so the marked-up
-// can be derived.
+// Per-line cost actual + markup.
+// - Component line: read directly from that component's costActual +
+//   componentEffectiveMarkup.
+// - Whole-item line on a readymade item: read item.costActual +
+//   effectiveMarkup.
+// - Whole-item line on a CONSTRUCTED item: combine item.costActual
+//   (the "I bought the whole thing from one vendor" case) PLUS any
+//   per-component costActuals (the "I bought components from different
+//   vendors" case). Returns a blended markup % so the marked-up value
+//   stays accurate when components carry different per-component markups.
 function _lineItemActual(line, parentItem, pid) {
   if (!parentItem) return { raw: 0, markupPct: 0, hasActual: false };
   if (line.proposalComponentId) {
@@ -14861,9 +14867,24 @@ function _lineItemActual(line, parentItem, pid) {
     const hasActual = (comp.costActual || '').toString().trim() !== '';
     return { raw, markupPct: componentEffectiveMarkup(comp, parentItem, pid), hasActual };
   }
-  const raw = parse$(parentItem.costActual);
-  const hasActual = (parentItem.costActual || '').toString().trim() !== '';
-  return { raw, markupPct: effectiveMarkup(parentItem, pid), hasActual };
+  const itemRaw = parse$(parentItem.costActual);
+  const itemHasActual = (parentItem.costActual || '').toString().trim() !== '';
+  const isConstructed = parentItem.type === 'constructed' && (parentItem.components || []).length > 0;
+  if (!isConstructed) {
+    return { raw: itemRaw, markupPct: effectiveMarkup(parentItem, pid), hasActual: itemHasActual };
+  }
+  let totalRaw = itemRaw;
+  let totalMarked = itemRaw * (1 + effectiveMarkup(parentItem, pid) / 100);
+  let hasAny = itemHasActual;
+  (parentItem.components || []).forEach(c => {
+    if ((c.costActual || '').toString().trim() === '') return;
+    const ca = parse$(c.costActual);
+    totalRaw += ca;
+    totalMarked += ca * (1 + componentEffectiveMarkup(c, parentItem, pid) / 100);
+    hasAny = true;
+  });
+  const blendedMarkup = totalRaw > 0 ? ((totalMarked / totalRaw) - 1) * 100 : 0;
+  return { raw: totalRaw, markupPct: blendedMarkup, hasActual: hasAny };
 }
 
 function getInvoiceItemsFinancials(inv, pid) {
@@ -15089,25 +15110,129 @@ function openBudgetItemsLinesModal(invoiceId) {
     if (space) base += ` <span style="color:var(--text-light);font-size:10px">· ${escH(space.name || '')}</span>`;
     return base;
   };
-  const rows = fin.perLineRows.slice().sort((a, b) => b.invoiced - a.invoiced);
-  const totals = rows.reduce((s, r) => ({
+  // Group billed lines by parent item so constructed items show their
+  // components indented beneath a parent header row.
+  const groupMap = new Map(); // itemId -> { parentLine, componentLines: [] }
+  fin.perLineRows.forEach(r => {
+    if (!groupMap.has(r.itemId)) groupMap.set(r.itemId, { parentLine: null, componentLines: [] });
+    const g = groupMap.get(r.itemId);
+    if (r.componentId) g.componentLines.push(r);
+    else g.parentLine = r;
+  });
+
+  const groups = [];
+  const mostRecentByItem = new Map();
+  groupMap.forEach((g, itemId) => {
+    const item = _findItemById(itemId);
+    if (!item) return;
+    const mostRecent = _itemMostRecentInvoice(itemId);
+    const attributedHere = mostRecent && mostRecent.id === inv.id;
+    mostRecentByItem.set(itemId, attributedHere);
+    const isConstructed = item.type === 'constructed' && (item.components || []).length > 0;
+    const parentInvoiced = (g.parentLine ? g.parentLine.invoiced : 0)
+      + g.componentLines.reduce((s, r) => s + r.invoiced, 0);
+    // Parent actuals: pull item-level + sum component-level. Only counts
+    // if this invoice is the item's most recent (matches the rollup math).
+    let parentActualRaw = 0;
+    let parentActualMarked = 0;
+    let parentHasActual = false;
+    if (attributedHere) {
+      const itemRaw = parse$(item.costActual);
+      const itemHas = (item.costActual || '').toString().trim() !== '';
+      if (itemHas) {
+        parentActualRaw += itemRaw;
+        parentActualMarked += itemRaw * (1 + effectiveMarkup(item, pid) / 100);
+        parentHasActual = true;
+      }
+      if (isConstructed) {
+        item.components.forEach(c => {
+          if ((c.costActual || '').toString().trim() === '') return;
+          const ca = parse$(c.costActual);
+          parentActualRaw += ca;
+          parentActualMarked += ca * (1 + componentEffectiveMarkup(c, item, pid) / 100);
+          parentHasActual = true;
+        });
+      }
+    }
+    // Per-component sub-rows for constructed items. Show every component,
+    // billed or not, so the user can see which components have actuals and
+    // which don't.
+    let componentSubRows = [];
+    if (isConstructed) {
+      componentSubRows = item.components.map(c => {
+        const billedLine = g.componentLines.find(r => r.componentId === c.id);
+        const invoicedAmt = billedLine ? billedLine.invoiced : null;
+        const cRaw = parse$(c.costActual);
+        const cHas = (c.costActual || '').toString().trim() !== '';
+        const counts = attributedHere && cHas;
+        return {
+          component: c,
+          invoiced: invoicedAmt,
+          actualRaw: counts ? cRaw : 0,
+          hasActual: counts,
+          billedLine,
+        };
+      });
+    }
+    groups.push({
+      item, isConstructed,
+      parentInvoiced, parentActualRaw, parentActualMarked, parentHasActual,
+      componentSubRows,
+    });
+  });
+
+  groups.sort((a, b) => b.parentInvoiced - a.parentInvoiced);
+
+  // Project totals stay derived from fin.perLineRows so the modal matches
+  // the invoice card's headline numbers exactly.
+  const totals = fin.perLineRows.reduce((s, r) => ({
     invoiced: s.invoiced + r.invoiced,
     actualRaw: s.actualRaw + r.actualRaw,
   }), { invoiced: 0, actualRaw: 0 });
   totals.delta = totals.invoiced - totals.actualRaw;
-  const trsHtml = rows.map(r => {
-    const hasActual = r.hasActual;
-    const actualCell = hasActual ? fmt(r.actualRaw) : '<span style="color:var(--text-light)">—</span>';
-    const delta = r.invoiced - r.actualRaw;
-    const deltaCell = hasActual
-      ? `<span style="color:${_biRowColor(delta)}">${_biFmt(delta)}</span>`
+
+  const spaceName = (id) => {
+    const sp = spaceForItem(id);
+    return sp ? escH(sp.name || '') : '';
+  };
+  const parentLabel = (item) => {
+    const sp = spaceName(item.id);
+    let base = `${escH(item.name || '(unnamed)')}`;
+    if (sp) base += ` <span style="color:var(--text-light);font-size:10px">· ${sp}</span>`;
+    return base;
+  };
+
+  const trsHtml = groups.map(g => {
+    const parentDelta = g.parentInvoiced - g.parentActualRaw;
+    const parentActualCell = g.parentHasActual ? fmt(g.parentActualRaw) : '<span style="color:var(--text-light)">—</span>';
+    const parentDeltaCell = g.parentHasActual
+      ? `<span style="color:${_biRowColor(parentDelta)}">${_biFmt(parentDelta)}</span>`
       : '<span style="color:var(--text-light)">—</span>';
-    return `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${labelForLine(r.line)}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.invoiced)}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${actualCell}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px">${deltaCell}</td>
+    let html = `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:600">${parentLabel(g.item)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(g.parentInvoiced)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${parentActualCell}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px">${parentDeltaCell}</td>
     </tr>`;
+    // Component sub-rows for constructed items.
+    if (g.isConstructed) {
+      g.componentSubRows.forEach(sub => {
+        const subInvoicedCell = sub.invoiced != null ? fmt(sub.invoiced) : '<span style="color:var(--text-light)">—</span>';
+        const subActualCell = sub.hasActual ? fmt(sub.actualRaw) : '<span style="color:var(--text-light)">—</span>';
+        let subDeltaCell = '<span style="color:var(--text-light)">—</span>';
+        if (sub.hasActual && sub.invoiced != null) {
+          const d = sub.invoiced - sub.actualRaw;
+          subDeltaCell = `<span style="color:${_biRowColor(d)}">${_biFmt(d)}</span>`;
+        }
+        html += `<tr style="border-top:1px dashed rgba(var(--text-rgb),0.10);background:rgba(var(--text-rgb),0.015)">
+          <td style="padding:5px 8px 5px 26px;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">↳ ${escH(sub.component.name || '(component)')}</td>
+          <td style="padding:5px 8px;text-align:right;font-family:var(--font-h);font-weight:600;font-size:11px;color:var(--text-mid)">${subInvoicedCell}</td>
+          <td style="padding:5px 8px;text-align:right;font-family:var(--font-h);font-weight:600;font-size:11px;color:var(--text-mid)">${subActualCell}</td>
+          <td style="padding:5px 8px;text-align:right;font-family:var(--font-h);font-weight:600;font-size:11px">${subDeltaCell}</td>
+        </tr>`;
+      });
+    }
+    return html;
   }).join('');
   $c('modal-budget-items-lines-title').textContent = `Item Cost Actuals — ${inv.number || '(no number)'}`;
   $c('modal-budget-items-lines-body').innerHTML = `
