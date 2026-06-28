@@ -14465,6 +14465,97 @@ function _bfInvoiceCardDetail(f, pid) {
     </div>`;
 }
 
+// Self-diagnostic helper: lines billed on an invoice that DON'T yet
+// have a logged actual matching the given kind ('freight' = primary
+// category; 'adjacent' = anything else). Surfaces in each modal as a
+// collapsible list so the user can spot missing entries (the kind of
+// bug that hid the FLW Sectional fabric component's $410 freight).
+// State='none' items (labor, services) appear italicized/grey so they
+// stand out as "intentionally not needed" rather than "you forgot."
+function _bfLinesMissingActuals(inv, kind) {
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const matchesKind = (a) => {
+    const c = a.freightCategoryId;
+    return kind === 'freight' ? c === primaryCatId : (c && c !== primaryCatId);
+  };
+  const hasMatching = (line) => {
+    return (S.freightActuals || []).some(a => {
+      if (!matchesKind(a)) return false;
+      if (line.proposalComponentId) {
+        return a.proposalComponentId === line.proposalComponentId;
+      }
+      if (a.proposalItemId === line.proposalItemId && !a.proposalComponentId) return true;
+      return (a.allocations || []).some(x => x.proposalItemId === line.proposalItemId);
+    });
+  };
+  const out = [];
+  (inv.lineItems || []).forEach(l => {
+    if (!l.proposalItemId) return;
+    const item = _findItemById(l.proposalItemId);
+    if (!item || isFreightItem(item)) return;
+    if (hasMatching(l)) return;
+    let displayName = escH(item.name || '(unnamed)');
+    if (l.proposalComponentId) {
+      const comp = (item.components || []).find(c => c.id === l.proposalComponentId);
+      if (comp) displayName += ' · ' + escH(comp.name || '(component)');
+    }
+    const targetType = l.proposalComponentId ? 'component' : 'item';
+    const targetId   = l.proposalComponentId || l.proposalItemId;
+    const charges = (S.freightCharges || []).filter(c =>
+      c.parentType === targetType && c.parentId === targetId && c.categoryId === primaryCatId
+    );
+    let state = 'deferred';
+    let valueLabel = '';
+    if (charges.length) {
+      if (charges.some(c => c.state === 'none')) state = 'none';
+      else if (charges.some(c => c.state === 'allowance' || c.state === 'known')) {
+        state = 'allowance';
+        const stated = charges.find(c => (c.state === 'allowance' || c.state === 'known') && c.value != null && c.value !== '');
+        if (stated) {
+          const isPct = stated.valueType === 'percent';
+          valueLabel = isPct ? `${Number(stated.value)}%` : `$${Number(stated.value).toFixed(2)}`;
+        }
+      }
+    }
+    out.push({ displayName, state, valueLabel });
+  });
+  return out;
+}
+
+function _bfRenderMissingList(lines, kindLabel) {
+  if (!lines.length) {
+    return `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">All billed lines have ${kindLabel} actuals logged. Nothing missing.</div>`;
+  }
+  const rows = lines.map(l => {
+    const isNone = l.state === 'none';
+    const baseColor = isNone ? 'rgba(var(--text-rgb),0.45)' : 'var(--text-mid)';
+    const fontStyle = isNone ? 'font-style:italic;' : '';
+    let stateLabel;
+    if (l.state === 'allowance') stateLabel = l.valueLabel ? `allowance ${l.valueLabel}` : 'allowance';
+    else if (l.state === 'none')  stateLabel = 'none (no shipping)';
+    else                          stateLabel = 'deferred';
+    return `
+      <div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed rgba(var(--text-rgb),0.08);font-family:var(--font-b);font-size:11px;color:${baseColor};${fontStyle}">
+        <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.displayName}</div>
+        <div style="font-size:10px;font-style:italic;flex-shrink:0">${stateLabel}</div>
+      </div>`;
+  }).join('');
+  return `<div style="padding-top:4px">${rows}</div>`;
+}
+
+function _bfRenderMissingSection(inv, kind, kindLabel) {
+  const missing = _bfLinesMissingActuals(inv, kind);
+  const count = missing.length;
+  const summaryLabel = count
+    ? `${count} billed line${count === 1 ? '' : 's'} without ${kindLabel} actuals — click to expand`
+    : `All billed lines have ${kindLabel} actuals logged`;
+  return `
+    <details style="margin-top:16px;padding-top:10px;border-top:1px solid var(--border)">
+      <summary style="cursor:pointer;font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:${count ? '#b35a00' : 'var(--text-light)'};padding:4px 0">${summaryLabel}</summary>
+      ${_bfRenderMissingList(missing, kindLabel)}
+    </details>`;
+}
+
 // Per-item modal: opens from clicking an invoice's Actuals (Raw) cell.
 // Shows per-item Collected / Raw Actual / Δ for items on that invoice.
 function openBudgetFreightItemsModal(invoiceId) {
@@ -14515,7 +14606,8 @@ function openBudgetFreightItemsModal(invoiceId) {
           <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:${_bfRowColor(totals.delta)}">${_bfFmt(totals.delta)}</td>
         </tr>
       </tfoot>
-    </table>`;
+    </table>
+    ${_bfRenderMissingSection(inv, 'freight', 'freight')}`;
   $c('modal-budget-freight-items').classList.add('open');
 }
 
@@ -14611,7 +14703,8 @@ function openBudgetAssociatedItemsModal(invoiceId) {
           <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">${_bfFmt(-totalsMarked)}</td>
         </tr>
       </tfoot>` : ''}
-    </table>`;
+    </table>
+    ${_bfRenderMissingSection(inv, 'adjacent', 'associated-charge')}`;
   $c('modal-budget-associated-items').classList.add('open');
 }
 
