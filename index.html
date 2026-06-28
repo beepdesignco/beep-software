@@ -15131,21 +15131,34 @@ function openBudgetItemsLinesModal(invoiceId) {
     const isConstructed = item.type === 'constructed' && (item.components || []).length > 0;
     const parentInvoiced = (g.parentLine ? g.parentLine.invoiced : 0)
       + g.componentLines.reduce((s, r) => s + r.invoiced, 0);
-    // Parent actuals: pull item-level + sum component-level. Only counts
-    // if this invoice is the item's most recent (matches the rollup math).
+    // Determine which components are actually "on" this invoice:
+    // - Whole-item line present → all components are part of the
+    //   billed item (whole thing was sold).
+    // - No whole-item line, just component lines → only the billed
+    //   components count. Other components belong to other invoices
+    //   (or aren't billed yet) and shouldn't pollute this parent total.
+    const hasParentLine = !!g.parentLine;
+    const billedComponentIds = new Set(g.componentLines.map(r => r.componentId));
+    const componentIsOnInvoice = (c) => hasParentLine || billedComponentIds.has(c.id);
+
+    // Parent actuals: item-level only counts when the whole item was billed;
+    // component-level counts only for components on this invoice.
     let parentActualRaw = 0;
     let parentActualMarked = 0;
     let parentHasActual = false;
     if (attributedHere) {
-      const itemRaw = parse$(item.costActual);
-      const itemHas = (item.costActual || '').toString().trim() !== '';
-      if (itemHas) {
-        parentActualRaw += itemRaw;
-        parentActualMarked += itemRaw * (1 + effectiveMarkup(item, pid) / 100);
-        parentHasActual = true;
+      if (hasParentLine) {
+        const itemRaw = parse$(item.costActual);
+        const itemHas = (item.costActual || '').toString().trim() !== '';
+        if (itemHas) {
+          parentActualRaw += itemRaw;
+          parentActualMarked += itemRaw * (1 + effectiveMarkup(item, pid) / 100);
+          parentHasActual = true;
+        }
       }
       if (isConstructed) {
         item.components.forEach(c => {
+          if (!componentIsOnInvoice(c)) return;
           if ((c.costActual || '').toString().trim() === '') return;
           const ca = parse$(c.costActual);
           parentActualRaw += ca;
@@ -15154,25 +15167,25 @@ function openBudgetItemsLinesModal(invoiceId) {
         });
       }
     }
-    // Per-component sub-rows for constructed items. Show every component,
-    // billed or not, so the user can see which components have actuals and
-    // which don't.
+    // Sub-rows: only components actually billed on this invoice.
     let componentSubRows = [];
     if (isConstructed) {
-      componentSubRows = item.components.map(c => {
-        const billedLine = g.componentLines.find(r => r.componentId === c.id);
-        const invoicedAmt = billedLine ? billedLine.invoiced : null;
-        const cRaw = parse$(c.costActual);
-        const cHas = (c.costActual || '').toString().trim() !== '';
-        const counts = attributedHere && cHas;
-        return {
-          component: c,
-          invoiced: invoicedAmt,
-          actualRaw: counts ? cRaw : 0,
-          hasActual: counts,
-          billedLine,
-        };
-      });
+      componentSubRows = item.components
+        .filter(componentIsOnInvoice)
+        .map(c => {
+          const billedLine = g.componentLines.find(r => r.componentId === c.id);
+          const invoicedAmt = billedLine ? billedLine.invoiced : null;
+          const cRaw = parse$(c.costActual);
+          const cHas = (c.costActual || '').toString().trim() !== '';
+          const counts = attributedHere && cHas;
+          return {
+            component: c,
+            invoiced: invoicedAmt,
+            actualRaw: counts ? cRaw : 0,
+            hasActual: counts,
+            billedLine,
+          };
+        });
     }
     groups.push({
       item, isConstructed,
