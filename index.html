@@ -3692,6 +3692,18 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ BUDGET → ITEMS PER-LINE MODAL ═════════════════ -->
+<!-- Opens when the user clicks the "Net Actual (Raw)" cell on an
+     invoice card in Budget → Items. Shows per-billed-line Invoiced /
+     Net Actual / Δ for that specific invoice. -->
+<div class="overlay" id="modal-budget-items-lines">
+  <div class="modal" style="width:680px;max-height:80vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-budget-items-lines')">✕</button>
+    <div class="modal-title" id="modal-budget-items-lines-title">Item Cost Actuals</div>
+    <div id="modal-budget-items-lines-body"></div>
+  </div>
+</div>
+
 <!-- ═════════════════ BUDGET → ASSOCIATED CHARGES PER-ITEM MODAL ═════════════════ -->
 <!-- Opens when the user clicks the Associated Charges Raw or Marked-up
      cell on an invoice card. Shows per-item adjacent (tariff, crating,
@@ -14816,9 +14828,338 @@ function openBudgetAssociatedItemsModal(invoiceId) {
   $c('modal-budget-associated-items').classList.add('open');
 }
 
+// ═════════════════ Budget → Items (per-invoice cost rollup) ═════════════════
+// Mirrors Budget → Freight but for item cost data. Per-invoice cards
+// show Invoiced (line subtotals) / Net Actual Raw / Net Actual Marked-up
+// / Margin-Loss. Per-line modal lists each component or item with its
+// invoiced amount + cost actual + Δ. Missing-actuals dropdown surfaces
+// billed lines without a cost actual logged yet.
+//
+// Note: cost markup is item-level (item.adjustMarkup) or
+// component-level (component.adjustMarkup) — falls back to the project
+// markupPct. Different mechanism than freight markup, which is
+// project-level on primary Freight + per-category on adjacent.
+
+let _pdBudgetItemsExpanded = new Set();
+
+function toggleBudgetItemsInvoice(invoiceId) {
+  if (_pdBudgetItemsExpanded.has(invoiceId)) _pdBudgetItemsExpanded.delete(invoiceId);
+  else _pdBudgetItemsExpanded.add(invoiceId);
+  renderProjectDetail();
+}
+
+// Per-line cost actual + markup. Component lines pull from the component
+// directly; item-level lines (readymade or whole-item billed constructed)
+// pull from the item. Returns the raw cost + markup % so the marked-up
+// can be derived.
+function _lineItemActual(line, parentItem, pid) {
+  if (!parentItem) return { raw: 0, markupPct: 0, hasActual: false };
+  if (line.proposalComponentId) {
+    const comp = (parentItem.components || []).find(c => c.id === line.proposalComponentId);
+    if (!comp) return { raw: 0, markupPct: 0, hasActual: false };
+    const raw = parse$(comp.costActual);
+    const hasActual = (comp.costActual || '').toString().trim() !== '';
+    return { raw, markupPct: componentEffectiveMarkup(comp, parentItem, pid), hasActual };
+  }
+  const raw = parse$(parentItem.costActual);
+  const hasActual = (parentItem.costActual || '').toString().trim() !== '';
+  return { raw, markupPct: effectiveMarkup(parentItem, pid), hasActual };
+}
+
+function getInvoiceItemsFinancials(inv, pid) {
+  if (!inv || inv.status === 'cancelled' || inv.status === 'draft') return null;
+  const lines = (inv.lineItems || []).filter(l => {
+    if (!l.proposalItemId) return false;
+    const it = _findItemById(l.proposalItemId);
+    return it && !isFreightItem(it);
+  });
+  let invoiced = 0, actualRaw = 0, actualMarkedUp = 0;
+  const perLineRows = [];
+  lines.forEach(l => {
+    const item = _findItemById(l.proposalItemId);
+    // Most-recent-invoice attribution so items billed across multiple
+    // invoices don't double-count their cost actuals at the project level.
+    const mostRecent = _itemMostRecentInvoice(l.proposalItemId);
+    const attributedHere = mostRecent && mostRecent.id === inv.id;
+    const lineInvoiced = (Number(l.qty) || 1) * (Number(l.price) || 0);
+    invoiced += lineInvoiced;
+    const a = _lineItemActual(l, item, pid);
+    // Only count actuals if THIS invoice is the most-recent billing for
+    // the item — same rule as freight.
+    const lineActualRaw = attributedHere ? a.raw : 0;
+    const lineActualMarked = attributedHere ? a.raw * (1 + a.markupPct / 100) : 0;
+    const lineHasActual = attributedHere ? a.hasActual : false;
+    actualRaw += lineActualRaw;
+    actualMarkedUp += lineActualMarked;
+    perLineRows.push({
+      line: l,
+      itemId: l.proposalItemId,
+      componentId: l.proposalComponentId || null,
+      invoiced: lineInvoiced,
+      actualRaw: lineActualRaw,
+      actualMarkedUp: lineActualMarked,
+      hasActual: lineHasActual,
+      markupPct: a.markupPct,
+    });
+  });
+  const deltaRaw = invoiced - actualRaw;
+  const deltaMarkedUp = invoiced - actualMarkedUp;
+  return {
+    invoice: inv,
+    invoiced, actualRaw, actualMarkedUp,
+    deltaRaw, deltaMarkedUp,
+    invoiceDelta: deltaMarkedUp,
+    isMargin: deltaMarkedUp > 0,
+    isLoss: deltaMarkedUp < 0,
+    perLineRows,
+  };
+}
+
+function getProjectItemsFinancials(pid) {
+  const invs = (S.invoices || []).filter(i => i.projectId === pid);
+  const perInvoice = invs.map(inv => getInvoiceItemsFinancials(inv, pid)).filter(Boolean);
+  const sum = (k) => perInvoice.reduce((s, f) => s + (f[k] || 0), 0);
+  return {
+    perInvoice,
+    invoiced: sum('invoiced'),
+    actualRaw: sum('actualRaw'),
+    actualMarkedUp: sum('actualMarkedUp'),
+    deltaRaw: sum('deltaRaw'),
+    deltaMarkedUp: sum('deltaMarkedUp'),
+    overallDelta: sum('invoiceDelta'),
+  };
+}
+
+function _biMarginPill(delta) {
+  if (Math.abs(delta) < 0.005) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-mid)">${fmt(0)} balanced</span>`;
+  if (delta > 0) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#1a6e3a">+${fmt(delta)} margin</span>`;
+  return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">−${fmt(Math.abs(delta))} loss</span>`;
+}
+
+function _biRowColor(n) {
+  if (n == null || Math.abs(n) < 0.005) return 'var(--text-dark)';
+  return n > 0 ? '#1a6e3a' : '#b33';
+}
+
+function _biFmt(n) {
+  if (n == null || isNaN(n)) return '—';
+  if (Math.abs(n) < 0.005) return fmt(0);
+  return (n < 0 ? '−' : '') + fmt(Math.abs(n));
+}
+
 function renderPDBudgetItems(proj, pid) {
-  return _renderBudgetComingSoon('Items',
-    'Per-invoice item financial rollup mirrors the Freight page structure: Proposal Net / Invoiced / Net Actual / Margin per invoice, with per-item drill-down. Project totals at the top.');
+  const fin = getProjectItemsFinancials(pid);
+  if (!fin.perInvoice.length) {
+    return `
+      <div style="background:var(--white);border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center">
+        <div style="font-family:var(--font-h);font-weight:900;font-size:16px;color:var(--mahogany);margin-bottom:8px">No invoices on this project yet</div>
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);max-width:480px;margin:0 auto;line-height:1.6">Send an invoice and log cost actuals on the PM item pages to see this rollup populate.</div>
+      </div>`;
+  }
+  return _biProjectTotalCard(fin, pid) + _biPerInvoiceList(fin, pid);
+}
+
+function _biProjectTotalCard(fin, pid) {
+  const overallColor = _biRowColor(fin.overallDelta);
+  const overallLabel = Math.abs(fin.overallDelta) < 0.005 ? 'balanced'
+    : fin.overallDelta > 0 ? 'total project margin' : 'total project loss';
+  const row = (label, value) => `
+    <tr>
+      <td style="padding:5px 0;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${escH(label)}</td>
+      <td style="padding:5px 0;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${value}</td>
+    </tr>`;
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:22px 26px;border:1px solid var(--border);margin-bottom:20px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:14px">Project Total</div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Overall Margin / Loss</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${overallColor};line-height:1">${_biFmt(fin.overallDelta)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:${overallColor};margin-top:3px;font-style:italic">${overallLabel}</div>
+        </div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);text-align:right;line-height:1.6">
+          = Invoiced ${_biFmt(fin.invoiced)}<br>
+          − Marked-up Actuals ${_biFmt(fin.actualMarkedUp)}
+        </div>
+      </div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:8px">Detail across all non-cancelled invoices</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>
+          ${row('Invoiced (item lines)', _biFmt(fin.invoiced))}
+          ${row('Net Actuals (Raw)', _biFmt(fin.actualRaw))}
+          ${row('Net Actuals (Marked-up)', _biFmt(fin.actualMarkedUp))}
+          ${row('Δ vs Raw Actuals', _biFmt(fin.deltaRaw))}
+          ${row('Δ vs Marked-up Actuals', _biFmt(fin.deltaMarkedUp))}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function _biPerInvoiceList(fin, pid) {
+  const sorted = fin.perInvoice.slice().sort((a, b) => {
+    const da = a.invoice.sentDate || a.invoice.created || '';
+    const db = b.invoice.sentDate || b.invoice.created || '';
+    return db.localeCompare(da);
+  });
+  const cancelled = (S.invoices || []).filter(i => i.projectId === pid && i.status === 'cancelled');
+  return `
+    <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:10px">Per Invoice</div>
+    ${sorted.map(f => _biInvoiceCard(f, pid)).join('')}
+    ${cancelled.map(inv => `
+      <div style="background:rgba(var(--text-rgb),0.03);border:1px dashed var(--border);border-radius:var(--rl);padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-light)"><strong style="color:var(--text-mid)">${escH(inv.number || '(no number)')}</strong> · cancelled <span style="font-style:italic">(excluded from math)</span></div>
+      </div>`).join('')}`;
+}
+
+function _biInvoiceCard(f, pid) {
+  const inv = f.invoice;
+  const expanded = _pdBudgetItemsExpanded.has(inv.id);
+  const statusLabel = inv.status === 'paid' ? 'paid'
+                    : inv.status === 'partial' ? 'partial'
+                    : inv.status === 'sent' ? 'sent (unpaid)' : escH(inv.status);
+  const sentDate = inv.sentDate ? new Date(inv.sentDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : 'unsent';
+  const chev = expanded ? '▾' : '▸';
+  const header = `
+    <div onclick="toggleBudgetItemsInvoice('${inv.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer" onmouseover="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseout="this.style.background=''">
+      <span style="font-family:var(--font-h);font-size:13px;color:var(--text-light);width:14px">${chev}</span>
+      <div style="flex:1">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany)">${escH(inv.number || '(no number)')}</div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sentDate)} · ${statusLabel}</div>
+      </div>
+      <div style="text-align:right">
+        ${_biMarginPill(f.invoiceDelta)}
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">invoiced ${fmt(f.invoiced)}</div>
+      </div>
+    </div>`;
+  const detail = expanded ? _biInvoiceCardDetail(f, pid) : '';
+  return `
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:10px;overflow:hidden">
+      ${header}
+      ${detail}
+    </div>`;
+}
+
+function _biInvoiceCardDetail(f, pid) {
+  const inv = f.invoice;
+  const row = (label, value, sub, color) => `
+    <tr>
+      <td style="padding:5px 6px;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${escH(label)}${sub ? `<div style="font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sub)}</div>` : ''}</td>
+      <td style="padding:5px 6px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:${color || 'var(--text-dark)'}">${value}</td>
+    </tr>`;
+  return `
+    <div style="padding:0 16px 14px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin:12px 0 6px">Items (cost-side)</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>
+          ${row('Invoiced', fmt(f.invoiced))}
+          ${row('Net Actual (Raw)', `<span style="cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--pecan)" onclick="event.stopPropagation(); openBudgetItemsLinesModal('${inv.id}')">${_biFmt(f.actualRaw)}</span>`, 'click for per-line breakdown')}
+          ${row('Net Actual (Marked-up)', _biFmt(f.actualMarkedUp), 'item markup applied per line')}
+          ${row('Δ vs Raw Actuals', _biFmt(f.deltaRaw), null, _biRowColor(f.deltaRaw))}
+          ${row('Δ vs Marked-up', _biFmt(f.deltaMarkedUp), null, _biRowColor(f.deltaMarkedUp))}
+        </tbody>
+      </table>
+      <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:flex;justify-content:space-between;align-items:baseline">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Invoice Margin / Loss</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">= Invoiced − Marked-up Actuals</div>
+        </div>
+        <div>${_biMarginPill(f.invoiceDelta)}</div>
+      </div>
+    </div>`;
+}
+
+// Per-line modal — opens from clicking Net Actual (Raw). One row per
+// billed line, with invoiced + cost actual + Δ.
+function openBudgetItemsLinesModal(invoiceId) {
+  const inv = (S.invoices || []).find(i => i.id === invoiceId);
+  if (!inv) return;
+  const pid = inv.projectId;
+  const fin = getInvoiceItemsFinancials(inv, pid);
+  if (!fin) return;
+  const spaceForItem = (id) => Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
+  const labelForLine = (line) => {
+    const it = _findItemById(line.proposalItemId);
+    if (!it) return '(missing item)';
+    const space = spaceForItem(line.proposalItemId);
+    let base = `${escH(it.name || '(unnamed)')}`;
+    if (line.proposalComponentId) {
+      const comp = (it.components || []).find(c => c.id === line.proposalComponentId);
+      if (comp) base += ` <span style="color:var(--text-mid);font-size:11px">· ${escH(comp.name || '(component)')}</span>`;
+    }
+    if (space) base += ` <span style="color:var(--text-light);font-size:10px">· ${escH(space.name || '')}</span>`;
+    return base;
+  };
+  const rows = fin.perLineRows.slice().sort((a, b) => b.invoiced - a.invoiced);
+  const totals = rows.reduce((s, r) => ({
+    invoiced: s.invoiced + r.invoiced,
+    actualRaw: s.actualRaw + r.actualRaw,
+  }), { invoiced: 0, actualRaw: 0 });
+  totals.delta = totals.invoiced - totals.actualRaw;
+  const trsHtml = rows.map(r => {
+    const hasActual = r.hasActual;
+    const actualCell = hasActual ? fmt(r.actualRaw) : '<span style="color:var(--text-light)">—</span>';
+    const delta = r.invoiced - r.actualRaw;
+    const deltaCell = hasActual
+      ? `<span style="color:${_biRowColor(delta)}">${_biFmt(delta)}</span>`
+      : '<span style="color:var(--text-light)">—</span>';
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${labelForLine(r.line)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.invoiced)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${actualCell}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px">${deltaCell}</td>
+    </tr>`;
+  }).join('');
+  $c('modal-budget-items-lines-title').textContent = `Item Cost Actuals — ${inv.number || '(no number)'}`;
+  $c('modal-budget-items-lines-body').innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
+          <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700">Item</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Invoiced</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Net Actual (raw)</th>
+          <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Δ</th>
+        </tr>
+      </thead>
+      <tbody>${trsHtml || '<tr><td colspan="4" style="padding:20px;text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No items billed on this invoice.</td></tr>'}</tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--pecan)">
+          <td style="padding:8px;font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Total</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-dark)">${fmt(totals.invoiced)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-dark)">${_biFmt(totals.actualRaw)}</td>
+          <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:13px;color:${_biRowColor(totals.delta)}">${_biFmt(totals.delta)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    ${_biRenderMissingSection(inv, pid)}`;
+  $c('modal-budget-items-lines').classList.add('open');
+}
+
+function _biRenderMissingSection(inv, pid) {
+  const fin = getInvoiceItemsFinancials(inv, pid);
+  if (!fin) return '';
+  const missing = fin.perLineRows.filter(r => !r.hasActual);
+  const count = missing.length;
+  const summaryLabel = count
+    ? `${count} billed line${count === 1 ? '' : 's'} without cost actuals — click to expand`
+    : `All billed lines have cost actuals logged`;
+  const spaceForItem = (id) => Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
+  const rows = missing.map(r => {
+    const item = _findItemById(r.itemId);
+    if (!item) return '';
+    let label = escH(item.name || '(unnamed)');
+    if (r.componentId) {
+      const comp = (item.components || []).find(c => c.id === r.componentId);
+      if (comp) label += ' · ' + escH(comp.name || '(component)');
+    }
+    const space = spaceForItem(r.itemId);
+    if (space) label += ' <span style="color:var(--text-light);font-size:10px">· ' + escH(space.name || '') + '</span>';
+    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed rgba(var(--text-rgb),0.08);font-family:var(--font-b);font-size:11px;color:var(--text-mid)"><div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div><div style="font-size:10px;font-style:italic;flex-shrink:0">invoiced ${fmt(r.invoiced)}</div></div>`;
+  }).join('');
+  return `
+    <details style="margin-top:16px;padding-top:10px;border-top:1px solid var(--border)">
+      <summary style="cursor:pointer;font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:${count ? '#b35a00' : 'var(--text-light)'};padding:4px 0">${summaryLabel}</summary>
+      <div style="padding-top:4px">${rows || '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">Nothing missing.</div>'}</div>
+    </details>`;
 }
 
 function renderPDFreight(proj, pid) {
