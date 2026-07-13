@@ -14795,6 +14795,164 @@ function _bfRowColor(n) {
   return n > 0 ? '#1a6e3a' : '#b33';
 }
 
+// §1 Phase C — Freight amounts that need to be billed to the client.
+// Includes both purely-deferred items (proposal state='deferred' with
+// actuals logged, never billed) AND items where the raw actual exceeds
+// what's already been collected (overage that needs billing). The
+// remaining marked-up amount is what should be added to a client
+// invoice.
+function getProjectFreightToBill(pid) {
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const prop = S.proposals[pid];
+  const projItemIds = new Set();
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => projItemIds.add(it.id)));
+
+  const rows = [];
+  projItemIds.forEach(itemId => {
+    const item = _findItemById(itemId);
+    if (!item) return;
+    const rawActual = _faActualsForItem(itemId)
+      .filter(a => a.freightCategoryId === primaryCatId)
+      .reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    if (rawActual <= 0) return;
+    const collected = getItemFreightCollected(itemId);
+    const remainingRaw = rawActual - collected;
+    if (remainingRaw <= 0.005) return; // fully billed
+    const markupPct = getProjectFreightMarkupPct(pid);
+    const remainingMarkedUp = remainingRaw * (1 + markupPct / 100);
+    // Was this item ever billed? If not, it's a pure deferred case.
+    // Otherwise it's an overage/under-recovery.
+    const wasEverBilled = (S.invoices || []).some(inv =>
+      inv.status !== 'cancelled' && inv.status !== 'draft' &&
+      (inv.freightAllocations || []).some(a => a.proposalItemId === itemId)
+    );
+    // Proposal-side state check for the label.
+    const charges = (S.freightCharges || []).filter(c =>
+      c.parentType === 'item' && c.parentId === itemId && c.categoryId === primaryCatId
+    );
+    let reasonLabel;
+    if (!wasEverBilled) reasonLabel = 'deferred — never billed';
+    else if (charges.length && charges.some(c => c.state === 'allowance')) reasonLabel = 'overage vs allowance';
+    else reasonLabel = 'under-recovered';
+    rows.push({
+      itemId, item,
+      rawActual, collected, remainingRaw, remainingMarkedUp,
+      markupPct, reasonLabel, wasEverBilled,
+    });
+  });
+
+  rows.sort((a, b) => b.remainingMarkedUp - a.remainingMarkedUp);
+  return {
+    rows,
+    totalRemainingRaw: rows.reduce((s, r) => s + r.remainingRaw, 0),
+    totalRemainingMarkedUp: rows.reduce((s, r) => s + r.remainingMarkedUp, 0),
+    draftInvoices: (S.invoices || []).filter(i => i.projectId === pid && i.status === 'draft'),
+  };
+}
+
+// Bill a deferred amount by:
+//   1. Incrementing the target invoice's freight $ by the marked-up amount
+//   2. Creating a deferred_billed allocation row so the item's Collected
+//      catches up to its Actual on the reconciliation strip
+// Only draft invoices can be billed into (paid/sent are locked).
+function billDeferredFreight(pid, itemId, invoiceId) {
+  const inv = (S.invoices || []).find(i => i.id === invoiceId);
+  if (!inv || inv.projectId !== pid) { toast('Invoice not found.'); return; }
+  if (inv.status !== 'draft') { toast('Only draft invoices can be billed into.'); return; }
+  const item = _findItemById(itemId);
+  if (!item) { toast('Item not found.'); return; }
+
+  // Recompute remaining at click time so a stale value isn't billed.
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const rawActual = _faActualsForItem(itemId)
+    .filter(a => a.freightCategoryId === primaryCatId)
+    .reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const collected = getItemFreightCollected(itemId);
+  const remainingRaw = rawActual - collected;
+  if (remainingRaw <= 0.005) { toast('Nothing to bill — already covered.'); return; }
+  const markupPct = getProjectFreightMarkupPct(pid);
+  const remainingMarkedUp = Math.round(remainingRaw * (1 + markupPct / 100) * 100) / 100;
+
+  // Increment invoice freight + create allocation
+  inv.freight = (Number(inv.freight) || 0) + remainingMarkedUp;
+  if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
+  inv.freightAllocations.push({
+    id: uid(),
+    invoiceId: inv.id,
+    proposalItemId: itemId,
+    proposalComponentId: null,
+    amount: remainingMarkedUp,
+    sharePct: null,
+    allocationSource: 'deferred_billed',
+    notes: `Deferred freight billed 2026-07-12 (raw ${fmt(remainingRaw)} + ${markupPct}% markup)`,
+    created: new Date().toISOString(),
+    updated: new Date().toISOString(),
+  });
+  save();
+  toast(`Billed ${fmt(remainingMarkedUp)} freight to ${inv.number || '(draft)'} for ${item.name || 'item'}.`);
+  renderProjectDetail();
+}
+
+function _bfDeferredSection(pid) {
+  const bill = getProjectFreightToBill(pid);
+  if (!bill.rows.length) return '';
+
+  const draftOpts = bill.draftInvoices.map(i =>
+    `<option value="${i.id}">${escH(i.number || '(unnumbered draft)')}</option>`
+  ).join('');
+  const noDrafts = bill.draftInvoices.length === 0;
+
+  const spaceForItem = (id) => Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
+
+  const rows = bill.rows.map(r => {
+    const sp = spaceForItem(r.itemId);
+    const label = `${escH(r.item.name || '(unnamed)')}${sp ? ` <span style="color:var(--text-light);font-size:10px">· ${escH(sp.name || '')}</span>` : ''}`;
+    const actionCell = noDrafts
+      ? `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);font-style:italic">No draft invoices — create one to bill this</span>`
+      : `<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+          <select id="bill-inv-${r.itemId}" class="fi fsel" style="font-size:11px;padding:3px 6px;max-width:140px">${draftOpts}</select>
+          <button class="btn btn-primary btn-sm" onclick="billDeferredFreight('${pid}','${r.itemId}',document.getElementById('bill-inv-${r.itemId}').value)" style="font-size:10px;padding:4px 10px">Bill</button>
+        </div>`;
+    return `
+      <tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${label}<div style="font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${r.reasonLabel}</div></td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.rawActual)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.collected)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#c47a20">${fmt(r.remainingRaw)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#c47a20">${fmt(r.remainingMarkedUp)}${r.markupPct > 0 ? `<div style="font-size:9px;color:var(--text-light);font-style:italic;font-weight:400;margin-top:1px">+${r.markupPct}% markup</div>` : ''}</td>
+        <td style="padding:6px 8px;text-align:right">${actionCell}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div style="background:rgba(196,122,32,0.05);border:1px solid rgba(196,122,32,0.30);border-radius:var(--rl);padding:18px 22px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:12px;text-transform:uppercase;letter-spacing:0.07em;color:#c47a20">Freight to Bill Client</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">${bill.rows.length} item${bill.rows.length===1?'':'s'} with actuals that haven't been fully billed to the client yet — includes purely-deferred items and overages on allowance items.</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:2px">Total to Bill (Marked-up)</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:#c47a20;line-height:1">${fmt(bill.totalRemainingMarkedUp)}</div>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;background:var(--white);border-radius:var(--r);overflow:hidden">
+        <thead>
+          <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em;background:rgba(var(--text-rgb),0.03)">
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Item</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Raw Actual</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Collected</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Remaining (raw)</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">To Bill (marked-up)</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Bill on Draft</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${noDrafts ? `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic">No draft invoices exist for this project. Create a draft invoice to bill any of these amounts.</div>` : ''}
+    </div>`;
+}
+
 function renderPDBudgetFreight(proj, pid) {
   const fin = getProjectFreightFinancials(pid);
   if (!fin.perInvoice.length) {
@@ -14804,7 +14962,7 @@ function renderPDBudgetFreight(proj, pid) {
         <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);max-width:480px;margin:0 auto;line-height:1.6">Send an invoice and log freight actuals on the PM item pages to see this rollup populate.</div>
       </div>`;
   }
-  return _bfProjectTotalCard(fin, pid) + _bfPerInvoiceList(fin, pid);
+  return _bfProjectTotalCard(fin, pid) + _bfDeferredSection(pid) + _bfPerInvoiceList(fin, pid);
 }
 
 function _bfProjectTotalCard(fin, pid) {
