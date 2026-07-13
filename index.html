@@ -14278,7 +14278,49 @@ function renderPDBudgetOverview(proj, pid) {
   }
 
   return _boHeroCard(totals, overall, baseline)
+       + _boFreightToBillCard(pid)
        + _boSubTabGrid(freight, items, expenses, time, baseline);
+}
+
+// Surfaces the "freight to bill client" state on the Overview so an
+// accountant scanning the project doesn't miss unbilled freight actuals.
+// Rendered only when there's something outstanding. Numbers are labelled
+// in plain accounting language and the card is clickable to jump to the
+// Freight tab where the actions live.
+function _boFreightToBillCard(pid) {
+  const bill = getProjectFreightToBill(pid);
+  if (!bill.rows.length) return '';
+  const available = getProjectAvailableCredit(pid);
+  const totalOwed = bill.totalRemainingMarkedUp;
+  const creditCanCover = Math.min(available, totalOwed);
+  const netToCollect = Math.max(0, totalOwed - available);
+  return `
+    <div onclick="setProjBudgetTab('freight')" style="background:rgba(196,122,32,0.05);border:1px solid rgba(196,122,32,0.30);border-radius:var(--rl);padding:18px 22px;margin-bottom:20px;cursor:pointer;transition:var(--t)" onmouseover="this.style.borderColor='#c47a20'" onmouseout="this.style.borderColor='rgba(196,122,32,0.30)'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:12px;text-transform:uppercase;letter-spacing:0.07em;color:#c47a20">Freight to Bill Client</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">${bill.rows.length} item${bill.rows.length===1?'':'s'} with vendor freight actuals not yet billed to the client. Bill on a draft invoice or cover with available project credit — Freight tab has the actions.</div>
+        </div>
+        <span style="font-family:var(--font-b);font-size:11px;color:#c47a20;font-style:italic;flex-shrink:0">Open Freight →</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding-top:12px;border-top:1px solid rgba(196,122,32,0.20)">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Total Owed by Client</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:#c47a20;line-height:1">${fmt(totalOwed)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:3px">marked-up per project freight markup</div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Project Credit Available</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:${available > 0 ? '#1a6e3a' : 'var(--text-mid)'};line-height:1">${fmt(available)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:3px">${available > 0 ? 'can cover ' + fmt(creditCanCover) + ' of owed' : 'no unspent credit'}</div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Net Still to Collect</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:${netToCollect > 0 ? '#c47a20' : '#1a6e3a'};line-height:1">${fmt(netToCollect)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:3px">${netToCollect > 0 ? 'after credit applied' : 'fully covered by credit'}</div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function _boHeroCard(totals, overall, baseline) {
@@ -15040,29 +15082,30 @@ function _bfDeferredSection(pid) {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div>
           <div style="font-family:var(--font-h);font-weight:900;font-size:12px;text-transform:uppercase;letter-spacing:0.07em;color:#c47a20">Freight to Bill Client</div>
-          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">${bill.rows.length} item${bill.rows.length===1?'':'s'} with actuals that haven't been fully billed to the client yet — includes purely-deferred items and overages on allowance items.</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">Vendor freight actuals we've paid that haven't been billed back to the client yet. Includes items with no upfront freight quote (deferred) and items where actuals exceeded the quoted allowance.</div>
           ${creditBadge}
         </div>
         <div style="text-align:right">
-          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:2px">Total to Bill (Marked-up)</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:2px">Total Owed by Client</div>
           <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:#c47a20;line-height:1">${fmt(bill.totalRemainingMarkedUp)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:3px">marked-up per project rate</div>
         </div>
       </div>
       <table style="width:100%;border-collapse:collapse;background:var(--white);border-radius:var(--r);overflow:hidden">
         <thead>
           <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em;background:rgba(var(--text-rgb),0.03)">
-            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Item</th>
-            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Raw Actual</th>
-            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Collected</th>
-            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Remaining (raw)</th>
-            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">To Bill (marked-up)</th>
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700" title="Which item the vendor freight bill was tied to">Item</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700" title="What the vendor charged us for freight on this item">Vendor Paid</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700" title="How much the client has already been billed for freight on this item">Client Billed</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700" title="Vendor Paid minus Client Billed — freight still on our books to recover">Still on Our Books</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700" title="What to bill the client, with project markup applied">Owed by Client</th>
             <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Action</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
       ${noDrafts ? `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic">No draft invoices exist for this project. Create a draft invoice to bill any of these amounts.</div>` : ''}
-      ${availableCredit > 0.005 && !noDrafts ? `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5"><strong>Apply Credit</strong> draws down project credit (FIFO by oldest) and adds a matching negative "credit line" to the selected draft so the invoice total stays flat while the item's Collected catches up. Partial covers apply what's available.</div>` : ''}
+      ${availableCredit > 0.005 && !noDrafts ? `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5"><strong>Bill</strong> adds the marked-up amount to the selected draft's freight so the client owes it on their next invoice. <strong>Apply Credit</strong> draws down existing project credit (oldest first) and adds a matching credit line to the draft so the invoice total stays the same while the item's Collected on the reconciliation strip catches up. Either way, the item stops appearing here once fully covered.</div>` : `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5"><strong>Bill</strong> adds the marked-up amount to the selected draft's freight so the client owes it on their next invoice. The item stops appearing here once fully covered.</div>`}
     </div>`;
 }
 
