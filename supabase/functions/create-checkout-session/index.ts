@@ -63,9 +63,14 @@ Deno.serve(async (req) => {
     // deposits if Plaid fails (rather than 'instant' which would block
     // the payment entirely if Plaid can't verify).
     //
-    // permissions: 'payment_method' is required to charge; 'balances'
-    // is added so Stripe can confirm available funds (additional signal
-    // that helps with risk-based limit decisions).
+    // permissions: 'payment_method' is required to charge. 'balances'
+    // was previously added as an extra risk signal for larger ACH
+    // limits, but it requires activating the Stripe Financial Connections
+    // application (dashboard.stripe.com/financial-connections/application).
+    // Removed 2026-07-13 after a client hit "You cannot request the
+    // ['balances'] permissions... without first activating this product".
+    // If Baylor wants higher ACH limits later, submit that application
+    // and re-add 'balances' to the permissions list.
     const sessionParams: any = {
       mode: 'payment',
       payment_method_types: method === 'card' ? ['card'] : ['us_bank_account'],
@@ -100,7 +105,7 @@ Deno.serve(async (req) => {
       sessionParams.payment_method_options = {
         us_bank_account: {
           financial_connections: {
-            permissions: ['payment_method', 'balances'],
+            permissions: ['payment_method'],
           },
           verification_method: 'automatic',
         },
