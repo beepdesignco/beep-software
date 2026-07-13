@@ -14384,8 +14384,16 @@ function _boSubTabGrid(freight, items, expenses, time, baseline) {
           <div style="${label}">Expenses</div>
           <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
         </div>
-        <div style="${bignum};color:#b33">−${fmt(expenses.nonbillable)}</div>
-        <div style="${sub}">Non-billable — hits profit</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:6px 0 4px">
+          <div>
+            <div style="font-family:var(--font-h);font-weight:900;font-size:20px;color:var(--text-dark);line-height:1">${fmt(expenses.total)}</div>
+            <div style="${sub}">Total logged · ${expenses.count} expense${expenses.count===1?'':'s'}</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-h);font-weight:900;font-size:20px;color:${expenses.nonbillable > 0 ? '#b33' : 'var(--text-mid)'};line-height:1">${expenses.nonbillable > 0 ? '−' : ''}${fmt(expenses.nonbillable)}</div>
+            <div style="${sub}">Non-billable · reduces profit</div>
+          </div>
+        </div>
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
           Billable (recouped): <strong>${fmt(expenses.billable)}</strong><br>
           Pass-through (recouped): <strong>${fmt(expenses.passthrough)}</strong><br>
