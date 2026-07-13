@@ -14356,9 +14356,58 @@ function _boSubTabGrid(freight, items, expenses, time) {
     </div>`;
 }
 
+// ═════════════════ Budget → Expenses (project-scoped list) ═════════════════
+// Read S.expenses filtered by projectId, mirror the top-level Expenses
+// list card structure but scoped to this project. Summary strip on top
+// with billable / pass-through / non-billable totals + count, then a
+// "+ Log expense" button, then the list of expense cards (reuses
+// renderExpenseCard). Cards remain fully editable — clicking one opens
+// the existing edit modal.
+
 function renderPDBudgetExpenses(proj, pid) {
-  return _renderBudgetComingSoon('Expenses',
-    'Expense tracking will move here from the current top-level Expenses surface, scoped to this project, with edits to the categorization and rollup. Unbilled / pass-through / non-billable breakdowns stay tracked separately per the center-of-gravity framing.');
+  const rows = (S.expenses || []).filter(e => e.projectId === pid);
+  const sum = getProjectExpensesFinancials(pid);
+  const sorted = rows.slice().sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+
+  const summaryStrip = `
+    <div style="background:var(--white);border-radius:var(--rl);padding:18px 22px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Total on this project</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:26px;color:var(--text-dark);line-height:1">${fmt(sum.total)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);margin-top:3px">${sum.count} expense${sum.count===1?'':'s'} logged</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,auto));gap:18px">
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:#b33;margin-bottom:3px">Billable</div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--text-dark);line-height:1">${fmt(sum.billable)}</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:#2d5a8a;margin-bottom:3px">Pass-Through</div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--text-dark);line-height:1">${fmt(sum.passthrough)}</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:#8a8a8a;margin-bottom:3px">Non-Billable</div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--text-dark);line-height:1">${fmt(sum.nonbillable)}</div>
+          </div>
+        </div>
+      </div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);line-height:1.5">
+        Billable expenses need to be invoiced to the client. Pass-through expenses are billed at cost (no markup). Non-billable expenses come out of studio margin.
+      </div>
+    </div>`;
+
+  const headerRow = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid)">Expenses</div>
+      <button class="btn btn-primary btn-sm" onclick="openNewExpenseForProject('${pid}')" style="font-size:11px">+ Log Expense</button>
+    </div>`;
+
+  const list = sorted.length
+    ? `<div style="display:flex;flex-direction:column;gap:8px">${sorted.map(exp => renderExpenseCard(exp)).join('')}</div>`
+    : `<div style="background:var(--white);border-radius:var(--rl);padding:24px;border:1px solid var(--border);text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No expenses on this project yet. Click "+ Log Expense" to add one.</div>`;
+
+  return summaryStrip + headerRow + list;
 }
 
 function renderPDBudgetTime(proj, pid) {
