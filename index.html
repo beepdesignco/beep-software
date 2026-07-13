@@ -33818,9 +33818,85 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
       <div style="display:flex;gap:8px">${agingPills}</div>
     </div>
 
+    ${_dashboardFreightToBillSection(projsInScope)}
+
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;margin-bottom:20px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Top 5 Projects by Margin</div>
       ${topMarginHtml}
+    </div>`;
+}
+
+// Cross-project rollup of vendor freight actuals not yet billed to
+// clients. Sits in the dashboard's Right Now zone as an accountant-
+// friendly summary of "unbilled AR" (work-in-progress freight sitting
+// on our books until it's billed). Numbers respect the dashboard's
+// client/project filter via the projsInScope arg.
+function _dashboardFreightToBillSection(projsInScope) {
+  const rows = [];
+  let totalOwed = 0;
+  let totalCredit = 0;
+  projsInScope.forEach(p => {
+    const bill = getProjectFreightToBill(p.id);
+    if (bill.rows.length === 0) return;
+    const credit = getProjectAvailableCredit(p.id);
+    totalOwed += bill.totalRemainingMarkedUp;
+    totalCredit += credit;
+    rows.push({
+      project: p,
+      itemCount: bill.rows.length,
+      totalOwed: bill.totalRemainingMarkedUp,
+      creditAvailable: credit,
+      netToCollect: Math.max(0, bill.totalRemainingMarkedUp - credit),
+    });
+  });
+  if (!rows.length) return '';
+  rows.sort((a, b) => b.netToCollect - a.netToCollect);
+  const netStillToCollect = Math.max(0, totalOwed - totalCredit);
+  const perProjectRows = rows.map(r => `
+    <tr onclick="S._detailProjectId='${r.project.id}'; showView('project-detail'); setTimeout(()=>{ if(typeof setProjDetailTab==='function') setProjDetailTab('budget'); if(typeof setProjBudgetTab==='function') setTimeout(()=>setProjBudgetTab('freight'), 20); }, 20);" style="cursor:pointer;border-top:1px solid var(--border);transition:var(--t)" onmouseover="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseout="this.style.background=''">
+      <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:600">${escH(r.project.name || '(unnamed)')}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${r.itemCount} item${r.itemCount===1?'':'s'}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:#c47a20">${fmt(r.totalOwed)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:${r.creditAvailable > 0 ? '#1a6e3a' : 'var(--text-mid)'}">${fmt(r.creditAvailable)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:${r.netToCollect > 0 ? '#c47a20' : '#1a6e3a'}">${fmt(r.netToCollect)}</td>
+    </tr>`).join('');
+  return `
+    <div style="background:rgba(196,122,32,0.05);border:1px solid rgba(196,122,32,0.30);border-radius:var(--rl);padding:14px 16px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:#c47a20">Freight to Bill Clients — Unbilled AR</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">Vendor freight bills we've paid across ${rows.length} project${rows.length===1?'':'s'} that haven't been billed back to the client yet. Click a row to bill on that project's Budget → Freight page.</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:12px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Total Owed by Clients</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:20px;color:#c47a20;line-height:1">${fmt(totalOwed)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">marked-up per project rates</div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Project Credit Available</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:20px;color:${totalCredit > 0 ? '#1a6e3a' : 'var(--text-mid)'};line-height:1">${fmt(totalCredit)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">across the same projects</div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Net Still to Collect</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:20px;color:${netStillToCollect > 0 ? '#c47a20' : '#1a6e3a'};line-height:1">${fmt(netStillToCollect)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:2px">${netStillToCollect > 0 ? 'after credit applied' : 'fully coverable by credit'}</div>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;background:var(--white);border-radius:var(--r);overflow:hidden">
+        <thead>
+          <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em;background:rgba(var(--text-rgb),0.03)">
+            <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700">Project</th>
+            <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Items</th>
+            <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Owed by Client</th>
+            <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Credit Available</th>
+            <th style="text-align:right;padding:6px 8px;font-family:var(--font-h);font-weight:700">Net to Collect</th>
+          </tr>
+        </thead>
+        <tbody>${perProjectRows}</tbody>
+      </table>
     </div>`;
 }
 
