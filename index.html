@@ -14216,6 +14216,36 @@ function getProjectOverallDelta(pid) {
   };
 }
 
+// Baseline profit — the actual raw margin: Collected − Raw Actuals −
+// Non-billable Expenses. Billable and pass-through expenses assumed
+// recouped via invoicing (so they don't reduce profit at aggregate).
+// This is distinct from the Overall Δ headline which uses marked-up
+// actuals; baseline profit uses raw actuals and represents what the
+// studio has factually earned on the project.
+function getProjectBaselineProfit(pid) {
+  const freight = getProjectFreightFinancials(pid);
+  const items = getProjectItemsFinancials(pid);
+  const exp = getProjectExpensesFinancials(pid);
+  // "Collected" on the freight side = client-billed freight (allocation
+  // sums). "Collected" on the items side = invoiced item line subtotals.
+  // Both are already in-invoice numbers, so summing them gives total
+  // invoice revenue attributable to items + freight.
+  const collected = (freight.collected?.total || 0) + (items.invoiced || 0);
+  const rawActuals = (freight.actualsRaw || 0) + (items.actualRaw || 0);
+  // Freight-associated adjacents are also raw studio costs — include.
+  const adjacentRaw = -(freight.associatedRaw || 0); // associatedRaw is stored negative
+  const nonBillableExpenses = exp.nonbillable || 0;
+  const profit = collected - rawActuals - adjacentRaw - nonBillableExpenses;
+  const margin = collected > 0 ? (profit / collected) * 100 : 0;
+  return {
+    collected, rawActuals, adjacentRaw, nonBillableExpenses,
+    profit, margin,
+    // Sub-section profit helpers for the per-sub-tab display
+    freight: { collected: freight.collected?.total || 0, rawActuals: freight.actualsRaw || 0, adjacentRaw },
+    items: { collected: items.invoiced || 0, rawActuals: items.actualRaw || 0 },
+  };
+}
+
 // Project invoiced / collected / outstanding for the hero header.
 function getProjectInvoiceTotals(pid) {
   const invs = (S.invoices || []).filter(i => i.projectId === pid && i.status !== 'cancelled' && i.status !== 'draft');
@@ -14233,6 +14263,7 @@ function getProjectInvoiceTotals(pid) {
 function renderPDBudgetOverview(proj, pid) {
   const totals = getProjectInvoiceTotals(pid);
   const overall = getProjectOverallDelta(pid);
+  const baseline = getProjectBaselineProfit(pid);
   const freight = getProjectFreightFinancials(pid);
   const items = getProjectItemsFinancials(pid);
   const expenses = getProjectExpensesFinancials(pid);
@@ -14246,26 +14277,29 @@ function renderPDBudgetOverview(proj, pid) {
       </div>`;
   }
 
-  return _boHeroCard(totals, overall)
-       + _boSubTabGrid(freight, items, expenses, time);
+  return _boHeroCard(totals, overall, baseline)
+       + _boSubTabGrid(freight, items, expenses, time, baseline);
 }
 
-function _boHeroCard(totals, overall) {
+function _boHeroCard(totals, overall, baseline) {
+  const profitColor = Math.abs(baseline.profit) < 0.005 ? 'var(--text-mid)' : baseline.profit > 0 ? '#1a6e3a' : '#b33';
   const combined = overall.combined;
   const combinedColor = Math.abs(combined) < 0.005 ? 'var(--text-mid)' : combined > 0 ? '#1a6e3a' : '#b33';
   const combinedLabel = Math.abs(combined) < 0.005 ? 'balanced'
-    : combined > 0 ? 'credit + margin available' : 'net overage / loss';
+    : combined > 0 ? 'credit available on top' : 'overage / loss beyond baseline';
+  const marginPct = baseline.margin;
   return `
     <div style="background:var(--white);border-radius:var(--rl);padding:22px 26px;border:1px solid var(--border);margin-bottom:20px">
       <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:14px">Project Financial Snapshot</div>
+
+      <!-- Primary: Baseline Profit -->
       <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:20px;align-items:flex-end;padding-bottom:16px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
         <div>
-          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Overall Δ (Freight + Items)</div>
-          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${combinedColor};line-height:1">${_bfFmt(combined)}</div>
-          <div style="font-family:var(--font-b);font-size:11px;color:${combinedColor};margin-top:3px;font-style:italic">${combinedLabel}</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Baseline Profit</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${profitColor};line-height:1">${_bfFmt(baseline.profit)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:${profitColor};margin-top:3px;font-style:italic">${marginPct.toFixed(1)}% margin on collected</div>
           <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:6px;line-height:1.5">
-            Freight: ${_bfFmt(overall.freightDelta)}<br>
-            Items: ${_bfFmt(overall.itemsDelta)}
+            Collected ${fmt(baseline.collected)} − Raw actuals ${fmt(baseline.rawActuals + baseline.adjacentRaw)} − Non-billable expenses ${fmt(baseline.nonBillableExpenses)}
           </div>
         </div>
         <div>
@@ -14274,7 +14308,7 @@ function _boHeroCard(totals, overall) {
           <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:3px">${totals.count} invoice${totals.count===1?'':'s'}</div>
         </div>
         <div>
-          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Collected</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Collected (cash)</div>
           <div style="font-family:var(--font-h);font-weight:800;font-size:20px;color:#1a6e3a;line-height:1">${fmt(totals.collected)}</div>
         </div>
         <div>
@@ -14282,21 +14316,38 @@ function _boHeroCard(totals, overall) {
           <div style="font-family:var(--font-h);font-weight:800;font-size:20px;color:${totals.outstanding > 0 ? '#c47a20' : 'var(--text-mid)'};line-height:1">${fmt(totals.outstanding)}</div>
         </div>
       </div>
-      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;line-height:1.5">
-        Overall Δ combines the actionable freight credit/overage (real, with markup + adjacent categories) with item-side margin/loss (invoiced − marked-up cost actuals). Positive → net credit available to apply on next invoice or margin already earned. Negative → net overage to bill or absorbed loss.
+
+      <!-- Secondary: Credit Available / Overage to Bill (existing Overall Δ) -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:12px 14px;background:rgba(var(--text-rgb),0.03);border-radius:var(--rs)">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Credit / Overage on top of baseline</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:20px;color:${combinedColor};line-height:1">${_bfFmt(combined)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:${combinedColor};margin-top:3px;font-style:italic">${combinedLabel} · Freight ${_bfFmt(overall.freightDelta)} · Items ${_bfFmt(overall.itemsDelta)}</div>
+        </div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;line-height:1.5;max-width:340px;text-align:right">
+          The markup-based reconciliation. Baseline profit above uses raw actuals; this Δ uses marked-up actuals — the difference is your unrealized markup credit (positive) or under-recovery (negative).
+        </div>
       </div>
     </div>`;
 }
 
-function _boSubTabGrid(freight, items, expenses, time) {
+function _boSubTabGrid(freight, items, expenses, time, baseline) {
   const cardStyle = 'background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);cursor:pointer;transition:var(--t)';
   const cardHover = "onmouseover=\"this.style.borderColor='var(--pecan)'\" onmouseout=\"this.style.borderColor='var(--border)'\"";
   const label = 'font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)';
   const bignum = 'font-family:var(--font-h);font-weight:900;font-size:22px;color:var(--text-dark);line-height:1;margin:6px 0 4px';
   const sub = 'font-family:var(--font-b);font-size:10px;color:var(--text-light);line-height:1.5';
 
+  // Per-section baseline profit: Collected − Raw Actuals (no expenses at section level).
+  const freightBaseline = (freight.collected?.total || 0) - (freight.actualsRaw || 0) - (-(freight.associatedRaw || 0));
+  const freightMargin = freight.collected?.total > 0 ? (freightBaseline / freight.collected.total) * 100 : 0;
+  const itemsBaseline = (items.invoiced || 0) - (items.actualRaw || 0);
+  const itemsMargin = items.invoiced > 0 ? (itemsBaseline / items.invoiced) * 100 : 0;
+
   const freightColor = Math.abs(freight.overallDelta) < 0.005 ? 'var(--text-mid)' : freight.overallDelta > 0 ? '#1a6e3a' : '#b33';
   const itemsColor   = Math.abs(items.overallDelta)   < 0.005 ? 'var(--text-mid)' : items.overallDelta   > 0 ? '#1a6e3a' : '#b33';
+  const freightProfitColor = Math.abs(freightBaseline) < 0.005 ? 'var(--text-mid)' : freightBaseline > 0 ? '#1a6e3a' : '#b33';
+  const itemsProfitColor   = Math.abs(itemsBaseline)   < 0.005 ? 'var(--text-mid)' : itemsBaseline   > 0 ? '#1a6e3a' : '#b33';
 
   return `
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">
@@ -14305,12 +14356,12 @@ function _boSubTabGrid(freight, items, expenses, time) {
           <div style="${label}">Freight</div>
           <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
         </div>
-        <div style="${bignum};color:${freightColor}">${_bfFmt(freight.overallDelta)}</div>
-        <div style="${sub}">Overall freight Δ (credit / overage)</div>
+        <div style="${bignum};color:${freightProfitColor}">${_bfFmt(freightBaseline)}</div>
+        <div style="${sub}">Baseline profit · ${freightMargin.toFixed(1)}% margin</div>
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
           Collected: <strong>${fmt(freight.collected.total)}</strong><br>
-          Actuals (marked-up): <strong>${_bfFmt(freight.actualsMarkedUp)}</strong><br>
-          Associated (marked-up): <strong>${_bfFmt(freight.associatedMarkedUp)}</strong>
+          Raw actuals: <strong>${_bfFmt(freight.actualsRaw)}</strong>${freight.associatedRaw ? ' · Associated <strong>' + _bfFmt(-freight.associatedRaw) + '</strong>' : ''}<br>
+          <span style="color:${freightColor}">Credit Δ (markup): <strong>${_bfFmt(freight.overallDelta)}</strong></span>
         </div>
       </div>
 
@@ -14319,11 +14370,12 @@ function _boSubTabGrid(freight, items, expenses, time) {
           <div style="${label}">Items</div>
           <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
         </div>
-        <div style="${bignum};color:${itemsColor}">${_biFmt(items.overallDelta)}</div>
-        <div style="${sub}">Overall item margin / loss</div>
+        <div style="${bignum};color:${itemsProfitColor}">${_biFmt(itemsBaseline)}</div>
+        <div style="${sub}">Baseline profit · ${itemsMargin.toFixed(1)}% margin</div>
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
           Invoiced: <strong>${fmt(items.invoiced)}</strong><br>
-          Net actuals (marked-up): <strong>${_biFmt(items.actualMarkedUp)}</strong>
+          Raw actuals: <strong>${_biFmt(items.actualRaw)}</strong><br>
+          <span style="color:${itemsColor}">Margin Δ (markup): <strong>${_biFmt(items.overallDelta)}</strong></span>
         </div>
       </div>
 
@@ -14332,11 +14384,11 @@ function _boSubTabGrid(freight, items, expenses, time) {
           <div style="${label}">Expenses</div>
           <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
         </div>
-        <div style="${bignum};color:var(--text-dark)">${fmt(expenses.total)}</div>
-        <div style="${sub}">${expenses.count} expense${expenses.count===1?'':'s'} logged</div>
+        <div style="${bignum};color:#b33">−${fmt(expenses.nonbillable)}</div>
+        <div style="${sub}">Non-billable — hits profit</div>
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
-          Billable: <strong>${fmt(expenses.billable)}</strong><br>
-          Pass-through: <strong>${fmt(expenses.passthrough)}</strong><br>
+          Billable (recouped): <strong>${fmt(expenses.billable)}</strong><br>
+          Pass-through (recouped): <strong>${fmt(expenses.passthrough)}</strong><br>
           Non-billable: <strong>${fmt(expenses.nonbillable)}</strong>
         </div>
       </div>
@@ -14347,7 +14399,7 @@ function _boSubTabGrid(freight, items, expenses, time) {
           <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
         </div>
         <div style="${bignum};color:var(--text-dark)">${time.hoursTotal.toFixed(1)}h</div>
-        <div style="${sub}">${time.count} time entr${time.count===1?'y':'ies'}</div>
+        <div style="${sub}">${time.count} time entr${time.count===1?'y':'ies'} · billable revenue ${fmt(time.billableRevenue)}</div>
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
           Billable: <strong>${time.hoursBillable.toFixed(1)}h</strong> · ${fmt(time.billableRevenue)}<br>
           Non-billable: <strong>${time.hoursNonbillable.toFixed(1)}h</strong>
@@ -14741,6 +14793,12 @@ function _bfProjectTotalCard(fin, pid) {
   const overallColor = _bfRowColor(fin.overallDelta);
   const overallLabel = Math.abs(fin.overallDelta) < 0.005 ? 'balanced'
     : fin.overallDelta > 0 ? 'credit available to apply' : 'overage to bill';
+  // Baseline profit (freight side) = collected − raw actuals − raw adjacents.
+  // Represents the actual freight-side margin at raw cost.
+  const associatedRawAmt = -(fin.associatedRaw || 0);
+  const freightProfit = (fin.collected?.total || 0) - (fin.actualsRaw || 0) - associatedRawAmt;
+  const freightMargin = fin.collected?.total > 0 ? (freightProfit / fin.collected.total) * 100 : 0;
+  const profitColor = Math.abs(freightProfit) < 0.005 ? 'var(--text-mid)' : freightProfit > 0 ? '#1a6e3a' : '#b33';
   const collBreakdown = (fin.collected.allowance > 0 || fin.collected.retainer > 0)
     ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px;font-style:italic">Allowances ${fmt(fin.collected.allowance)} · Retainer ${fmt(fin.collected.retainer)}</div>`
     : '';
@@ -14755,13 +14813,14 @@ function _bfProjectTotalCard(fin, pid) {
       <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:14px">Project Total</div>
       <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
         <div>
-          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Overall Δ</div>
-          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${overallColor};line-height:1">${_bfFmt(fin.overallDelta)}</div>
-          <div style="font-family:var(--font-b);font-size:11px;color:${overallColor};margin-top:3px;font-style:italic">${overallLabel}</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Baseline Freight Profit</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${profitColor};line-height:1">${_bfFmt(freightProfit)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:${profitColor};margin-top:3px;font-style:italic">${freightMargin.toFixed(1)}% margin · Collected ${fmt(fin.collected.total)} − Raw actuals ${_bfFmt(fin.actualsRaw)}${associatedRawAmt > 0 ? ' − Associated ' + _bfFmt(associatedRawAmt) : ''}</div>
         </div>
-        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);text-align:right;line-height:1.6">
-          = Collected vs Marked-up ${_bfFmt(fin.collectedVsMarkedUpDelta)}<br>
-          + Associated (markup) ${_bfFmt(fin.associatedMarkedUp)}
+        <div style="text-align:right">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Credit / Overage on top (markup)</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${overallColor};line-height:1">${_bfFmt(fin.overallDelta)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:${overallColor};margin-top:2px;font-style:italic">${overallLabel}</div>
         </div>
       </div>
       <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:8px">Detail across all non-cancelled invoices</div>
@@ -15354,7 +15413,12 @@ function renderPDBudgetItems(proj, pid) {
 function _biProjectTotalCard(fin, pid) {
   const overallColor = _biRowColor(fin.overallDelta);
   const overallLabel = Math.abs(fin.overallDelta) < 0.005 ? 'balanced'
-    : fin.overallDelta > 0 ? 'total project margin' : 'total project loss';
+    : fin.overallDelta > 0 ? 'markup credit on top' : 'markup under-recovery';
+  // Baseline profit = Invoiced − Raw Actuals. What the studio has
+  // factually earned on items at raw cost.
+  const itemsProfit = (fin.invoiced || 0) - (fin.actualRaw || 0);
+  const itemsMargin = fin.invoiced > 0 ? (itemsProfit / fin.invoiced) * 100 : 0;
+  const profitColor = Math.abs(itemsProfit) < 0.005 ? 'var(--text-mid)' : itemsProfit > 0 ? '#1a6e3a' : '#b33';
   const row = (label, value) => `
     <tr>
       <td style="padding:5px 0;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${escH(label)}</td>
@@ -15365,13 +15429,14 @@ function _biProjectTotalCard(fin, pid) {
       <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:14px">Project Total</div>
       <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
         <div>
-          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Overall Margin / Loss</div>
-          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${overallColor};line-height:1">${_biFmt(fin.overallDelta)}</div>
-          <div style="font-family:var(--font-b);font-size:11px;color:${overallColor};margin-top:3px;font-style:italic">${overallLabel}</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Baseline Items Profit</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${profitColor};line-height:1">${_biFmt(itemsProfit)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:${profitColor};margin-top:3px;font-style:italic">${itemsMargin.toFixed(1)}% margin · Invoiced ${fmt(fin.invoiced)} − Raw actuals ${_biFmt(fin.actualRaw)}</div>
         </div>
-        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);text-align:right;line-height:1.6">
-          = Invoiced ${_biFmt(fin.invoiced)}<br>
-          − Marked-up Actuals ${_biFmt(fin.actualMarkedUp)}
+        <div style="text-align:right">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Δ vs Marked-up (on top)</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:${overallColor};line-height:1">${_biFmt(fin.overallDelta)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:${overallColor};margin-top:2px;font-style:italic">${overallLabel}</div>
         </div>
       </div>
       <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:8px">Detail across all non-cancelled invoices</div>
