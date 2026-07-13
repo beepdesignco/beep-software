@@ -14766,6 +14766,16 @@ function _bfDeltaPill(delta) {
   return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">−${fmt(Math.abs(delta))} overage</span>`;
 }
 
+// Freight baseline profit pill — collected − raw actuals − raw
+// associated. What the studio has factually earned on freight at raw
+// vendor cost (no markup applied).
+function _bfProfitPill(profit, marginPct) {
+  if (Math.abs(profit) < 0.005) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-mid)">${fmt(0)} profit</span>`;
+  const color = profit > 0 ? '#1a6e3a' : '#b33';
+  const sign = profit > 0 ? '+' : '−';
+  return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:${color}">${sign}${fmt(Math.abs(profit))} profit <span style="font-size:10px;font-weight:600;opacity:0.85">· ${marginPct.toFixed(1)}%</span></span>`;
+}
+
 function _bfFmt(n) {
   if (n == null || isNaN(n)) return '—';
   if (Math.abs(n) < 0.005) return fmt(0);
@@ -14865,6 +14875,10 @@ function _bfInvoiceCard(f, pid) {
                     : inv.status === 'sent' ? 'sent (unpaid)' : escH(inv.status);
   const sentDate = inv.sentDate ? new Date(inv.sentDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : 'unsent';
   const chev = expanded ? '▾' : '▸';
+  // Baseline freight profit per invoice = collected − raw actuals − raw associated.
+  const invAssociatedRaw = -(f.associatedRaw || 0);
+  const invProfit = (f.collected?.total || 0) - (f.actualsRaw || 0) - invAssociatedRaw;
+  const invMargin = f.collected?.total > 0 ? (invProfit / f.collected.total) * 100 : 0;
   const header = `
     <div onclick="toggleBudgetFreightInvoice('${inv.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer" onmouseover="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseout="this.style.background=''">
       <span style="font-family:var(--font-h);font-size:13px;color:var(--text-light);width:14px">${chev}</span>
@@ -14872,7 +14886,8 @@ function _bfInvoiceCard(f, pid) {
         <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany)">${escH(inv.number || '(no number)')}</div>
         <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sentDate)} · ${statusLabel}</div>
       </div>
-      <div style="text-align:right">
+      <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        ${_bfProfitPill(invProfit, invMargin)}
         ${_bfDeltaPill(f.invoiceDelta)}
         <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">collected ${fmt(f.collected.total)}</div>
       </div>
@@ -14920,12 +14935,22 @@ function _bfInvoiceCardDetail(f, pid) {
           ${row('Marked-up', `<span style="cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--pecan)" onclick="event.stopPropagation(); openBudgetAssociatedItemsModal('${inv.id}')">${_bfFmt(f.associatedMarkedUp)}</span>`, 'per-category markup applied', _bfRowColor(f.associatedMarkedUp))}
         </tbody>
       </table>
-      <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:flex;justify-content:space-between;align-items:baseline">
+      <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div>
-          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Invoice Δ (overall)</div>
-          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">= Δ vs Marked-up + Associated (markup)</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Baseline Freight Profit</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-bottom:4px">= Collected − Raw Actuals − Raw Associated</div>
+          ${(() => {
+            const assocRaw = -(f.associatedRaw || 0);
+            const bp = (f.collected?.total || 0) - (f.actualsRaw || 0) - assocRaw;
+            const bm = f.collected?.total > 0 ? (bp / f.collected.total) * 100 : 0;
+            return _bfProfitPill(bp, bm);
+          })()}
         </div>
-        <div>${_bfDeltaPill(f.invoiceDelta)}</div>
+        <div style="text-align:right">
+          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Credit / Overage (on top)</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-bottom:4px">= Δ vs Marked-up + Associated (markup)</div>
+          ${_bfDeltaPill(f.invoiceDelta)}
+        </div>
       </div>
     </div>`;
 }
@@ -15381,11 +15406,27 @@ function getProjectItemsFinancials(pid) {
   };
 }
 
-function _biMarginPill(delta) {
+// Credit pill — invoiced − marked-up actuals. "Credit" when positive
+// (markup fully covered + extra), "overage" when negative
+// (under-recovered on the markup basis).
+function _biCreditPill(delta) {
   if (Math.abs(delta) < 0.005) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-mid)">${fmt(0)} balanced</span>`;
-  if (delta > 0) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#1a6e3a">+${fmt(delta)} margin</span>`;
-  return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">−${fmt(Math.abs(delta))} loss</span>`;
+  if (delta > 0) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#1a6e3a">+${fmt(delta)} credit</span>`;
+  return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:#b33">−${fmt(Math.abs(delta))} overage</span>`;
 }
+
+// Profit pill — invoiced − raw actuals + margin %. What was factually
+// earned on this invoice at raw cost.
+function _biProfitPill(profit, marginPct) {
+  if (Math.abs(profit) < 0.005) return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:var(--text-mid)">${fmt(0)} profit</span>`;
+  const color = profit > 0 ? '#1a6e3a' : '#b33';
+  const sign = profit > 0 ? '+' : '−';
+  return `<span style="font-family:var(--font-h);font-weight:800;font-size:13px;color:${color}">${sign}${fmt(Math.abs(profit))} profit <span style="font-size:10px;font-weight:600;opacity:0.85">· ${marginPct.toFixed(1)}%</span></span>`;
+}
+
+// Kept for backwards compat — old callers pass invoice Δ and get the
+// credit pill. Aliased to _biCreditPill.
+function _biMarginPill(delta) { return _biCreditPill(delta); }
 
 function _biRowColor(n) {
   if (n == null || Math.abs(n) < 0.005) return 'var(--text-dark)';
@@ -15476,6 +15517,9 @@ function _biInvoiceCard(f, pid) {
                     : inv.status === 'sent' ? 'sent (unpaid)' : escH(inv.status);
   const sentDate = inv.sentDate ? new Date(inv.sentDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : 'unsent';
   const chev = expanded ? '▾' : '▸';
+  // Baseline profit per invoice = invoiced − raw actuals (already f.deltaRaw).
+  const invProfit = f.deltaRaw;
+  const invMargin = f.invoiced > 0 ? (invProfit / f.invoiced) * 100 : 0;
   const header = `
     <div onclick="toggleBudgetItemsInvoice('${inv.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer" onmouseover="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseout="this.style.background=''">
       <span style="font-family:var(--font-h);font-size:13px;color:var(--text-light);width:14px">${chev}</span>
@@ -15483,8 +15527,9 @@ function _biInvoiceCard(f, pid) {
         <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany)">${escH(inv.number || '(no number)')}</div>
         <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:1px">${escH(sentDate)} · ${statusLabel}</div>
       </div>
-      <div style="text-align:right">
-        ${_biMarginPill(f.invoiceDelta)}
+      <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        ${_biProfitPill(invProfit, invMargin)}
+        ${_biCreditPill(f.invoiceDelta)}
         <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:2px">invoiced ${fmt(f.invoiced)}</div>
       </div>
     </div>`;
@@ -15515,12 +15560,17 @@ function _biInvoiceCardDetail(f, pid) {
           ${row('Δ vs Marked-up', _biFmt(f.deltaMarkedUp), null, _biRowColor(f.deltaMarkedUp))}
         </tbody>
       </table>
-      <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:flex;justify-content:space-between;align-items:baseline">
+      <div style="margin-top:12px;padding-top:10px;border-top:2px solid var(--pecan);display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div>
-          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Invoice Margin / Loss</div>
-          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">= Invoiced − Marked-up Actuals</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Baseline Profit</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-bottom:4px">= Invoiced − Raw Actuals</div>
+          ${_biProfitPill(f.deltaRaw, f.invoiced > 0 ? (f.deltaRaw / f.invoiced) * 100 : 0)}
         </div>
-        <div>${_biMarginPill(f.invoiceDelta)}</div>
+        <div style="text-align:right">
+          <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany)">Credit / Overage (on top)</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-bottom:4px">= Invoiced − Marked-up Actuals</div>
+          ${_biCreditPill(f.invoiceDelta)}
+        </div>
       </div>
     </div>`;
 }
