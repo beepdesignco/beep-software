@@ -14410,9 +14410,138 @@ function renderPDBudgetExpenses(proj, pid) {
   return summaryStrip + headerRow + list;
 }
 
+// ═════════════════ Budget → Time (project-scoped list) ═════════════════
+// Read S.timeEntries filtered by projectId. Summary strip at top with
+// total hours + billable/non-billable split + billable revenue, then
+// per-person breakdown (hours + fee per user), then the log table.
+// Per-employee profitability (billed rate vs internal cost) needs
+// studio-side settings for internal cost per hour — not built yet.
+
 function renderPDBudgetTime(proj, pid) {
-  return _renderBudgetComingSoon('Time',
-    'Time entries scoped to this project from the global time tracker, plus per-employee profitability (billed rate vs internal cost) per project. Surfaces team-level margin alongside project margin.');
+  const rows = (S.timeEntries || []).filter(t => t.projectId === pid);
+  const t = getProjectTimeFinancials(pid);
+
+  // Per-person breakdown
+  const byPerson = new Map();
+  rows.forEach(e => {
+    const key = e.person || e.userId || '(unassigned)';
+    if (!byPerson.has(key)) byPerson.set(key, { hours: 0, revenue: 0, entries: 0 });
+    const p = byPerson.get(key);
+    const h = Number(e.hours) || 0;
+    p.hours += h;
+    p.entries++;
+    if (e.billable) p.revenue += h * (Number(e.rate) || 0);
+  });
+  const personRows = Array.from(byPerson.entries())
+    .map(([person, v]) => ({ person, ...v }))
+    .sort((a, b) => b.hours - a.hours);
+
+  const summaryStrip = `
+    <div style="background:var(--white);border-radius:var(--rl);padding:18px 22px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Total on this project</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:26px;color:var(--text-dark);line-height:1">${t.hoursTotal.toFixed(1)} hrs</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);margin-top:3px">${t.count} entr${t.count===1?'y':'ies'} logged</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,auto));gap:18px">
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:#1a6e3a;margin-bottom:3px">Billable</div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--text-dark);line-height:1">${t.hoursBillable.toFixed(1)} hrs</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:#8a8a8a;margin-bottom:3px">Non-Billable</div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--text-dark);line-height:1">${t.hoursNonbillable.toFixed(1)} hrs</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--pecan);margin-bottom:3px">Billable Revenue</div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:16px;color:var(--text-dark);line-height:1">${fmt(t.billableRevenue)}</div>
+          </div>
+        </div>
+      </div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);line-height:1.5">
+        Billable revenue is hours × rate for entries marked billable. Per-employee profitability (billed vs internal cost) will land once studio-level internal cost settings are added.
+      </div>
+    </div>`;
+
+  const personBreakdown = personRows.length ? `
+    <div style="background:var(--white);border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Per Person</div>
+      <table style="width:100%;font-family:var(--font-b);font-size:12px;border-collapse:collapse">
+        <thead>
+          <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
+            <th style="text-align:left;padding:5px 8px;font-family:var(--font-h);font-weight:700">Person</th>
+            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Hours</th>
+            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Entries</th>
+            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Billable Revenue</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${personRows.map(p => `<tr style="border-top:1px solid var(--border)">
+            <td style="padding:6px 8px;color:var(--text-dark);font-weight:600">${escH(_timePersonLabel(p.person))}</td>
+            <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;color:var(--text-dark)">${p.hours.toFixed(1)}</td>
+            <td style="padding:6px 8px;text-align:right;color:var(--text-mid)">${p.entries}</td>
+            <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;color:var(--pecan)">${fmt(p.revenue)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : '';
+
+  const sorted = rows.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const headerRow = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid)">Time Entries</div>
+      <button class="btn btn-primary btn-sm" onclick="showView('time')" style="font-size:11px">Open Time Tracker →</button>
+    </div>`;
+
+  const list = sorted.length ? `
+    <div style="background:var(--white);border-radius:var(--rl);padding:8px 16px;border:1px solid var(--border);overflow-x:auto">
+      <table style="width:100%;font-family:var(--font-b);font-size:12px;border-collapse:collapse">
+        <thead>
+          <tr style="color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em">
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Date</th>
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Person</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Hours</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Rate</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Fee</th>
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Status</th>
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Invoice</th>
+            <th style="text-align:left;padding:8px;font-family:var(--font-h);font-weight:700">Notes</th>
+            <th style="padding:8px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${sorted.map(e => {
+            const h = Number(e.hours) || 0;
+            const rate = Number(e.rate) || 0;
+            const fee = e.billable ? h * rate : 0;
+            const billState = _billingStateForEntry(e);
+            const statusPill = billState === 'billed' ? '<span style="font-size:9px;font-family:var(--font-b);padding:2px 7px;border-radius:8px;background:rgba(26,110,58,0.10);color:#1a6e3a;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Billed</span>'
+                             : billState === 'queued' ? '<span style="font-size:9px;font-family:var(--font-b);padding:2px 7px;border-radius:8px;background:rgba(45,90,138,0.10);color:#2d5a8a;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Queued</span>'
+                             : !e.billable ? '<span style="font-size:9px;font-family:var(--font-b);padding:2px 7px;border-radius:8px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid);font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Non-billable</span>'
+                             : '<span style="font-size:9px;font-family:var(--font-b);padding:2px 7px;border-radius:8px;background:rgba(196,122,32,0.10);color:#c47a20;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">Unbilled</span>';
+            const inv = invoiceForTimeEntry(e);
+            const invCell = inv
+              ? `<a href="#" onclick="event.preventDefault(); event.stopPropagation(); openInvoiceBuilder('${inv.id}')" style="color:var(--russet);font-family:var(--font-b);font-weight:700;text-decoration:none">${escH(inv.number || '')}</a>`
+              : '<span style="color:var(--text-light)">—</span>';
+            return `<tr style="border-top:1px solid var(--border)">
+              <td style="padding:8px;color:var(--text-dark)">${escH(fmtEntryWhen(e))}</td>
+              <td style="padding:8px;color:var(--text-dark)">${escH(_timePersonLabel(e.person))}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:700;color:var(--text-dark)">${escH(fmtDurationFromSeconds(e.durationSeconds ?? h * 3600))}</td>
+              <td style="padding:8px;text-align:right;color:var(--text-mid)">${rate ? fmt(rate)+'/hr' : '—'}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--font-h);font-weight:700;color:${e.billable ? 'var(--pecan)' : 'var(--text-light)'}">${e.billable && rate ? fmt(fee) : '—'}</td>
+              <td style="padding:8px">${statusPill}</td>
+              <td style="padding:8px;font-size:11px">${invCell}</td>
+              <td style="padding:8px;color:var(--text-mid);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(e.notes || '')}</td>
+              <td style="padding:8px"><button class="btn btn-ghost btn-sm" onclick="openEditTimeModal('${e.id}')" style="font-size:10px;padding:3px 8px">Edit</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`
+    : `<div style="background:var(--white);border-radius:var(--rl);padding:24px;border:1px solid var(--border);text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No time entries on this project yet. Open the Time Tracker to log time.</div>`;
+
+  return summaryStrip + personBreakdown + headerRow + list;
 }
 
 // ═════════════════ §1 Budget → Freight (Baylor 2026-06-19 spec) ═════════════════
