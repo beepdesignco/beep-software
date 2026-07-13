@@ -29799,13 +29799,34 @@ function renderInvoiceBuilder() {
         <button class="btn btn-ghost btn-sm" onclick="toggleAllInvItems()" style="font-size:10px">Select All / None</button>
       </div>
       <div id="inv-proposal-items" style="max-height:250px;overflow-y:auto">`;
-    // Collect eligible items (billable, approved, proposed) + already-selected
+    // Collect eligible items (billable, approved, proposed) + already-selected.
+    // Constructed items with only some components billed on prior invoices
+    // stay eligible so the remaining components can still be added — the
+    // item's status flips to 'invoiced' after the first partial billing,
+    // which would otherwise hide the parent from this picker even though
+    // there's work left to bill.
     const invoiceableStatuses = ['billable','approved','proposed'];
+    const priorLinesForItem = (itemId) => (S.invoices || []).flatMap(prevInv => {
+      if (prevInv.id === inv.id) return [];
+      if (prevInv.status === 'draft' || prevInv.status === 'cancelled') return [];
+      return (prevInv.lineItems || []).filter(l => l.proposalItemId === itemId);
+    });
     const eligibleItems = [];
     prop.spaces.forEach(sp => {
       (sp.items||[]).forEach(item => {
         if (item._expenseId) return; // expenses show in their own section
-        const isEligible = invoiceableStatuses.includes(item.status) || _invSelectedProposalItems.has(item.id);
+        let componentsRemaining = false;
+        if (item.type === 'constructed' && (item.components || []).length > 0) {
+          const prior = priorLinesForItem(item.id);
+          const billedAsWhole = prior.some(l => !l.proposalComponentId);
+          if (!billedAsWhole) {
+            const billedComponentIds = new Set(prior.map(l => l.proposalComponentId).filter(Boolean));
+            componentsRemaining = (item.components || []).some(c => !billedComponentIds.has(c.id));
+          }
+        }
+        const isEligible = invoiceableStatuses.includes(item.status)
+                         || _invSelectedProposalItems.has(item.id)
+                         || componentsRemaining;
         if (isEligible) eligibleItems.push({ item, sp });
       });
     });
@@ -29839,15 +29860,22 @@ function renderInvoiceBuilder() {
 
       if (isConstructed && expanded) {
         const selectedComps = _invSelectedComponents.get(item.id) || new Set();
+        // Which components were already billed on prior sent invoices —
+        // disable those so the user can't double-bill.
+        const priorForItem = priorLinesForItem(item.id);
+        const billedCompIds = new Set(priorForItem.map(l => l.proposalComponentId).filter(Boolean));
         html += '<div style="padding:2px 0 6px 30px;border-left:2px solid var(--border);margin-left:10px">';
         (item.components||[]).forEach(c => {
           if (isShippingComp && isShippingComp(c)) return; // freight handled separately
           const cClient = calcComponentClient(c, item, inv.projectId);
           const cChecked = selectedComps.has(c.id);
+          const alreadyBilled = billedCompIds.has(c.id);
+          const cDisabled = checked || alreadyBilled;
           const cLabel = (c.name || c.componentType || 'Component');
-          html += `<label style="display:flex;align-items:center;gap:8px;padding:3px 4px;cursor:pointer;border-radius:var(--rs);opacity:${checked?'0.4':'1'}" onmouseenter="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseleave="this.style.background='transparent'">
-            <input type="checkbox" ${cChecked?'checked':''} ${checked?'disabled':''} onchange="toggleInvProposalComponent('${inv.projectId}','${sp.id}','${item.id}','${c.id}',this.checked)" style="accent-color:var(--russet);width:12px;height:12px;flex-shrink:0">
+          html += `<label style="display:flex;align-items:center;gap:8px;padding:3px 4px;cursor:${cDisabled?'not-allowed':'pointer'};border-radius:var(--rs);opacity:${cDisabled?'0.45':'1'}" onmouseenter="this.style.background='rgba(var(--text-rgb),0.02)'" onmouseleave="this.style.background='transparent'">
+            <input type="checkbox" ${cChecked?'checked':''} ${cDisabled?'disabled':''} onchange="toggleInvProposalComponent('${inv.projectId}','${sp.id}','${item.id}','${c.id}',this.checked)" style="accent-color:var(--russet);width:12px;height:12px;flex-shrink:0">
             <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark);flex:1">${escH(cLabel)}${(() => { const d = itemContactDisplay(c); return d ? ` · <span style="color:var(--text-light)">${escH(d)}</span>` : ''; })()}</span>
+            ${alreadyBilled ? '<span style="font-size:9px;font-family:var(--font-b);color:var(--russet);text-transform:uppercase;letter-spacing:0.04em">Billed</span>' : ''}
             <span style="font-size:10px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(cClient)}</span>
           </label>`;
         });
