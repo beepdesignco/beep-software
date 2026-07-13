@@ -29027,8 +29027,43 @@ function getItemFreightClient(item, pid) {
   return _itemFreightChargesByPredicate(item, pid, c => c.categoryId === primaryId);
 }
 
+// Lines already billed for a proposal item on OTHER invoices that have left
+// draft (i.e. sent/paid, not cancelled) — excludes the invoice being edited.
+// Whole-item lines have no proposalComponentId; component lines carry one.
+// Used to stop the builder from re-billing a component (or the whole item)
+// that a prior invoice already covered.
+function _invPriorLinesForItem(itemId) {
+  return (S.invoices || []).flatMap(prevInv => {
+    if (prevInv.id === _currentInvoiceId) return [];
+    if (prevInv.status === 'draft' || prevInv.status === 'cancelled') return [];
+    return (prevInv.lineItems || []).filter(l => l.proposalItemId === itemId);
+  });
+}
+
 function toggleInvProposalItem(pid, spId, itemId, checked) {
   if (checked) {
+    // Partial-billing guard: a constructed item with SOME components already
+    // billed on a prior sent invoice must never bill the whole-item total —
+    // that would re-charge the components already invoiced. Instead select
+    // only the remaining (unbilled) components. Also covers "Select All",
+    // which calls this programmatically.
+    {
+      const gItem = S.proposals[pid]?.spaces.find(s => s.id === spId)?.items?.find(i => i.id === itemId);
+      if (gItem && gItem.type === 'constructed' && (gItem.components || []).length) {
+        const prior = _invPriorLinesForItem(itemId);
+        const billedAsWhole = prior.some(l => !l.proposalComponentId);
+        const billedCompIds = new Set(prior.map(l => l.proposalComponentId).filter(Boolean));
+        if (!billedAsWhole && billedCompIds.size > 0) {
+          (gItem.components || []).forEach(c => {
+            if (billedCompIds.has(c.id)) return;                       // already billed
+            if (isShippingComp && isShippingComp(c)) return;           // freight handled separately
+            if (_invSelectedComponents.get(itemId)?.has(c.id)) return; // already selected
+            toggleInvProposalComponent(pid, spId, itemId, c.id, true);
+          });
+          return;
+        }
+      }
+    }
     // Clear any component-level selections for this item (whole-item supersedes)
     if (_invSelectedComponents.has(itemId)) {
       _invLineItems = _invLineItems.filter(l => !(l.proposalItemId === itemId && l.proposalComponentId));
@@ -29844,18 +29879,37 @@ function renderInvoiceBuilder() {
       const statusColor = getStatusColor(item.status);
       const statusLabel = getPipelineStatusLabel(item.status);
       const isConstructed = item.type === 'constructed' && (item.components||[]).length > 0;
-      const expanded = _invExpandedItems.has(item.id);
       const hasCompSelections = _invSelectedComponents.has(item.id);
 
+      // Partial-billing state: constructed item with some (not all) components
+      // already billed on a prior sent invoice, and NOT billed as a whole line.
+      // In that case the whole-item checkbox is blocked (billing the total
+      // would re-charge the already-invoiced components) — the user must pick
+      // the remaining components instead, so we keep the row expanded and show
+      // only the remaining amount.
+      const priorForRow = isConstructed ? priorLinesForItem(item.id) : [];
+      const billedAsWholeRow = priorForRow.some(l => !l.proposalComponentId);
+      const priorBilledCompIds = new Set(priorForRow.map(l => l.proposalComponentId).filter(Boolean));
+      const partiallyBilled = isConstructed && !billedAsWholeRow && priorBilledCompIds.size > 0;
+
+      const expanded = _invExpandedItems.has(item.id) || partiallyBilled;
+
+      let displayTotal = total;
+      if (partiallyBilled) {
+        displayTotal = (item.components || [])
+          .filter(c => !priorBilledCompIds.has(c.id) && !(isShippingComp && isShippingComp(c)))
+          .reduce((s, c) => s + calcComponentClient(c, item, inv.projectId), 0);
+      }
+
       html += `<div style="border-radius:var(--rs)">
-        <label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
-          <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:${partiallyBilled?'default':'pointer'};border-radius:var(--rs)" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${checked?'checked':''} ${partiallyBilled?'disabled':''} value="${item.id}" ${partiallyBilled?'title="Some components already billed — pick the remaining components below"':''} onchange="toggleInvProposalItem('${inv.projectId}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0;${partiallyBilled?'opacity:0.45;cursor:not-allowed':''}">
           <span class="status-dot" style="background:${statusColor};width:6px;height:6px;flex-shrink:0"></span>
-          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}${hasCompSelections?' <span style="font-size:9px;color:var(--russet);font-style:italic">(partial)</span>':''}</span>
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}${partiallyBilled?' <span style="font-size:9px;color:var(--russet);font-style:italic">(partially billed)</span>':(hasCompSelections?' <span style="font-size:9px;color:var(--russet);font-style:italic">(partial)</span>':'')}</span>
           <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${escH(sp.name||'')}</span>
           <span style="font-size:9px;font-family:var(--font-b);color:${statusColor}">${statusLabel}</span>
-          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(total)}</span>
-          ${isConstructed ? `<button type="button" onclick="event.preventDefault();event.stopPropagation();toggleInvItemExpand('${item.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-light);padding:2px 6px;width:20px">${expanded?'▾':'▸'}</button>` : ''}
+          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap" ${partiallyBilled?'title="Remaining to bill (already-billed components excluded)"':''}>${fmt(displayTotal)}${partiallyBilled?' <span style="font-size:9px;color:var(--text-light);font-style:italic">remaining</span>':''}</span>
+          ${isConstructed && !partiallyBilled ? `<button type="button" onclick="event.preventDefault();event.stopPropagation();toggleInvItemExpand('${item.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-light);padding:2px 6px;width:20px">${expanded?'▾':'▸'}</button>` : (partiallyBilled ? `<span style="width:20px;text-align:center;font-size:11px;color:var(--text-light)">▾</span>` : '')}
         </label>`;
 
       if (isConstructed && expanded) {
