@@ -14850,6 +14850,103 @@ function getProjectFreightToBill(pid) {
   };
 }
 
+// Available project credit balance (sum of remaining balances across all
+// project credit rows). Used to gate the "Apply Credit" action on the
+// Deferred Freight section.
+function getProjectAvailableCredit(pid) {
+  const proj = getProject(pid);
+  const credits = proj?.settings?.credits || [];
+  return credits.reduce((s, c) => s + Math.max(0, Number(c.balance) || 0), 0);
+}
+
+// Draw down project credits FIFO by created date. Returns the array of
+// {creditId, amountDrawn} slices that consumed the requested amount, or
+// less if the total available was less than requested. Mutates the
+// credit balances in place. Caller must save() after.
+function _drawProjectCredits(pid, amountNeeded) {
+  const proj = getProject(pid);
+  if (!proj) return { applied: 0, slices: [] };
+  const credits = (proj.settings?.credits || [])
+    .filter(c => Number(c.balance) > 0.005)
+    .sort((a, b) => (a.created || '').localeCompare(b.created || ''));
+  let remaining = amountNeeded;
+  const slices = [];
+  for (const c of credits) {
+    if (remaining <= 0.005) break;
+    const take = Math.min(remaining, Number(c.balance));
+    c.balance = Math.round((Number(c.balance) - take) * 100) / 100;
+    slices.push({ creditId: c.id, amountDrawn: take, source: c.source, sourceInvoiceNumber: c.sourceInvoiceNumber });
+    remaining -= take;
+  }
+  return { applied: amountNeeded - remaining, slices };
+}
+
+// Apply project credit toward an item's deferred freight. Requires a
+// draft invoice as the carrier so the freight allocation row + credit
+// line item can be recorded consistently with the existing credit-line
+// pattern (_reconType='credit'). Effect on invoice: freight $ up by
+// applied amount, negative credit line for the same amount, net total
+// unchanged. Item Collected catches up on next render.
+function applyCreditToDeferredFreight(pid, itemId, invoiceId) {
+  const inv = (S.invoices || []).find(i => i.id === invoiceId);
+  if (!inv || inv.projectId !== pid) { toast('Invoice not found.'); return; }
+  if (inv.status !== 'draft') { toast('Only draft invoices can be billed into.'); return; }
+  const item = _findItemById(itemId);
+  if (!item) { toast('Item not found.'); return; }
+  const available = getProjectAvailableCredit(pid);
+  if (available <= 0.005) { toast('No project credit available.'); return; }
+
+  const primaryCatId = getPrimaryFreightCategoryId();
+  const rawActual = _faActualsForItem(itemId)
+    .filter(a => a.freightCategoryId === primaryCatId)
+    .reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const collected = getItemFreightCollected(itemId);
+  const remainingRaw = rawActual - collected;
+  if (remainingRaw <= 0.005) { toast('Nothing to bill — already covered.'); return; }
+  const markupPct = getProjectFreightMarkupPct(pid);
+  const remainingMarkedUp = Math.round(remainingRaw * (1 + markupPct / 100) * 100) / 100;
+
+  const applyAmount = Math.min(remainingMarkedUp, available);
+  const draw = _drawProjectCredits(pid, applyAmount);
+  if (draw.applied <= 0.005) { toast('Nothing applied.'); return; }
+
+  // Add marked-up freight to the invoice
+  inv.freight = (Number(inv.freight) || 0) + draw.applied;
+  // Freight allocation row so the item's Collected catches up
+  if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
+  inv.freightAllocations.push({
+    id: uid(),
+    invoiceId: inv.id,
+    proposalItemId: itemId,
+    proposalComponentId: null,
+    amount: draw.applied,
+    sharePct: null,
+    allocationSource: 'deferred_billed',
+    notes: `Deferred freight covered by project credit`,
+    created: new Date().toISOString(),
+    updated: new Date().toISOString(),
+  });
+  // Negative credit line so the invoice total stays flat
+  if (!Array.isArray(inv.lineItems)) inv.lineItems = [];
+  const creditNoteParts = draw.slices.map(s => s.sourceInvoiceNumber ? `credit from ${s.sourceInvoiceNumber}` : 'project credit');
+  inv.lineItems.push({
+    id: uid(),
+    name: `Freight paid via project credit${draw.slices.length > 1 ? ' (' + draw.slices.length + ' slices)' : ''}`,
+    description: creditNoteParts.join('; '),
+    qty: 1,
+    price: -draw.applied,
+    taxable: false,
+    _reconType: 'credit',
+  });
+  save();
+  const leftover = remainingMarkedUp - draw.applied;
+  const msg = leftover > 0.005
+    ? `Applied ${fmt(draw.applied)} credit for ${item.name || 'item'}. ${fmt(leftover)} still needs billing.`
+    : `Applied ${fmt(draw.applied)} credit for ${item.name || 'item'} — fully covered.`;
+  toast(msg);
+  renderProjectDetail();
+}
+
 // Bill a deferred amount by:
 //   1. Incrementing the target invoice's freight $ by the marked-up amount
 //   2. Creating a deferred_billed allocation row so the item's Collected
@@ -14901,18 +14998,26 @@ function _bfDeferredSection(pid) {
     `<option value="${i.id}">${escH(i.number || '(unnumbered draft)')}</option>`
   ).join('');
   const noDrafts = bill.draftInvoices.length === 0;
+  const availableCredit = getProjectAvailableCredit(pid);
 
   const spaceForItem = (id) => Object.values(S.proposals || {}).flatMap(p => p.spaces).find(sp => (sp.items||[]).some(i => i.id === id));
 
   const rows = bill.rows.map(r => {
     const sp = spaceForItem(r.itemId);
     const label = `${escH(r.item.name || '(unnamed)')}${sp ? ` <span style="color:var(--text-light);font-size:10px">· ${escH(sp.name || '')}</span>` : ''}`;
-    const actionCell = noDrafts
-      ? `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);font-style:italic">No draft invoices — create one to bill this</span>`
-      : `<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+    let actionCell;
+    if (noDrafts) {
+      actionCell = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);font-style:italic">No draft invoices — create one to bill this</span>`;
+    } else {
+      const creditBtn = availableCredit > 0.005
+        ? `<button class="btn btn-secondary btn-sm" onclick="applyCreditToDeferredFreight('${pid}','${r.itemId}',document.getElementById('bill-inv-${r.itemId}').value)" style="font-size:10px;padding:4px 10px" title="Cover this freight using ${fmt(availableCredit)} available project credit">Apply Credit</button>`
+        : '';
+      actionCell = `<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap">
           <select id="bill-inv-${r.itemId}" class="fi fsel" style="font-size:11px;padding:3px 6px;max-width:140px">${draftOpts}</select>
           <button class="btn btn-primary btn-sm" onclick="billDeferredFreight('${pid}','${r.itemId}',document.getElementById('bill-inv-${r.itemId}').value)" style="font-size:10px;padding:4px 10px">Bill</button>
+          ${creditBtn}
         </div>`;
+    }
     return `
       <tr style="border-top:1px solid var(--border)">
         <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${label}<div style="font-size:9px;color:var(--text-light);font-style:italic;margin-top:1px">${r.reasonLabel}</div></td>
@@ -14924,12 +15029,19 @@ function _bfDeferredSection(pid) {
       </tr>`;
   }).join('');
 
+  const creditBadge = availableCredit > 0.005
+    ? `<div style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:rgba(26,110,58,0.10);border:1px solid rgba(26,110,58,0.30);border-radius:12px;font-family:var(--font-b);font-size:11px;color:#1a6e3a;font-weight:700;margin-top:6px">
+        <span style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;opacity:0.85">Project credit available:</span> ${fmt(availableCredit)}
+      </div>`
+    : '';
+
   return `
     <div style="background:rgba(196,122,32,0.05);border:1px solid rgba(196,122,32,0.30);border-radius:var(--rl);padding:18px 22px;margin-bottom:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div>
           <div style="font-family:var(--font-h);font-weight:900;font-size:12px;text-transform:uppercase;letter-spacing:0.07em;color:#c47a20">Freight to Bill Client</div>
           <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:2px">${bill.rows.length} item${bill.rows.length===1?'':'s'} with actuals that haven't been fully billed to the client yet — includes purely-deferred items and overages on allowance items.</div>
+          ${creditBadge}
         </div>
         <div style="text-align:right">
           <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:2px">Total to Bill (Marked-up)</div>
@@ -14944,12 +15056,13 @@ function _bfDeferredSection(pid) {
             <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Collected</th>
             <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Remaining (raw)</th>
             <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">To Bill (marked-up)</th>
-            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Bill on Draft</th>
+            <th style="text-align:right;padding:8px;font-family:var(--font-h);font-weight:700">Action</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
       ${noDrafts ? `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic">No draft invoices exist for this project. Create a draft invoice to bill any of these amounts.</div>` : ''}
+      ${availableCredit > 0.005 && !noDrafts ? `<div style="margin-top:10px;font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;line-height:1.5"><strong>Apply Credit</strong> draws down project credit (FIFO by oldest) and adds a matching negative "credit line" to the selected draft so the invoice total stays flat while the item's Collected catches up. Partial covers apply what's available.</div>` : ''}
     </div>`;
 }
 
