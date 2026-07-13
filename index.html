@@ -17169,22 +17169,32 @@ function openFreightRetainerModal() {
 
   const rows = [];
   (prop.spaces || []).forEach(sp => (sp.items || []).forEach(item => {
-    if (!_invSelectedProposalItems.has(item.id)) return;
+    // Whole-item selections AND component-billed items (partial / constructed)
+    // are both retainer-eligible. Previously only whole-item selections showed,
+    // so adding just a component left the retainer modal empty ("Add proposal
+    // items first") — no way to bill that component's freight as a retainer.
+    const wholeSel = _invSelectedProposalItems.has(item.id);
+    const compSel  = (_invSelectedComponents.get(item.id)?.size || 0) > 0;
+    if (!wholeSel && !compSel) return;
     if (isFreightItem(item)) return; // freight-typed line items aren't retainer-eligible
     if (isExplicitNoneFreight(item)) return; // explicit None never joins the pool
     const qty = parseFloat(item.qty) || 1;
-    const subtotal = getItemClient(item, pid) * qty;
+    // Component-billed rows use the billed-components subtotal (partial);
+    // whole-item selections use the full item subtotal.
+    const subtotal = wholeSel ? getItemClient(item, pid) * qty : _invBilledClientForItem(item.id);
     const existing = (S.freightCharges || []).find(c =>
       c.parentType === 'item' && c.parentId === item.id && c.categoryId === primaryId
     );
     // Component-level freight on constructed items is preserved when the
     // retainer is applied (retainer only overrides the item-level row).
-    // Cache it so per-row + total previews stay accurate.
-    const componentFreight = (item.type === 'constructed') ? getFreightFromComponents(item, pid) : 0;
+    // Cache it so per-row + total previews stay accurate. Only meaningful for
+    // whole-item billing — component billing already reflects the billed portion.
+    const componentFreight = (item.type === 'constructed' && wholeSel) ? getFreightFromComponents(item, pid) : 0;
     // What this item bills NOW WITHOUT the retainer override — i.e. the
     // proposal's freight as-quoted. Used for unselected rows so the preview
-    // matches inv.freight when the retainer doesn't cover them.
-    const proposalFreight = getItemFreightForInvoice(item, pid);
+    // matches inv.freight when the retainer doesn't cover them. Component-only
+    // rows don't pull item-level freight, so 0.
+    const proposalFreight = wholeSel ? getItemFreightForInvoice(item, pid) : 0;
     // Default-selected behavior: if there's already a retainer saved, only
     // its items are pre-checked. Otherwise everything's pre-checked.
     const selected = existingItemIds ? existingItemIds.has(item.id) : true;
@@ -29157,6 +29167,19 @@ function toggleInvItemExpand(itemId) {
 // adjacent input (mirrors the manual-freight-override semantics).
 let _invAdjacentTaxableAmount = 0;
 
+// Client $ actually being billed for a proposal item on the CURRENT builder
+// invoice — sums its billed lines (the whole-item line OR component lines),
+// excluding freight / reconciliation / expense lines. This is the correct
+// base for a freight retainer when only SOME components are billed: the
+// retainer % applies to just the billed portion, never the full item (which
+// would over-charge freight the same way whole-item billing over-charges the
+// price). Lets partially-billed constructed items still take a retainer.
+function _invBilledClientForItem(itemId) {
+  return (_invLineItems || [])
+    .filter(l => l.proposalItemId === itemId && !l._freightRecon && !l._reconType && !l._expenseId)
+    .reduce((s, l) => s + (parseFloat(l.qty) || 1) * (parseFloat(l.price) || 0), 0);
+}
+
 function recalcInvFreight() {
   // Sum freight + adjacent from all selected proposal items.
   const inv = _currentInvoiceId ? (S.invoices||[]).find(i => i.id === _currentInvoiceId) : null;
@@ -29177,18 +29200,33 @@ function recalcInvFreight() {
   let totalFreight = 0, totalAdjacent = 0, totalAdjacentTaxable = 0;
   (prop.spaces||[]).forEach(sp => {
     (sp.items||[]).forEach(item => {
-      if (!_invSelectedProposalItems.has(item.id)) return;
+      // An item is "on this invoice" if the whole item is selected OR one or
+      // more of its components are (partial / constructed billing). Both must
+      // be able to take a retainer.
+      const wholeSel = _invSelectedProposalItems.has(item.id);
+      const compSel  = (_invSelectedComponents.get(item.id)?.size || 0) > 0;
+      if (!wholeSel && !compSel) return;
       if (retainerSet && retainerSet.has(item.id) && !isFreightItem(item)) {
-        const qty = parseFloat(item.qty) || 1;
-        const subtotal = getItemClient(item, pid) * qty;
+        // Retainer base: full item when the whole item is billed, else just
+        // the billed components — so partial billing never over-charges freight.
+        const subtotal = wholeSel
+          ? getItemClient(item, pid) * (parseFloat(item.qty) || 1)
+          : _invBilledClientForItem(item.id);
         let itemFreight = subtotal * (retainerPct / 100);
-        if (item.type === 'constructed') itemFreight += getFreightFromComponents(item, pid);
+        // Whole-item constructed adds its per-component freight on top of the
+        // retainer; component billing already limits `subtotal` to the billed
+        // portion, so don't double-add whole-item component freight there.
+        if (item.type === 'constructed' && wholeSel) itemFreight += getFreightFromComponents(item, pid);
         totalFreight += itemFreight;
-      } else {
+      } else if (wholeSel) {
         totalFreight  += getItemFreightForInvoice(item, pid);
       }
-      totalAdjacent += getItemAdjacentForInvoice(item, pid);
-      totalAdjacentTaxable += getItemTaxableAdjacentForInvoice(item, pid);
+      // Adjacent (non-primary) charges pull from the proposal at the item
+      // level — only meaningful for whole-item billing (preserves prior behavior).
+      if (wholeSel) {
+        totalAdjacent += getItemAdjacentForInvoice(item, pid);
+        totalAdjacentTaxable += getItemTaxableAdjacentForInvoice(item, pid);
+      }
     });
   });
   // Write back to the invoice object so the auto-fill survives a
