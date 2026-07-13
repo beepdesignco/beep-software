@@ -10103,10 +10103,9 @@ function showView(v) {
 // ═════════════════════════════════════════════════════════════
 
 let _projDetailTab = 'overview';
-// Budget sub-tab state. Defaults to Freight (the original tab content
-// lives here). Items sub-page is a stub for now — Baylor's per-invoice
-// spec lands in the Freight sub-page first per [[project_freight_model]].
-let _pdBudgetTab = 'freight';
+// Budget sub-tab state. Defaults to Overview now that it aggregates
+// across Freight + Items + Expenses + Time (shipped 2026-07-12).
+let _pdBudgetTab = 'overview';
 
 function openProjectDetail(pid) {
   S._detailProjectId = pid;
@@ -14158,9 +14157,203 @@ function _renderBudgetComingSoon(title, body) {
     </div>`;
 }
 
+// ═════════════════ Budget → Overview (project financial rollup) ═════════════════
+// Aggregates across the four sibling tabs: Freight (real credit/overage),
+// Items (invoiced vs cost margin), Expenses (billable / pass-through /
+// non-billable), Time (billable hours). Each card links to its
+// corresponding sub-tab.
+
+// Expense financials — filter S.expenses by projectId, group by type.
+function getProjectExpensesFinancials(pid) {
+  const rows = (S.expenses || []).filter(e => e.projectId === pid);
+  const sum = { billable: 0, passthrough: 0, nonbillable: 0, total: 0, count: rows.length };
+  rows.forEach(e => {
+    const cost = parse$(e.cost) || 0;
+    const key = e.expenseType === 'passthrough' ? 'passthrough'
+              : e.expenseType === 'billable'    ? 'billable'
+              :                                   'nonbillable';
+    sum[key] += cost;
+    sum.total += cost;
+  });
+  return sum;
+}
+
+// Time financials — filter S.timeEntries by projectId, split by billable.
+function getProjectTimeFinancials(pid) {
+  const rows = (S.timeEntries || []).filter(t => t.projectId === pid);
+  let hoursBillable = 0, hoursNonbillable = 0;
+  let billableRevenue = 0;
+  rows.forEach(t => {
+    const h = Number(t.hours) || 0;
+    if (t.billable) {
+      hoursBillable += h;
+      const rate = Number(t.rate) || 0;
+      billableRevenue += h * rate;
+    } else {
+      hoursNonbillable += h;
+    }
+  });
+  return {
+    hoursBillable,
+    hoursNonbillable,
+    hoursTotal: hoursBillable + hoursNonbillable,
+    billableRevenue,
+    count: rows.length,
+  };
+}
+
+// Overall project margin/loss headline — sums the actionable Δs from
+// Freight + Items. Freight overall Δ already includes associated
+// charges (marked-up) per Baylor's Excel spec. Items overall Δ is
+// (invoiced − marked-up cost actuals).
+function getProjectOverallDelta(pid) {
+  const freight = getProjectFreightFinancials(pid);
+  const items = getProjectItemsFinancials(pid);
+  return {
+    freightDelta: freight.overallDelta || 0,
+    itemsDelta: items.overallDelta || 0,
+    combined: (freight.overallDelta || 0) + (items.overallDelta || 0),
+  };
+}
+
+// Project invoiced / collected / outstanding for the hero header.
+function getProjectInvoiceTotals(pid) {
+  const invs = (S.invoices || []).filter(i => i.projectId === pid && i.status !== 'cancelled' && i.status !== 'draft');
+  let invoiced = 0, collected = 0, outstanding = 0;
+  invs.forEach(i => {
+    const t = Number(i.total) || 0;
+    const paid = (i.payments || []).filter(p => !p.pending).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    invoiced += t;
+    collected += paid;
+    outstanding += Math.max(0, t - paid);
+  });
+  return { invoiced, collected, outstanding, count: invs.length };
+}
+
 function renderPDBudgetOverview(proj, pid) {
-  return _renderBudgetComingSoon('Overview',
-    'Project-level financial summary will roll up totals from Freight, Items, Expenses, and Time — projected vs actual, total billed vs collected, profit margin, and credits/overages to apply or bill on the next invoice.');
+  const totals = getProjectInvoiceTotals(pid);
+  const overall = getProjectOverallDelta(pid);
+  const freight = getProjectFreightFinancials(pid);
+  const items = getProjectItemsFinancials(pid);
+  const expenses = getProjectExpensesFinancials(pid);
+  const time = getProjectTimeFinancials(pid);
+
+  if (!totals.count && !expenses.count && !time.count) {
+    return `
+      <div style="background:var(--white);border-radius:var(--rl);padding:30px;border:1px solid var(--border);text-align:center">
+        <div style="font-family:var(--font-h);font-weight:900;font-size:16px;color:var(--mahogany);margin-bottom:8px">No activity on this project yet</div>
+        <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);max-width:480px;margin:0 auto;line-height:1.6">Send an invoice, log an expense, or record time to see the Budget Overview populate.</div>
+      </div>`;
+  }
+
+  return _boHeroCard(totals, overall)
+       + _boSubTabGrid(freight, items, expenses, time);
+}
+
+function _boHeroCard(totals, overall) {
+  const combined = overall.combined;
+  const combinedColor = Math.abs(combined) < 0.005 ? 'var(--text-mid)' : combined > 0 ? '#1a6e3a' : '#b33';
+  const combinedLabel = Math.abs(combined) < 0.005 ? 'balanced'
+    : combined > 0 ? 'credit + margin available' : 'net overage / loss';
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:22px 26px;border:1px solid var(--border);margin-bottom:20px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-mid);margin-bottom:14px">Project Financial Snapshot</div>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:20px;align-items:flex-end;padding-bottom:16px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Overall Δ (Freight + Items)</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${combinedColor};line-height:1">${_bfFmt(combined)}</div>
+          <div style="font-family:var(--font-b);font-size:11px;color:${combinedColor};margin-top:3px;font-style:italic">${combinedLabel}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:6px;line-height:1.5">
+            Freight: ${_bfFmt(overall.freightDelta)}<br>
+            Items: ${_bfFmt(overall.itemsDelta)}
+          </div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Invoiced</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:20px;color:var(--text-dark);line-height:1">${fmt(totals.invoiced)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:3px">${totals.count} invoice${totals.count===1?'':'s'}</div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Collected</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:20px;color:#1a6e3a;line-height:1">${fmt(totals.collected)}</div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Outstanding</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:20px;color:${totals.outstanding > 0 ? '#c47a20' : 'var(--text-mid)'};line-height:1">${fmt(totals.outstanding)}</div>
+        </div>
+      </div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;line-height:1.5">
+        Overall Δ combines the actionable freight credit/overage (real, with markup + adjacent categories) with item-side margin/loss (invoiced − marked-up cost actuals). Positive → net credit available to apply on next invoice or margin already earned. Negative → net overage to bill or absorbed loss.
+      </div>
+    </div>`;
+}
+
+function _boSubTabGrid(freight, items, expenses, time) {
+  const cardStyle = 'background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);cursor:pointer;transition:var(--t)';
+  const cardHover = "onmouseover=\"this.style.borderColor='var(--pecan)'\" onmouseout=\"this.style.borderColor='var(--border)'\"";
+  const label = 'font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)';
+  const bignum = 'font-family:var(--font-h);font-weight:900;font-size:22px;color:var(--text-dark);line-height:1;margin:6px 0 4px';
+  const sub = 'font-family:var(--font-b);font-size:10px;color:var(--text-light);line-height:1.5';
+
+  const freightColor = Math.abs(freight.overallDelta) < 0.005 ? 'var(--text-mid)' : freight.overallDelta > 0 ? '#1a6e3a' : '#b33';
+  const itemsColor   = Math.abs(items.overallDelta)   < 0.005 ? 'var(--text-mid)' : items.overallDelta   > 0 ? '#1a6e3a' : '#b33';
+
+  return `
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">
+      <div style="${cardStyle}" onclick="setProjBudgetTab('freight')" ${cardHover}>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="${label}">Freight</div>
+          <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
+        </div>
+        <div style="${bignum};color:${freightColor}">${_bfFmt(freight.overallDelta)}</div>
+        <div style="${sub}">Overall freight Δ (credit / overage)</div>
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
+          Collected: <strong>${fmt(freight.collected.total)}</strong><br>
+          Actuals (marked-up): <strong>${_bfFmt(freight.actualsMarkedUp)}</strong><br>
+          Associated (marked-up): <strong>${_bfFmt(freight.associatedMarkedUp)}</strong>
+        </div>
+      </div>
+
+      <div style="${cardStyle}" onclick="setProjBudgetTab('items')" ${cardHover}>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="${label}">Items</div>
+          <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
+        </div>
+        <div style="${bignum};color:${itemsColor}">${_biFmt(items.overallDelta)}</div>
+        <div style="${sub}">Overall item margin / loss</div>
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
+          Invoiced: <strong>${fmt(items.invoiced)}</strong><br>
+          Net actuals (marked-up): <strong>${_biFmt(items.actualMarkedUp)}</strong>
+        </div>
+      </div>
+
+      <div style="${cardStyle}" onclick="setProjBudgetTab('expenses')" ${cardHover}>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="${label}">Expenses</div>
+          <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
+        </div>
+        <div style="${bignum};color:var(--text-dark)">${fmt(expenses.total)}</div>
+        <div style="${sub}">${expenses.count} expense${expenses.count===1?'':'s'} logged</div>
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
+          Billable: <strong>${fmt(expenses.billable)}</strong><br>
+          Pass-through: <strong>${fmt(expenses.passthrough)}</strong><br>
+          Non-billable: <strong>${fmt(expenses.nonbillable)}</strong>
+        </div>
+      </div>
+
+      <div style="${cardStyle}" onclick="setProjBudgetTab('time')" ${cardHover}>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="${label}">Time</div>
+          <span style="font-family:var(--font-b);font-size:10px;color:var(--pecan);font-style:italic">Open →</span>
+        </div>
+        <div style="${bignum};color:var(--text-dark)">${time.hoursTotal.toFixed(1)}h</div>
+        <div style="${sub}">${time.count} time entr${time.count===1?'y':'ies'}</div>
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-family:var(--font-b);font-size:11px;color:var(--text-mid);line-height:1.7">
+          Billable: <strong>${time.hoursBillable.toFixed(1)}h</strong> · ${fmt(time.billableRevenue)}<br>
+          Non-billable: <strong>${time.hoursNonbillable.toFixed(1)}h</strong>
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderPDBudgetExpenses(proj, pid) {
