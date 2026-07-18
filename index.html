@@ -1275,7 +1275,7 @@ tr:hover .row-btns { opacity:1; }
         <span class="nav-icon">◆</span>
         <span class="nav-label">Expenses</span>
       </div>
-      <div class="nav-item" onclick="showView('dashboard')" data-view="dashboard">
+      <div class="nav-item" id="nav-dashboard" onclick="showView('dashboard')" data-view="dashboard">
         <span class="nav-icon">▤</span>
         <span class="nav-label">Dashboard</span>
       </div>
@@ -1550,7 +1550,7 @@ tr:hover .row-btns { opacity:1; }
             <option value="design_fee">Design Fee</option>
           </select>
           <button id="inv-filter-clear" onclick="clearInvoiceFilters()" style="display:none;font-family:var(--font-b);font-size:11px;color:var(--russet);background:none;border:none;cursor:pointer;padding:6px 4px;text-decoration:underline">Clear filters</button>
-          <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>
+          <button class="btn btn-primary" id="inv-new-btn" onclick="openNewInvoiceModal()">+ New Invoice</button>
         </div>
       </div>
       <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
@@ -3766,6 +3766,14 @@ tr:hover .row-btns { opacity:1; }
         <input type="checkbox" id="inv-mem" style="accent-color:var(--russet);width:14px;height:14px">
         Can manage team members
       </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-projset" checked style="accent-color:var(--russet);width:14px;height:14px">
+        Can edit project &amp; tax settings <span style="color:var(--text-light);font-weight:400;font-style:italic">— uncheck to lock</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+        <input type="checkbox" id="inv-editinv" checked style="accent-color:var(--russet);width:14px;height:14px">
+        Can edit invoices <span style="color:var(--text-light);font-weight:400;font-style:italic">— uncheck for view-only</span>
+      </label>
     </div>
     <div id="inv-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
     <div class="modal-footer">
@@ -4289,6 +4297,55 @@ function hasPermission(perm) {
   if (!AUTH.member) return false;
   if (AUTH.member.role === 'owner') return true;
   return !!AUTH.member['can_' + perm];
+}
+
+// ── Restriction gates ─────────────────────────────────────────
+// Owner always allowed. For the two "edit" permissions a MISSING column
+// (migration not yet run) or no member context counts as ALLOWED — the app
+// only ever restricts on an EXPLICIT false, so no one is locked out before
+// permission_columns.sql runs. See migration/permission_columns.sql.
+function canEditProjectSettings() {
+  if (!AUTH.member) return true;
+  if (AUTH.member.role === 'owner') return true;
+  return AUTH.member.can_edit_project_settings !== false;
+}
+function canEditInvoices() {
+  if (!AUTH.member) return true;
+  if (AUTH.member.role === 'owner') return true;
+  return AUTH.member.can_edit_invoices !== false;
+}
+// Financials visibility (profit/margin overviews). Default for a non-owner
+// member is HIDDEN unless can_view_financials is explicitly granted. Item-level
+// margin on the PM page is NOT gated by this — only the aggregate overviews are.
+function canViewFinancials() {
+  if (!AUTH.member) return true;
+  if (AUTH.member.role === 'owner') return true;
+  return !!AUTH.member.can_view_financials;
+}
+
+// Disable/enable every input, select, textarea, and the primary/save button
+// inside a modal — used to open a settings modal read-only for members who
+// lack edit permission. `note` (optional) is shown in place of the footer hint.
+function _setModalReadOnly(modalId, readOnly, note) {
+  const modal = $c(modalId);
+  if (!modal) return;
+  modal.querySelectorAll('input, select, textarea').forEach(el => {
+    el.disabled = readOnly;
+    if (readOnly) el.classList.add('ro-locked'); else el.classList.remove('ro-locked');
+  });
+  // Hide the primary (save) action; leave Cancel/close usable.
+  modal.querySelectorAll('.btn-primary').forEach(b => { b.style.display = readOnly ? 'none' : ''; });
+  let banner = modal.querySelector('.ro-banner');
+  if (readOnly && !banner && note) {
+    banner = document.createElement('div');
+    banner.className = 'ro-banner';
+    banner.style.cssText = 'background:rgba(196,122,32,0.08);border:1px solid rgba(196,122,32,0.3);border-radius:var(--r);padding:8px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#c47a20';
+    banner.textContent = note;
+    const title = modal.querySelector('.modal-title');
+    if (title && title.parentNode) title.parentNode.insertBefore(banner, title.nextSibling);
+  } else if (!readOnly && banner) {
+    banner.remove();
+  }
 }
 
 function $authErr(msg) {
@@ -7145,6 +7202,13 @@ function renderAuthBadge() {
       <button onclick="signOut()" style="background:none;border:none;color:var(--sidebar-fg-muted);cursor:pointer;font-family:var(--font-b);font-size:10px;padding:4px 0;margin-top:2px;text-decoration:underline">Sign out</button>
     </div>`;
   el.style.display = '';
+  applyRoleNavGates();
+}
+
+// Hide nav entries a member's permissions don't allow. Owner sees everything.
+function applyRoleNavGates() {
+  const dash = document.getElementById('nav-dashboard');
+  if (dash) dash.style.display = canViewFinancials() ? '' : 'none';
 }
 
 async function initAuth() {
@@ -10067,6 +10131,12 @@ function toast(msg) {
 // ─── NAVIGATION ───────────────────────────────────────────
  
 function showView(v) {
+  // Financials gate: members without can_view_financials can't reach the
+  // cross-project Dashboard (aggregate profit/margin overview).
+  if (v === 'dashboard' && !canViewFinancials()) {
+    toast('You don’t have access to the Dashboard.');
+    v = 'projects';
+  }
   $a('.view').forEach(el => el.classList.remove('active'));
   $a('.nav-item').forEach(el => el.classList.remove('active'));
   const view = $c('view-'+v);
@@ -14132,7 +14202,9 @@ function renderPDBudget(proj, pid) {
     { id: 'time',     label: 'Time' },
     { id: 'freight',  label: 'Freight' },
     { id: 'items',    label: 'Items' },
-  ];
+  ].filter(t => t.id !== 'overview' || canViewFinancials()); // Overview = project P&L rollup
+  // If a restricted member had Overview selected, fall back to the first tab.
+  if (!tabs.some(t => t.id === _pdBudgetTab)) _pdBudgetTab = tabs[0].id;
   const navHtml = `
     <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px">
       ${tabs.map(t => `
@@ -17700,9 +17772,13 @@ function openProjectSettings(pid) {
   $c('ps-taxfreight').checked = !!p.taxFreight;
   $c('ps-timetaxable').checked = !!p.timeTaxable;
   $c('modal-proj-settings').classList.add('open');
+  // View-only for members without edit permission (covers project + tax settings).
+  _setModalReadOnly('modal-proj-settings', !canEditProjectSettings(),
+    'View only — you don’t have permission to change project or tax settings.');
 }
 
 function saveProjectSettings() {
+  if (!canEditProjectSettings()) { toast('You don’t have permission to edit project settings.'); return; }
   const pid = $c('ps-id').value;
   const p = S.projects.find(x => x.id === pid);
   if (!p) return;
@@ -24248,7 +24324,11 @@ function openTaxStateEditor(id, callback) {
                            : [{ name: '', rate: '' }]);
   _renderTsComponentsList(seed);
   $c('modal-tax-state').classList.add('open');
-  setTimeout(() => $c('ts-name').focus(), 80);
+  // View-only for members without project/tax edit permission.
+  const _tsRO = !canEditProjectSettings();
+  _setModalReadOnly('modal-tax-state', _tsRO, 'View only — you don’t have permission to change tax settings.');
+  if (_tsRO) $c('ts-delete-btn').style.display = 'none';
+  else setTimeout(() => $c('ts-name').focus(), 80);
 }
 
 // In-memory mirror of the components shown in the modal — read by saveTaxState.
@@ -24296,6 +24376,7 @@ function _updateTsRateDisplay() {
 }
 
 function saveTaxState() {
+  if (!canEditProjectSettings()) { toast('You don’t have permission to edit tax settings.'); return; }
   const id = $c('ts-id').value;
   const name = $c('ts-name').value.trim();
   if (!name) { showTaxStateErr('Enter the state name.'); return; }
@@ -24426,6 +24507,7 @@ function _applyTaxStateToInputs(stateName, taxRateId, taxFreightId, timeTaxableI
 }
 
 function deleteTaxState(id) {
+  if (!canEditProjectSettings()) { toast('You don’t have permission to edit tax settings.'); return; }
   const t = (S.taxStates || []).find(x => x.id === id);
   if (!t) return;
   const projCount = projectsUsingTaxState(t.name).length;
@@ -24677,6 +24759,9 @@ function renderTeamMemberRow(m, isOwner) {
   const canEdit = isOwner || isSelf;
   const canRemove = isOwner && !isSelf && m.role !== 'owner';
   const pending = !m.accepted_at;
+  // Third element `defaultOn` = permission is granted unless explicitly false
+  // (matches the "restrict only on explicit false" model). Toggling a defaultOn
+  // pill off writes an explicit false.
   const perms = [
     ['can_view_financials',          'view financials'],
     ['can_record_payments',          'record payments'],
@@ -24685,9 +24770,11 @@ function renderTeamMemberRow(m, isOwner) {
     ['can_manage_members',           'manage members'],
     ['can_adjust_time_entries',      'adjust time entries'],
     ['can_view_vendor_credentials',  'view vendor logins'],
+    ['can_edit_project_settings',    'edit project/tax settings', true],
+    ['can_edit_invoices',            'edit invoices', true],
   ];
-  const permPills = perms.map(([k, label]) => {
-    const active = m.role === 'owner' || m[k];
+  const permPills = perms.map(([k, label, defaultOn]) => {
+    const active = m.role === 'owner' || (defaultOn ? m[k] !== false : !!m[k]);
     const disabled = !isOwner || m.role === 'owner';
     return `<button onclick="toggleMemberPerm('${m.id}','${k}',${!active})" ${disabled?'disabled':''}
       style="font-size:9px;font-family:var(--font-h);font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 8px;border-radius:10px;cursor:${disabled?'default':'pointer'};transition:var(--t);border:1px solid ${active?'var(--russet)':'var(--border)'};background:${active?'rgba(var(--text-rgb),0.08)':'transparent'};color:${active?'var(--mahogany)':'var(--text-light)'};opacity:${disabled?'0.8':'1'}">${label}</button>`;
@@ -24753,6 +24840,8 @@ function openInviteMemberModal() {
   ['inv-email','inv-display-name','inv-job-title','inv-phone'].forEach(id => { $c(id).value = ''; });
   $c('inv-fin').checked = true;
   ['inv-pay','inv-send','inv-exp','inv-mem'].forEach(id => { $c(id).checked = false; });
+  // Edit permissions default ON (most members can edit; uncheck to restrict).
+  ['inv-projset','inv-editinv'].forEach(id => { $c(id).checked = true; });
   $c('inv-error').style.display = 'none';
   $c('modal-invite-member').classList.add('open');
   setTimeout(() => $c('inv-email').focus(), 80);
@@ -24770,6 +24859,8 @@ async function sendInvite() {
     can_send_invoices:   $c('inv-send').checked,
     can_manage_expenses: $c('inv-exp').checked,
     can_manage_members:  $c('inv-mem').checked,
+    can_edit_project_settings: $c('inv-projset').checked,
+    can_edit_invoices:         $c('inv-editinv').checked,
   };
 
   // Generate a throwaway password — the new user will set their own via password reset.
@@ -28892,6 +28983,7 @@ function _buildInvoiceProjectOptions(invType) {
 }
 
 function openNewInvoiceModal() {
+  if (!canEditInvoices()) { toast('You have view-only access to invoices.'); return; }
   $c('inv-modal-title').textContent = 'New Invoice';
   $c('inv-id').value = '';
   $c('inv-number').value = getNextInvoiceNumber();
@@ -29275,6 +29367,7 @@ function toggleAllInvItems() {
 }
 
 function addInvManualLine() {
+  if (!canEditInvoices()) { toast('You have view-only access to invoices.'); return; }
   _invLineItems.push({ id:uid(), name:'', qty:1, price:0, taxable:true, trackInPM:false, manual:true });
   renderInvLineItems();
 }
@@ -29353,7 +29446,8 @@ function renderInvLineItems() {
   // §3: paid invoices are LOCKED — line item name/price/qty are read-only.
   // Only Cancel action is available on locked invoices. (Partial deferred
   // per §5 so this is just === 'paid'.)
-  const _lockedByPaid = _invForLines?.status === 'paid';
+  // Also read-only for members without invoice-edit permission (view-only).
+  const _lockedByPaid = _invForLines?.status === 'paid' || !canEditInvoices();
   let firstShown = true;
   const html = _invLineItems.map((l, i) => {
     if (l._reconType === 'credit') return '';
@@ -30026,11 +30120,16 @@ function renderInvoiceBuilder() {
   }
 
   // Line items — § 3 locks edits/adds/removes when invoice is paid.
-  const _lockedByPaidHeader = inv.status === 'paid';
+  // View-only members are also locked out (they can read, not change).
+  const _invViewOnly = !canEditInvoices();
+  const _lockedByPaidHeader = inv.status === 'paid' || _invViewOnly;
+  const _lockBadge = _invViewOnly && inv.status !== 'paid'
+    ? '<span style="font-family:var(--font-h);font-weight:700;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:10px;background:rgba(196,122,32,0.12);color:#c47a20;display:inline-flex;align-items:center;gap:5px" title="You have view-only access to invoices."><span style="font-size:11px">🔒</span> View only</span>'
+    : (inv.status === 'paid' ? '<span style="font-family:var(--font-h);font-weight:700;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:10px;background:rgba(26,110,58,0.10);color:#1a6e3a;display:inline-flex;align-items:center;gap:5px" title="Invoice is paid — line items locked. Only Cancel is available."><span style="font-size:11px">🔒</span> Locked · Paid</span>' : '');
   html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px">
       <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Line Items</div>
-      ${_lockedByPaidHeader ? '<span style="font-family:var(--font-h);font-weight:700;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:10px;background:rgba(26,110,58,0.10);color:#1a6e3a;display:inline-flex;align-items:center;gap:5px" title="Invoice is paid — line items locked. Only Cancel is available."><span style="font-size:11px">🔒</span> Locked · Paid</span>' : ''}
+      ${_lockBadge}
     </div>
     <div id="inv-line-items"></div>
     ${_lockedByPaidHeader ? '' : '<button class="btn btn-ghost btn-sm" onclick="addInvManualLine()" style="margin-top:6px">+ Add Line Item</button>'}
@@ -30224,7 +30323,12 @@ function renderInvoiceBuilder() {
     const receiptBtn = inv.status === 'paid'
       ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}', { receipt: true })">Send Receipt</button>`
       : '';
-    if (inv.status === 'cancelled') {
+    if (!canEditInvoices()) {
+      // View-only: read + payment link only. No save/send/delete/cancel/refund.
+      // (Payment recording lives in the "+ Record" button inside the Payments
+      // section and is gated separately by can_record_payments.)
+      actions.innerHTML = pdfBtn + previewBtn + linkBtn;
+    } else if (inv.status === 'cancelled') {
       actions.innerHTML = pdfBtn + '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
     } else if (inv.status === 'draft') {
       actions.innerHTML = `
@@ -31354,6 +31458,7 @@ function deleteDraft() {
 }
 
 function saveInvoiceFromBuilder(status, opts = {}) {
+  if (!canEditInvoices()) { toast('You have view-only access to invoices.'); return; }
   const { navigate = true } = opts;
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
@@ -31562,6 +31667,7 @@ function markInvoiceSent(invId, meta = {}) {
 //   - commit builder form values to the invoice (without navigating away)
 //   - open the Send Invoice modal; on success, transition to 'sent' if currently draft
 function openSendInvoiceFromBuilder() {
+  if (!canEditInvoices()) { toast('You have view-only access to invoices.'); return; }
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
   if (!_invLineItems.length) { toast('Add at least one line item.'); return; }
@@ -33230,6 +33336,10 @@ function clearInvoiceFilters() {
 function renderInvoices() {
   const body = $c('invoices-body');
   if (!body) return;
+
+  // Hide "+ New Invoice" for view-only members.
+  const newBtn = $c('inv-new-btn');
+  if (newBtn) newBtn.style.display = canEditInvoices() ? '' : 'none';
 
   // Populate project filter
   const projFilter = $c('inv-filter-project');
