@@ -4697,6 +4697,18 @@ async function markAllNotificationsRead() {
 
 let _workScope = 'all';              // 'my' | 'all' — default set below based on role
 let _workScopeInitialized = false;
+// Queue rows the user has dismissed from "Awaiting Action". Notifications also
+// persist via read_at; invoices/tasks are hidden device-locally by "kind:id"
+// (they stay fully visible/managed on their own pages — this only clears the
+// reminder). Persisted to localStorage so it survives reloads.
+let _workDismissed = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem('beep_work_dismissed') || '[]')); }
+  catch (_e) { return new Set(); }
+})();
+function _workDismissKey(kind, id) { return kind + ':' + id; }
+function _persistWorkDismissed() {
+  try { localStorage.setItem('beep_work_dismissed', JSON.stringify([..._workDismissed])); } catch (_e) {}
+}
 // §13: which top-level tab is active inside the Work section. 'queue' is the
 // existing work-queue dashboard; 'tasks' is the new Asana-style task system.
 let _workTab = 'queue';
@@ -5895,35 +5907,41 @@ function _workRowHtml(row) {
         <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(row.title)}</div>
         <div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(projName)}${row.subtitle ? ' · ' + escH(row.subtitle) : ''}${age ? ' · ' + age : ''}</div>
       </div>
-      ${row.kind === 'notification'
-        ? `<button onclick="dismissWorkNotification('${row.id}', event)" title="Dismiss" style="flex-shrink:0;background:none;border:none;color:var(--text-light);font-size:17px;line-height:1;cursor:pointer;padding:3px 8px;border-radius:4px" onmouseover="this.style.color='var(--russet)';this.style.background='rgba(var(--text-rgb),0.06)'" onmouseout="this.style.color='var(--text-light)';this.style.background='none'">×</button>`
-        : `<span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>`}
+      <button onclick="dismissWorkRow('${row.kind}', '${row.id}', event)" title="Dismiss from queue" style="flex-shrink:0;background:none;border:none;color:var(--text-light);font-size:17px;line-height:1;cursor:pointer;padding:3px 8px;border-radius:4px" onmouseover="this.style.color='var(--russet)';this.style.background='rgba(var(--text-rgb),0.06)'" onmouseout="this.style.color='var(--text-light)';this.style.background='none'">×</button>
     </div>`;
 }
 
-// Dismiss (mark read) a notification straight from the Work queue without
-// navigating to its linked entity — clears it from "Awaiting Action" and drops
-// the sidebar badge. Optimistic: the row is cleared from the UI immediately,
-// then the read flag is persisted to Supabase in the background. If the persist
-// fails (network/RLS), it stays cleared for the session and is logged rather
-// than silently leaving the badge stuck.
-async function dismissWorkNotification(id, ev) {
+// Dismiss any "Awaiting Action" row from the Work queue without navigating.
+//  • notification → mark read (persisted to Supabase via read_at)
+//  • invoice / task → hidden from the queue device-locally (still fully visible
+//    and managed on the Invoices / Tasks pages — this only clears the reminder)
+// Optimistic + resilient: the UI clears immediately; a failed notification
+// persist is logged and kept cleared rather than leaving the badge stuck.
+async function dismissWorkRow(kind, id, ev) {
   if (ev) { ev.stopPropagation(); ev.preventDefault(); }
-  const n = (NOTIFICATIONS.items || []).find(x => x.id === id);
-  if (n && !n.read_at) {
-    n.read_at = new Date().toISOString();                       // optimistic local clear
-    NOTIFICATIONS.unread = Math.max(0, (NOTIFICATIONS.unread || 0) - 1);
-    if (typeof renderNotificationBell === 'function') renderNotificationBell();
-    try {
-      const { error } = await sb.from('notifications').update({ read_at: n.read_at }).eq('id', id);
-      if (error) console.warn('[dismiss-notification] persist failed (kept cleared locally):', error);
-    } catch (e) {
-      console.warn('[dismiss-notification] persist threw (kept cleared locally):', e);
+  if (kind === 'notification') {
+    const n = (NOTIFICATIONS.items || []).find(x => x.id === id);
+    if (n && !n.read_at) {
+      n.read_at = new Date().toISOString();
+      NOTIFICATIONS.unread = Math.max(0, (NOTIFICATIONS.unread || 0) - 1);
+      if (typeof renderNotificationBell === 'function') renderNotificationBell();
+      try {
+        const { error } = await sb.from('notifications').update({ read_at: n.read_at }).eq('id', id);
+        if (error) console.warn('[dismiss] notification persist failed (kept cleared locally):', error);
+      } catch (e) {
+        console.warn('[dismiss] notification persist threw (kept cleared locally):', e);
+      }
     }
   }
+  // Always record the dismissal so the row stays gone across reloads regardless
+  // of kind (harmless belt-and-suspenders for notifications too).
+  _workDismissed.add(_workDismissKey(kind, id));
+  _persistWorkDismissed();
   if (typeof renderWork === 'function') renderWork();
   else if (typeof updateWorkBadge === 'function') updateWorkBadge();
 }
+// Back-compat: any cached HTML still calling the old name routes here.
+function dismissWorkNotification(id, ev) { return dismissWorkRow('notification', id, ev); }
 
 function _workItemRowHtml(r) {
   const statusLabel = (typeof getPipelineStatusLabel === 'function') ? getPipelineStatusLabel(r.statusV) : r.statusV;
@@ -6015,7 +6033,7 @@ function _workSectionA() {
   const tasks = _workOpenTasks();
   const invs  = _workOverdueInvoices();
   const notes = _workUnreadNotifications();
-  const rows  = [...notes, ...invs, ...tasks];
+  const rows  = [...notes, ...invs, ...tasks].filter(r => !_workDismissed.has(_workDismissKey(r.kind, r.id)));
   const count = rows.length;
   const body = rows.length
     ? rows.map(_workRowHtml).join('')
