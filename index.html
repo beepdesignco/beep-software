@@ -14658,20 +14658,36 @@ function renderPDBudgetTime(proj, pid) {
   const rows = (S.timeEntries || []).filter(t => t.projectId === pid);
   const t = getProjectTimeFinancials(pid);
 
-  // Per-person breakdown
+  // Per-person breakdown with profitability. Key by user_id so we can map to
+  // the member's pay_rate (cost). Legacy entries with no user_id group by the
+  // free-text person label (no pay rate). Revenue = billable hours × entry
+  // rate; Cost = ALL their project hours × pay_rate; Margin = revenue − cost.
+  const _cache = _teamCache || [];
   const byPerson = new Map();
   rows.forEach(e => {
-    const key = e.person || e.userId || '(unassigned)';
-    if (!byPerson.has(key)) byPerson.set(key, { hours: 0, revenue: 0, entries: 0 });
+    const key = e.userId || ('name:' + (e.person || '(unassigned)'));
+    if (!byPerson.has(key)) byPerson.set(key, { userId: e.userId || null, personLabel: e.person, hours: 0, revenue: 0, entries: 0 });
     const p = byPerson.get(key);
     const h = Number(e.hours) || 0;
     p.hours += h;
     p.entries++;
     if (e.billable) p.revenue += h * (Number(e.rate) || 0);
   });
-  const personRows = Array.from(byPerson.entries())
-    .map(([person, v]) => ({ person, ...v }))
-    .sort((a, b) => b.hours - a.hours);
+  let projCost = 0, projMargin = 0, anyCost = false;
+  const personRows = Array.from(byPerson.values()).map(p => {
+    const member = p.userId ? _cache.find(m => m.user_id === p.userId) : null;
+    const payRate = member?.pay_rate != null ? Number(member.pay_rate) : null;
+    const cost = payRate != null ? p.hours * payRate : null;
+    const margin = cost != null ? p.revenue - cost : null;
+    if (cost != null) { projCost += cost; projMargin += margin; anyCost = true; }
+    return {
+      name: member?.display_name || _timePersonLabel(p.personLabel),
+      hours: p.hours, entries: p.entries, revenue: p.revenue,
+      payRate, cost, margin, hasCost: cost != null,
+    };
+  }).sort((a, b) => b.hours - a.hours);
+  const projRevenue = t.billableRevenue;
+  const projMarginPct = projRevenue > 0 ? (projMargin / projRevenue) * 100 : 0;
 
   const summaryStrip = `
     <div style="background:var(--white);border-radius:var(--rl);padding:18px 22px;border:1px solid var(--border);margin-bottom:16px">
@@ -14697,8 +14713,36 @@ function renderPDBudgetTime(proj, pid) {
         </div>
       </div>
       <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);line-height:1.5">
-        Billable revenue is hours × rate for entries marked billable. Per-employee profitability (billed vs internal cost) will land once studio-level internal cost settings are added.
+        Billable revenue = hours × rate for billable entries. Labor cost = hours × each person’s pay rate (App Settings → Team). Margin = revenue − cost.
       </div>
+    </div>`;
+
+  // Profitability strip — Billable Revenue − Labor Cost = Margin. Only meaningful
+  // once pay rates are set (anyCost); otherwise nudge to set them.
+  const _mColor = projMargin > 0.5 ? '#1a6e3a' : projMargin < -0.5 ? '#b33' : 'var(--text-mid)';
+  const profitabilityStrip = anyCost ? `
+    <div style="background:var(--white);border-radius:var(--rl);padding:16px 22px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:12px">Labor Profitability</div>
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:110px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--pecan);margin-bottom:3px">Billable Revenue</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:var(--text-dark)">${fmt(projRevenue)}</div>
+        </div>
+        <div style="font-size:16px;color:var(--text-light)">−</div>
+        <div style="flex:1;min-width:110px">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:#8a8a8a;margin-bottom:3px">Labor Cost</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:18px;color:var(--text-dark)">${fmt(projCost)}</div>
+        </div>
+        <div style="font-size:16px;color:var(--text-light)">=</div>
+        <div style="flex:1.2;min-width:130px;text-align:center;padding:8px 12px;background:${_mColor}0d;border:1px solid ${_mColor}33;border-radius:var(--rs)">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Margin</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:${_mColor};line-height:1.05">${projMargin < -0.005 ? '−' : ''}${fmt(Math.abs(projMargin))}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:${_mColor};font-style:italic;margin-top:2px">${projMarginPct.toFixed(1)}% of revenue</div>
+        </div>
+      </div>
+    </div>` : `
+    <div style="background:rgba(196,122,32,0.06);border:1px solid rgba(196,122,32,0.25);border-radius:var(--rl);padding:12px 18px;margin-bottom:16px;font-family:var(--font-b);font-size:11px;color:#c47a20">
+      Set each person’s <strong>pay rate</strong> in App Settings → Team to see labor cost and margin here.
     </div>`;
 
   const personBreakdown = personRows.length ? `
@@ -14710,16 +14754,22 @@ function renderPDBudgetTime(proj, pid) {
             <th style="text-align:left;padding:5px 8px;font-family:var(--font-h);font-weight:700">Person</th>
             <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Hours</th>
             <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Entries</th>
-            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Billable Revenue</th>
+            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Revenue</th>
+            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Labor Cost</th>
+            <th style="text-align:right;padding:5px 8px;font-family:var(--font-h);font-weight:700">Margin</th>
           </tr>
         </thead>
         <tbody>
-          ${personRows.map(p => `<tr style="border-top:1px solid var(--border)">
-            <td style="padding:6px 8px;color:var(--text-dark);font-weight:600">${escH(_timePersonLabel(p.person))}</td>
+          ${personRows.map(p => {
+            const mc = (p.margin == null) ? 'var(--text-light)' : p.margin > 0.5 ? '#1a6e3a' : p.margin < -0.5 ? '#b33' : 'var(--text-mid)';
+            return `<tr style="border-top:1px solid var(--border)">
+            <td style="padding:6px 8px;color:var(--text-dark);font-weight:600">${escH(p.name)}</td>
             <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;color:var(--text-dark)">${p.hours.toFixed(1)}</td>
             <td style="padding:6px 8px;text-align:right;color:var(--text-mid)">${p.entries}</td>
             <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;color:var(--pecan)">${fmt(p.revenue)}</td>
-          </tr>`).join('')}
+            <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;color:var(--text-mid)">${p.hasCost ? fmt(p.cost) : '<span style="color:#c47a20;font-size:10px">set rate</span>'}</td>
+            <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:800;color:${mc}">${p.margin == null ? '—' : (p.margin < -0.005 ? '−' : '') + fmt(Math.abs(p.margin))}</td>
+          </tr>`; }).join('')}
         </tbody>
       </table>
     </div>` : '';
@@ -14778,7 +14828,7 @@ function renderPDBudgetTime(proj, pid) {
     </div>`
     : `<div style="background:var(--white);border-radius:var(--rl);padding:24px;border:1px solid var(--border);text-align:center;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">No time entries on this project yet. Open the Time Tracker to log time.</div>`;
 
-  return summaryStrip + personBreakdown + headerRow + list;
+  return summaryStrip + profitabilityStrip + personBreakdown + headerRow + list;
 }
 
 // ═════════════════ §1 Budget → Freight (Baylor 2026-06-19 spec) ═════════════════
