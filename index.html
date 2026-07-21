@@ -4710,10 +4710,22 @@ function subscribeStudioRealtime() {
           if (row.studio_info) _sbShadow.studioInfo = JSON.parse(JSON.stringify(row.studio_info));
         }
         try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
-        // Best-effort live re-render of views where these lists surface.
+        // Best-effort live re-render of views where these lists surface, so a
+        // category/type another user adds appears without a manual refresh.
         const v = S.currentView;
-        if (v === 'contacts' && typeof renderContacts === 'function') renderContacts();
-        else if (v === 'project-detail' && typeof renderProjectDetail === 'function') renderProjectDetail();
+        if (v === 'settings') {
+          if (typeof renderVendorTypesList    === 'function') renderVendorTypesList();
+          if (typeof renderBrandCategoriesList === 'function') renderBrandCategoriesList();
+          if (typeof renderQtyUnitsList        === 'function') renderQtyUnitsList();
+          if (typeof renderCardsList           === 'function') renderCardsList();
+          if (typeof renderPipelineStatusSettings === 'function') renderPipelineStatusSettings();
+        } else if (v === 'contacts' && typeof renderContacts === 'function') {
+          renderContacts();
+        } else if (v === 'project-detail' && typeof renderProjectDetail === 'function') {
+          renderProjectDetail();
+        }
+        // Keep the vendor modal's type datalist fresh too.
+        if (typeof populateVendorTypeDatalist === 'function') populateVendorTypeDatalist();
       })
     .subscribe();
 }
