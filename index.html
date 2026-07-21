@@ -4427,6 +4427,7 @@ async function afterSignIn() {
   loadNotifications();
   subscribeNotifications();
   subscribeExpensesRealtime();
+  subscribeTimeRealtime();
 
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
@@ -4438,6 +4439,10 @@ async function afterSignIn() {
       return;
     }
   }
+
+  // Cross-device timer: adopt a running entry (started on the phone / another
+  // session) into the widget now that S.timeEntries is loaded.
+  if (typeof _resumeRunningTimer === 'function') _resumeRunningTimer();
 
   document.getElementById('auth-overlay').classList.remove('open');
 }
@@ -4600,6 +4605,46 @@ function subscribeExpensesRealtime() {
         }
         if (S.currentView === 'expenses' && typeof renderExpenses === 'function') renderExpenses();
         if (S.currentView === 'project-detail' && typeof renderProjectDetail === 'function') renderProjectDetail();
+      })
+    .subscribe();
+}
+
+// Realtime: time_entries changes from the mobile app or another web session
+// land in S.timeEntries without a refresh. Drives cross-device timer sync — a
+// running entry (ended_at null) started on the phone surfaces here and can be
+// stopped from either device; a stop/discard elsewhere clears the widget.
+// Owners receive all studio entries (RLS); members receive only their own.
+let _timeRealtimeChannel = null;
+function subscribeTimeRealtime() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  if (_timeRealtimeChannel) { sb.removeChannel(_timeRealtimeChannel); _timeRealtimeChannel = null; }
+  _timeRealtimeChannel = sb
+    .channel('time-' + AUTH.studio.id)
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'time_entries', filter: 'studio_id=eq.' + AUTH.studio.id },
+      (payload) => {
+        if (!S.timeEntries) S.timeEntries = [];
+        const evt = payload.eventType || payload.event;
+        if (evt === 'DELETE') {
+          const oldId = payload.old?.id;
+          if (!oldId) return;
+          // Don't yank a row we're actively editing in the Log Time modal.
+          if ($c('tm-id')?.value === oldId && $c('modal-time')?.classList.contains('open')) return;
+          S.timeEntries = S.timeEntries.filter(e => e.id !== oldId);
+          if (_sbShadow?.timeEntries) _sbShadow.timeEntries.delete(oldId);
+        } else {
+          const row = payload.new;
+          if (!row?.id) return;
+          const mapped = (typeof dbTimeToS === 'function') ? dbTimeToS(row) : null;
+          if (!mapped) return;
+          // Skip clobbering a row currently open in the edit modal (local edits win).
+          if ($c('tm-id')?.value === row.id && $c('modal-time')?.classList.contains('open')) return;
+          const idx = S.timeEntries.findIndex(e => e.id === row.id);
+          if (idx > -1) S.timeEntries[idx] = mapped; else S.timeEntries.push(mapped);
+          if (_sbShadow?.timeEntries) _sbShadow.timeEntries.set(mapped.id, JSON.parse(JSON.stringify(mapped)));
+        }
+        if (typeof _resumeRunningTimer === 'function') _resumeRunningTimer();
+        if (S.currentView === 'time' && typeof renderTime === 'function') renderTime();
       })
     .subscribe();
 }
@@ -8945,7 +8990,11 @@ function timeEntryToDB(t, studioId) {
   const hoursN   = parseFloat(t.hours) || 0;
   const durSec   = t.durationSeconds != null ? Math.round(Number(t.durationSeconds)) : Math.round(hoursN * 3600);
   const started  = t.startedAt || `${dateStr}T09:00:00.000Z`;
-  const ended    = t.endedAt   || new Date(new Date(started).getTime() + durSec * 1000).toISOString();
+  // A running timer entry (cross-device sync) is persisted with ended_at NULL
+  // and duration 0. Only an EXPLICIT null endedAt means "still running" —
+  // manual entries leave endedAt undefined, so they still get a synthesized end.
+  const isRunning = t.endedAt === null;
+  const ended    = isRunning ? null : (t.endedAt || new Date(new Date(started).getTime() + durSec * 1000).toISOString());
   return {
     id:                  t.id,
     studio_id:           studioId,
@@ -8954,7 +9003,7 @@ function timeEntryToDB(t, studioId) {
     description:         t.notes || t.description || null,
     started_at:          started,
     ended_at:            ended,
-    duration_seconds:    durSec,
+    duration_seconds:    isRunning ? 0 : durSec,
     rate:                t.rate != null && t.rate !== '' ? Number(t.rate) : null,
     status:              'unbilled',
     billable:            t.billable === false ? false : true,
@@ -26332,9 +26381,33 @@ function startTimer() {
   // Project optional at start — user can pick it before stopping (the
   // proj dropdown stays interactive while running) or set it in the
   // Log Time modal that opens on stop.
+  //
+  // CROSS-DEVICE SYNC: the timer now persists a real time_entry row on start
+  // (ended_at NULL = running). That row syncs to Supabase, so a timer started
+  // on the phone shows up on the web (and vice-versa) and can be stopped from
+  // either device. The row is finalized on stop and deleted on cancel.
   const projId = $c('tt-timer-proj')?.value || '';
-  const person = $c('tt-timer-person')?.value || 'baylor';
-  S.activeTimer = { projectId: projId || null, person, startMs: Date.now() };
+  const person = $c('tt-timer-person')?.value || AUTH.user?.id || 'baylor';
+  const isInternal = projId === '__internal__';
+  const nowIso = new Date().toISOString();
+  const entry = {
+    id: uid(),
+    userId: AUTH.user?.id || null,
+    projectId: isInternal ? '' : (projId || ''),
+    person,
+    rate: isInternal ? null : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null),
+    hours: 0,
+    date: nowIso.slice(0, 10),
+    notes: '',
+    billable: !isInternal,
+    startedAt: nowIso,
+    endedAt: null,          // ← running
+    durationSeconds: 0,
+    status: 'unbilled',
+  };
+  if (!S.timeEntries) S.timeEntries = [];
+  S.timeEntries.push(entry);
+  S.activeTimer = { entryId: entry.id, projectId: projId || null, person, startMs: Date.parse(nowIso) };
   save();
   _startTimerTick();
 }
@@ -26384,38 +26457,88 @@ function stopTimer() {
   const stopMs = Date.now();
   const elapsed = stopMs - t.startMs;
   if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+
+  // Finalize the running entry IN PLACE (commit-on-stop). This makes the stop
+  // durable across devices: the persisted row gets a real ended_at + duration
+  // the moment you stop, so there's never an orphaned running row. The Log Time
+  // modal then opens in EDIT mode for optional refinement (project, notes,
+  // duration) or discard via its Delete button.
+  const entry = (S.timeEntries || []).find(e => e.id === t.entryId);
+  if (!entry) {
+    // Pre-upgrade / desynced timer with no persisted row — fall back to the old
+    // insert-on-save path so no time is lost.
+    S.activeTimer = null;
+    save();
+    _renderTimerWidget();
+    openNewTimeModal();
+    _lastTimerBounds = { startMs: t.startMs, stopMs };
+    const sel = $c('tm-project');
+    if (sel) { sel.value = t.projectId; tmProjectChange(); }
+    const hms = elapsedHMS(elapsed);
+    $c('tm-h').value = hms.h || ''; $c('tm-m').value = hms.m || ''; $c('tm-s').value = hms.s || '';
+    updateTimeFee();
+    return;
+  }
+  const durSec = Math.max(1, Math.round(elapsed / 1000));
+  entry.endedAt = new Date(stopMs).toISOString();
+  entry.durationSeconds = durSec;
+  entry.hours = durSec / 3600;
   S.activeTimer = null;
   save();
   _renderTimerWidget();
-  // Pre-fill the Log Time modal
-  openNewTimeModal();
-  _lastTimerBounds = { startMs: t.startMs, stopMs };  // must be set *after* openNewTimeModal which clears it
-  // Override defaults with timer data
-  const sel = $c('tm-project');
-  if (sel) { sel.value = t.projectId; tmProjectChange(); }
-  const isCustom = !TEAM.find(tm => tm.id === t.person);
-  $c('tm-person').value = isCustom ? 'other' : t.person;
-  $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
-  if (isCustom) $c('tm-person-custom').value = t.person;
-  const teamRate = TEAM.find(tm => tm.id === t.person)?.rate || 195;
-  $c('tm-rate').value = teamRate;
-  const hms = elapsedHMS(elapsed);
-  $c('tm-h').value = hms.h || '';
-  $c('tm-m').value = hms.m || '';
-  $c('tm-s').value = hms.s || '';
-  updateTimeFee();
+  // Open the entry for optional edits. Set the timer bounds AFTER opening so a
+  // duration edit re-synthesizes ended_at consistently (see saveTimeEntry).
+  openEditTimeModal(entry.id);
+  _lastTimerBounds = { startMs: t.startMs, stopMs };
 }
- 
+
 function cancelTimer() {
   if (!confirm('Discard this timer? The time won\'t be saved.')) return;
   if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  const t = S.activeTimer;
+  // Delete the persisted running row so it's discarded everywhere (softDelete
+  // is off for time_entries, so this is a hard delete on the next sync).
+  if (t?.entryId) S.timeEntries = (S.timeEntries || []).filter(e => e.id !== t.entryId);
   S.activeTimer = null;
   save();
   _renderTimerWidget();
   toast('Timer discarded.');
 }
- 
+
+// Cross-device resume: adopt a server-side running entry (ended_at null) for
+// the current user into the timer widget, or clear the widget if the entry we
+// were tracking was finalized/deleted on another device. Called after load and
+// on every time_entries realtime event.
+function _resumeRunningTimer() {
+  const me = AUTH.user?.id;
+  if (!me) return;
+  const running = (S.timeEntries || []).find(
+    e => e.userId === me && e.endedAt == null && e.status !== 'billed'
+  );
+  if (running) {
+    if (!S.activeTimer || S.activeTimer.entryId !== running.id) {
+      S.activeTimer = {
+        entryId: running.id,
+        projectId: running.projectId || (running.billable === false ? '__internal__' : null),
+        person: running.person || me,
+        startMs: running.startedAt ? Date.parse(running.startedAt) : Date.now(),
+      };
+      _startTimerTick();
+    }
+  } else if (S.activeTimer && S.activeTimer.entryId) {
+    // We were tracking a persisted running entry that's now gone (stopped or
+    // discarded elsewhere) — return the widget to idle.
+    S.activeTimer = null;
+    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+    _renderTimerWidget();
+  }
+}
+
 function initTimer() {
+  // Discard any pre-upgrade in-memory timer (old model had no entryId / no
+  // persisted row) so it can't linger unsyncable. Rare — only if a timer was
+  // running across the deploy of cross-device sync.
+  if (S.activeTimer && !S.activeTimer.entryId) { S.activeTimer = null; save(); }
   // Populate project dropdowns
   const sel = $c('tt-timer-proj');
   if (sel) {
@@ -35742,7 +35865,10 @@ function exportTimeCsv() {
 
 // Returns the same filtered list `renderTime` builds, without rendering.
 function collectFilteredTimeEntries() {
-  let entries = [...(S.timeEntries || [])];
+  // Exclude the currently-running entry (ended_at null): it's represented by
+  // the live timer widget, not the log. It gets a real duration on stop and
+  // then appears here normally.
+  let entries = [...(S.timeEntries || [])].filter(e => e.endedAt != null || (Number(e.durationSeconds) || 0) > 0);
   const fProj    = $c('tt-filter-proj')?.value    || '';
   const fPerson  = $c('tt-filter-person')?.value  || '';
   const fBilled  = $c('tt-filter-billed')?.value  || '';
@@ -36400,6 +36526,10 @@ function _applyTimeModalPermissions() {
 }
  
 function openEditTimeModal(id) {
+  // Clear any stale timer bounds; stopTimer re-sets them *after* calling this
+  // so a duration edit re-synthesizes ended_at, but a plain edit-existing must
+  // not inherit a previous stop's bounds.
+  _lastTimerBounds = null;
   const e = (S.timeEntries||[]).find(x => x.id === id);
   if (!e) return;
   if (e.status === 'billed') {
