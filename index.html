@@ -34145,11 +34145,12 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
 
   // Cash on hand: all-time settled payments minus all-time expense payments.
   // Refunds (negative payments) net naturally via the sum.
-  let cashIn = 0, cashOut = 0;
+  let cashIn = 0, cashOut = 0, pendingInTransit = 0;
   invs.forEach(inv => {
     if (inv.status === 'cancelled') return;
-    (inv.payments || []).filter(p => !p.pending).forEach(p => {
-      cashIn += Number(p.amount || 0);
+    (inv.payments || []).forEach(p => {
+      if (p.pending) pendingInTransit += Number(p.amount || 0);  // in-flight ACH, not settled
+      else cashIn += Number(p.amount || 0);
     });
   });
   exps.forEach(e => {
@@ -34201,7 +34202,7 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
       <div style="flex:1;height:1px;background:var(--border)"></div>
       <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic">As of ${escH(today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))} · ignores date filter</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px">
+    <div style="display:grid;grid-template-columns:repeat(${pendingInTransit > 0.005 ? 5 : 4},1fr);gap:14px;margin-bottom:20px">
       <div style="${cardStyle}">
         <div style="${statNum};color:#c47a20">${fmt(outstanding)}</div>
         <div style="${statLabel}">Outstanding</div>
@@ -34212,6 +34213,11 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
         <div style="${statLabel}">Overdue</div>
         <div style="${statSub}">${totalOverdue > 0 ? 'See AR aging below' : 'Nothing overdue'}</div>
       </div>
+      ${pendingInTransit > 0.005 ? `<div style="${cardStyle}">
+        <div style="${statNum};color:#2d5a8a">${fmt(pendingInTransit)}</div>
+        <div style="${statLabel}">In Transit</div>
+        <div style="${statSub}">Pending ACH — not settled yet</div>
+      </div>` : ''}
       <div style="${cardStyle}">
         <div style="${statNum};color:var(--text-mid)">${fmt(draftTotal)}</div>
         <div style="${statLabel}">Draft Invoices</div>
@@ -34220,7 +34226,7 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
       <div style="${cardStyle}">
         <div style="${statNum};color:${cashOnHand >= 0 ? '#1a6e3a' : '#b33'}">${fmt(cashOnHand)}</div>
         <div style="${statLabel}">Cash on Hand</div>
-        <div style="${statSub}">Settled receipts − expenses</div>
+        <div style="${statSub}">Settled receipts − expenses${pendingInTransit > 0.005 ? ' (excl. in-transit)' : ''}</div>
       </div>
     </div>
 
