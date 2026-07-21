@@ -10657,34 +10657,33 @@ function copyQRCard(btn) {
 function _backfillFreightAllocations() {
   if (!Array.isArray(S.invoices)) return;
   let backfilled = 0;
+  // Order-insensitive signature of an allocation set (itemId|componentId|amount).
+  // Handles both the stored row shape (proposalItemId/proposalComponentId) and
+  // the computed shape (itemId/componentId).
+  const allocKey = a =>
+    `${a.itemId ?? a.proposalItemId ?? ''}|${a.componentId ?? a.proposalComponentId ?? ''}|${Number(a.amount || 0).toFixed(2)}`;
+  const sig = rows => rows.map(allocKey).sort().join('~');
   S.invoices.forEach(inv => {
     if (inv.status === 'draft' || inv.status === 'cancelled') return;
     const freightTotal = Number(inv.freight) || 0;
     if (freightTotal <= 0) return;
-    // Drift detection — re-allocate if the existing auto rows don't sum
-    // to the invoice's freight (catches legacy buggy allocations from
-    // before the mixed-mode fix landed). If the sum is within a cent,
-    // assume it's already correct.
-    const autoSum = (inv.freightAllocations || [])
-      .filter(a => a.allocationSource === 'auto_proportional')
-      .reduce((s, a) => s + Number(a.amount || 0), 0);
-    const sumOk = Math.abs(autoSum - freightTotal) < 0.01 && autoSum > 0;
-    // Component-id backfill — if any invoice line is component-level but
-    // its corresponding auto allocation row is missing proposalComponentId,
-    // re-allocate to populate the new column (added in phase0_40).
-    const hasComponentLines = (inv.lineItems || []).some(l => l.proposalComponentId);
-    const autoRows = (inv.freightAllocations || []).filter(a => a.allocationSource === 'auto_proportional');
-    const componentIdsMissing = hasComponentLines && autoRows.length > 0 &&
-      autoRows.every(a => !a.proposalComponentId);
-    if (sumOk && !componentIdsMissing) return;
+    // Fixpoint check: only re-allocate when a fresh computation would actually
+    // differ from what's stored. This catches genuine drift / missing
+    // component-ids (legacy rows) while NOT re-writing (and re-syncing with
+    // fresh ids/timestamps) on every page load when the allocation is already
+    // correct — the old sum/component-id heuristics could false-positive
+    // forever on an invoice whose component line isn't itself allocatable.
+    const existing = (inv.freightAllocations || []).filter(a => a.allocationSource === 'auto_proportional');
+    const desired = _computeFreightAllocs(inv);
+    if (sig(existing) === sig(desired)) return;   // already correct — no churn
     allocateInvoiceFreight(inv);
-    if ((inv.freightAllocations || []).some(a => a.allocationSource === 'auto_proportional')) {
-      backfilled++;
-    }
+    backfilled++;
   });
   if (backfilled > 0) {
     save();
-    setTimeout(() => toast(`Backfilled freight allocations for ${backfilled} invoice${backfilled === 1 ? '' : 's'}.`), 700);
+    // Background migration — intentionally silent (previously toasted on every
+    // load, which annoyed users when an invoice re-triggered repeatedly).
+    console.info(`[freight-allocation-backfill] re-allocated ${backfilled} invoice(s).`);
   }
 }
 
@@ -14190,14 +14189,13 @@ function _getLineFreightContribution(line, parentItem, pid) {
 // Idempotent: drops prior 'auto_proportional' rows and re-derives.
 // 'manual' + 'deferred_billed' rows are preserved untouched.
 // Cancelled invoices skip entirely.
-function allocateInvoiceFreight(inv) {
-  if (!inv || inv.status === 'cancelled') return;
-  if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
-
-  inv.freightAllocations = inv.freightAllocations.filter(a => a.allocationSource !== 'auto_proportional');
-
+// Pure computation of the auto-proportional freight split for an invoice.
+// Returns [{itemId, componentId, amount}] (amount > 0 only) with no side
+// effects — so the backfill can compare against stored rows to detect a
+// fixpoint, and the writer below can turn them into allocation records.
+function _computeFreightAllocs(inv) {
   const freightTotal = Number(inv.freight) || 0;
-  if (freightTotal <= 0) return;
+  if (freightTotal <= 0) return [];
 
   const pid = inv.projectId;
   const retainerItemIds = (inv.freightRetainer && Array.isArray(inv.freightRetainer.item_ids))
@@ -14217,16 +14215,16 @@ function allocateInvoiceFreight(inv) {
     const inRetainer = retainerItemIds && retainerItemIds.has(l.proposalItemId);
     if (inRetainer) {
       const lineSubtotal = (Number(l.qty) || 1) * (Number(l.price) || 0);
-      entries.push({ line: l, itemId: l.proposalItemId, componentId: l.proposalComponentId || null, kind: 'retainer', subtotal: lineSubtotal });
+      entries.push({ itemId: l.proposalItemId, componentId: l.proposalComponentId || null, kind: 'retainer', subtotal: lineSubtotal });
     } else {
       const quoted = _getLineFreightContribution(l, linkedItem, pid);
       if (quoted > 0) {
-        entries.push({ line: l, itemId: l.proposalItemId, componentId: l.proposalComponentId || null, kind: 'standalone', amount: quoted });
+        entries.push({ itemId: l.proposalItemId, componentId: l.proposalComponentId || null, kind: 'standalone', amount: quoted });
       }
     }
   });
 
-  if (!entries.length) return;
+  if (!entries.length) return [];
 
   // Standalone items are billed their quoted amount. Retainer pool gets
   // whatever's left over so the per-item sum lands on inv.freight.
@@ -14235,7 +14233,7 @@ function allocateInvoiceFreight(inv) {
   const retainerSubtotal = retainerEntries.reduce((s, e) => s + e.subtotal, 0);
   const retainerPool = Math.max(0, freightTotal - standaloneSum);
 
-  // Write. Track running total so the last row can absorb rounding drift.
+  // Track running total so the last row can absorb rounding drift.
   const allocs = [];
   entries.forEach(e => {
     let amount;
@@ -14246,7 +14244,7 @@ function allocateInvoiceFreight(inv) {
         ? Math.round(retainerPool * (e.subtotal / retainerSubtotal) * 100) / 100
         : 0;
     }
-    allocs.push({ itemId: e.itemId, componentId: e.componentId, amount });
+    allocs.push({ itemId: e.itemId, componentId: e.componentId || null, amount });
   });
 
   const runningSum = allocs.reduce((s, a) => s + a.amount, 0);
@@ -14255,8 +14253,19 @@ function allocateInvoiceFreight(inv) {
     allocs[allocs.length - 1].amount = Math.round((allocs[allocs.length - 1].amount + drift) * 100) / 100;
   }
 
-  allocs.forEach(a => {
-    if (a.amount <= 0) return;
+  return allocs.filter(a => a.amount > 0);
+}
+
+function allocateInvoiceFreight(inv) {
+  if (!inv || inv.status === 'cancelled') return;
+  if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
+
+  inv.freightAllocations = inv.freightAllocations.filter(a => a.allocationSource !== 'auto_proportional');
+
+  const freightTotal = Number(inv.freight) || 0;
+  if (freightTotal <= 0) return;
+
+  _computeFreightAllocs(inv).forEach(a => {
     inv.freightAllocations.push({
       id: uid(),
       invoiceId: inv.id,
