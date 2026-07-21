@@ -4443,6 +4443,7 @@ async function afterSignIn() {
   subscribeNotifications();
   subscribeExpensesRealtime();
   subscribeTimeRealtime();
+  subscribeStudioRealtime();
 
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
@@ -4660,6 +4661,59 @@ function subscribeTimeRealtime() {
         }
         if (typeof _resumeRunningTimer === 'function') _resumeRunningTimer();
         if (S.currentView === 'time' && typeof renderTime === 'function') renderTime();
+      })
+    .subscribe();
+}
+
+// Apply the studio-settings blob (shared taxonomy + config) into S. Used at
+// load and by the studios Realtime handler so both stay in sync.
+function _applyStudioSettings(studioSettings) {
+  studioSettings = studioSettings || {};
+  S.qtyUnits         = studioSettings.qty_units         || (typeof DEFAULT_QTY_UNITS !== 'undefined' ? DEFAULT_QTY_UNITS.slice() : []);
+  S.taskStatuses     = studioSettings.task_statuses     || (typeof DEFAULT_TASK_STATUSES !== 'undefined' ? DEFAULT_TASK_STATUSES.slice() : []);
+  S.taskStatusColors = studioSettings.task_status_colors || {};
+  S.paymentCards     = studioSettings.payment_cards     || [];
+  S.statusColors     = studioSettings.status_colors     || (typeof DEFAULT_STATUS_COLORS !== 'undefined' ? {...DEFAULT_STATUS_COLORS} : {});
+  S.statusLabels     = studioSettings.status_labels     || {};
+  S.customItemStatuses   = studioSettings.custom_item_statuses  || [];
+  S.pipelineStatusOrder  = studioSettings.pipeline_status_order || [];
+  S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
+  S.vendorTypes      = Array.isArray(studioSettings.vendor_types) ? studioSettings.vendor_types : [];
+  S.taxStates        = Array.isArray(studioSettings.tax_states)   ? studioSettings.tax_states   : [];
+  S.taxFilings       = Array.isArray(studioSettings.tax_filings)  ? studioSettings.tax_filings  : [];
+  S.salesTaxTrackerEnabled   = !!studioSettings.sales_tax_tracker_enabled;
+  S.salesTaxTrackerStartDate = studioSettings.sales_tax_tracker_start_date || '';
+}
+
+// Realtime: shared studio settings (vendor/brand categories, vendor types,
+// status config, etc.) live in one studios.settings blob. When another user
+// changes them, pull the new blob into S AND refresh the sync shadow — the
+// shadow refresh is what prevents this client's next whole-blob write from
+// clobbering the other user's additions.
+let _studioRealtimeChannel = null;
+function subscribeStudioRealtime() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  if (_studioRealtimeChannel) { sb.removeChannel(_studioRealtimeChannel); _studioRealtimeChannel = null; }
+  _studioRealtimeChannel = sb
+    .channel('studio-' + AUTH.studio.id)
+    .on('postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'studios', filter: 'id=eq.' + AUTH.studio.id },
+      (payload) => {
+        const row = payload.new;
+        if (!row) return;
+        const settings = row.settings || {};
+        _applyStudioSettings(settings);
+        if (row.studio_info) S.studio = row.studio_info;
+        // Keep the sync shadow aligned so save() doesn't re-push a stale blob.
+        if (typeof _sbShadow !== 'undefined' && _sbShadow) {
+          _sbShadow.studioSettings = JSON.parse(JSON.stringify(settings));
+          if (row.studio_info) _sbShadow.studioInfo = JSON.parse(JSON.stringify(row.studio_info));
+        }
+        try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+        // Best-effort live re-render of views where these lists surface.
+        const v = S.currentView;
+        if (v === 'contacts' && typeof renderContacts === 'function') renderContacts();
+        else if (v === 'project-detail' && typeof renderProjectDetail === 'function') renderProjectDetail();
       })
     .subscribe();
 }
@@ -7770,21 +7824,7 @@ async function loadFromSupabase() {
     if (prop.estimates) prop.estimates.sort((a, b) => new Date(b.created || b.savedAt || 0) - new Date(a.created || a.savedAt || 0));
   });
 
-  const studioSettings = AUTH.studio.settings || {};
-  S.qtyUnits         = studioSettings.qty_units         || (typeof DEFAULT_QTY_UNITS !== 'undefined' ? DEFAULT_QTY_UNITS.slice() : []);
-  S.taskStatuses     = studioSettings.task_statuses     || (typeof DEFAULT_TASK_STATUSES !== 'undefined' ? DEFAULT_TASK_STATUSES.slice() : []);
-  S.taskStatusColors = studioSettings.task_status_colors || {};
-  S.paymentCards     = studioSettings.payment_cards     || [];
-  S.statusColors     = studioSettings.status_colors     || (typeof DEFAULT_STATUS_COLORS !== 'undefined' ? {...DEFAULT_STATUS_COLORS} : {});
-  S.statusLabels     = studioSettings.status_labels     || {};
-  S.customItemStatuses   = studioSettings.custom_item_statuses  || [];
-  S.pipelineStatusOrder  = studioSettings.pipeline_status_order || [];
-  S.categories       = studioSettings.categories       || (typeof CATEGORIES !== 'undefined' ? CATEGORIES.slice() : []);
-  S.vendorTypes      = Array.isArray(studioSettings.vendor_types) ? studioSettings.vendor_types : [];
-  S.taxStates        = Array.isArray(studioSettings.tax_states)   ? studioSettings.tax_states   : [];
-  S.taxFilings       = Array.isArray(studioSettings.tax_filings)  ? studioSettings.tax_filings  : [];
-  S.salesTaxTrackerEnabled   = !!studioSettings.sales_tax_tracker_enabled;
-  S.salesTaxTrackerStartDate = studioSettings.sales_tax_tracker_start_date || '';
+  _applyStudioSettings(AUTH.studio.settings || {});
   S.studio       = AUTH.studio.studio_info || {};
 
   // One-time fold of legacy S.contacts → vendors + vendor_contacts. Runs on
