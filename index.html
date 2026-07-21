@@ -5457,6 +5457,7 @@ function renderTasksTab() {
         ${viewBtn('list', 'List')}
         ${viewBtn('board', 'Board')}
         ${viewBtn('calendar', 'Calendar')}
+        ${viewBtn('reports', 'Reports')}
       </div>
       <input type="text" class="fi" placeholder="Search tasks…" value="${escH(_tasksTabFilter.search)}" oninput="setTasksTabFilter('search', this.value)" style="width:200px;font-size:12px;padding:6px 10px;margin-left:8px">
       <select class="fi fsel" onchange="setTasksTabFilter('assignee', this.value)" style="font-size:12px;padding:6px 10px;width:150px">${assigneeOpts}</select>
@@ -5472,11 +5473,67 @@ function renderTasksTab() {
   if (_tasksTabView === 'list')      viewHtml = _renderTasksList();
   else if (_tasksTabView === 'board')    viewHtml = _renderTasksBoard();
   else if (_tasksTabView === 'calendar') viewHtml = _renderTasksCalendar();
+  else if (_tasksTabView === 'reports')  viewHtml = _renderTasksReport();
 
   host.innerHTML = topBar + viewHtml;
 }
 
 // ── List view ────────────────────────────────────────────────────────────
+// §13 Phase 2 Reports — combined task dashboard: workload by person +
+// overdue/at-risk + open-by-category. Over ALL tasks (ignores the filter bar).
+function _renderTasksReport() {
+  const tasks = S.tasks || [];
+  const open = tasks.filter(t => t.status !== 'done');
+  const today = todayYMDInStudioTZ();
+  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const nameOf = (uid) => uid ? (members.find(m => m.user_id === uid)?.display_name || 'Unknown') : 'Unassigned';
+  const daysLate = (ymd) => Math.floor((new Date(today + 'T00:00:00') - new Date(ymd + 'T00:00:00')) / 86400000);
+
+  const byPerson = new Map();
+  open.forEach(t => {
+    const key = t.assigneeUserId || '';
+    if (!byPerson.has(key)) byPerson.set(key, { name: nameOf(t.assigneeUserId), open: 0, overdue: 0 });
+    const p = byPerson.get(key); p.open++;
+    if (t.dueDate && t.dueDate < today) p.overdue++;
+  });
+  const workRows = [...byPerson.values()].sort((a, b) => b.open - a.open);
+
+  const overdue = open.filter(t => t.dueDate && t.dueDate < today).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  const soonEnd = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+  const dueSoon = open.filter(t => t.dueDate && t.dueDate >= today && t.dueDate <= soonEnd).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+  const byCat = new Map();
+  open.forEach(t => { const c = (t.customFields?.category || '').trim() || 'Uncategorized'; byCat.set(c, (byCat.get(c) || 0) + 1); });
+  const catRows = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
+
+  const card = (title, inner) => `<div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:16px 18px;margin-bottom:16px"><div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--mahogany);margin-bottom:12px">${title}</div>${inner}</div>`;
+  const empty = (msg) => `<div style="font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">${msg}</div>`;
+  const taskLine = (t, right) => `<div onclick="openTaskModal('${t.id}')" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--rs);cursor:pointer" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
+      <span style="flex:1;min-width:0;font-family:var(--font-b);font-size:12px;color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(t.title || '(untitled)')}</span>
+      ${taskCategoryPill(t.customFields?.category, true)}${right || ''}
+    </div>`;
+
+  const workHtml = workRows.length ? `<table style="width:100%;border-collapse:collapse;font-family:var(--font-b);font-size:12px">
+    <thead><tr style="text-align:left;color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.06em"><th style="padding:5px 6px">Person</th><th style="padding:5px 6px;text-align:right">Open</th><th style="padding:5px 6px;text-align:right">Overdue</th></tr></thead>
+    <tbody>${workRows.map(r => `<tr style="border-top:1px solid var(--border)"><td style="padding:7px 6px;font-weight:600;color:var(--text-dark)">${escH(r.name)}</td><td style="padding:7px 6px;text-align:right;font-family:var(--font-h);font-weight:700">${r.open}</td><td style="padding:7px 6px;text-align:right;font-family:var(--font-h);font-weight:700;color:${r.overdue>0?'#b33':'var(--text-light)'}">${r.overdue || '—'}</td></tr>`).join('')}</tbody></table>` : empty('No open tasks.');
+
+  const overdueHtml = (overdue.length || dueSoon.length) ? `
+    ${overdue.length ? `<div style="font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:#b33;margin-bottom:4px">Overdue (${overdue.length})</div>${overdue.map(t => taskLine(t, `<span style="font-family:var(--font-h);font-weight:700;font-size:11px;color:#b33;white-space:nowrap">${daysLate(t.dueDate)}d late</span>`)).join('')}` : ''}
+    ${dueSoon.length ? `<div style="font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:#c47a20;margin:${overdue.length?'12px':'0'} 0 4px">Due this week (${dueSoon.length})</div>${dueSoon.map(t => taskLine(t, `<span style="font-family:var(--font-b);font-size:11px;color:#c47a20;white-space:nowrap">${escH(t.dueDate)}</span>`)).join('')}` : ''}` : empty('Nothing overdue or due this week. 🎉');
+
+  const maxCat = Math.max(1, ...catRows.map(r => r[1]));
+  const catHtml = catRows.length ? catRows.map(([c, n]) => `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="width:130px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(c)}</span>
+      <div style="flex:1;height:8px;background:rgba(var(--text-rgb),0.05);border-radius:4px;overflow:hidden"><div style="height:100%;width:${(n/maxCat*100).toFixed(0)}%;background:#2d5a8a"></div></div>
+      <span style="font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-mid);width:28px;text-align:right">${n}</span>
+    </div>`).join('') : empty('No open tasks to categorize.');
+
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
+    <div>${card('Workload by Person', workHtml)}${card('Open Tasks by Category', catHtml)}</div>
+    <div>${card('Overdue &amp; At-Risk', overdueHtml)}</div>
+  </div>`;
+}
+
 function _renderTasksList() {
   const filtered = _tasksFiltered();
   filtered.sort((a, b) => {
