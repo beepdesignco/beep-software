@@ -4695,7 +4695,7 @@ function taskCategoryPill(cat, small) {
 }
 
 // Filter state for the tasks tab. Persists within session.
-let _tasksTabFilter = { assignee: '', status: '', project: '', search: '' };
+let _tasksTabFilter = { assignee: '', status: '', project: '', category: '', search: '' };
 // Active view inside the Tasks tab. 'list' | 'board' | 'calendar'.
 let _tasksTabView = 'list';
 // Current month for calendar view (anchored to the 1st). Defaults to today's month.
@@ -4726,7 +4726,7 @@ function setTasksTabFilter(key, value) {
 }
 
 function clearTasksTabFilters() {
-  _tasksTabFilter = { assignee: '', status: '', project: '', search: '' };
+  _tasksTabFilter = { assignee: '', status: '', project: '', category: '', search: '' };
   renderTasksTab();
 }
 
@@ -5207,6 +5207,7 @@ function _tasksFiltered() {
     if (f.assignee && (t.assigneeUserId || '') !== f.assignee) return false;
     if (f.status && t.status !== f.status) return false;
     if (f.project && (t.projectId || '') !== f.project) return false;
+    if (f.category && (t.customFields?.category || '') !== f.category) return false;
     if (search) {
       const hay = (t.title + ' ' + (t.description || '')).toLowerCase();
       if (!hay.includes(search)) return false;
@@ -5361,7 +5362,9 @@ function renderTasksTab() {
     TASK_STATUSES.map(s => `<option value="${s.v}" ${_tasksTabFilter.status === s.v ? 'selected' : ''}>${escH(s.l)}</option>`).join('');
   const projectOpts = '<option value="">All projects</option>' +
     (S.projects || []).slice().sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(p => `<option value="${escH(p.id)}" ${_tasksTabFilter.project === p.id ? 'selected' : ''}>${escH(p.name || '(unnamed)')}</option>`).join('');
-  const filtersActive = !!(_tasksTabFilter.assignee || _tasksTabFilter.status || _tasksTabFilter.project || _tasksTabFilter.search);
+  const categoryOpts = '<option value="">All categories</option>' +
+    taskCategorySuggestions().map(c => `<option value="${escH(c)}" ${_tasksTabFilter.category === c ? 'selected' : ''}>${escH(c)}</option>`).join('');
+  const filtersActive = !!(_tasksTabFilter.assignee || _tasksTabFilter.status || _tasksTabFilter.project || _tasksTabFilter.category || _tasksTabFilter.search);
 
   // View switcher.
   const viewBtn = (id, label) => `<button onclick="setTasksTabView('${id}')" style="padding:6px 14px;font-family:var(--font-h);font-weight:700;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;border:1px solid ${_tasksTabView === id ? 'var(--russet)' : 'var(--border)'};background:${_tasksTabView === id ? 'rgba(150,61,39,0.08)' : 'var(--white)'};color:${_tasksTabView === id ? 'var(--mahogany)' : 'var(--text-mid)'};border-radius:0;cursor:pointer">${label}</button>`;
@@ -5377,6 +5380,7 @@ function renderTasksTab() {
       <select class="fi fsel" onchange="setTasksTabFilter('assignee', this.value)" style="font-size:12px;padding:6px 10px;width:150px">${assigneeOpts}</select>
       ${_tasksTabView !== 'board' ? `<select class="fi fsel" onchange="setTasksTabFilter('status', this.value)" style="font-size:12px;padding:6px 10px;width:130px">${statusOpts}</select>` : ''}
       <select class="fi fsel" onchange="setTasksTabFilter('project', this.value)" style="font-size:12px;padding:6px 10px;width:170px">${projectOpts}</select>
+      <select class="fi fsel" onchange="setTasksTabFilter('category', this.value)" style="font-size:12px;padding:6px 10px;width:150px">${categoryOpts}</select>
       ${filtersActive ? `<button onclick="clearTasksTabFilters()" style="font-family:var(--font-b);font-size:11px;color:var(--russet);background:none;border:none;cursor:pointer;text-decoration:underline">Clear</button>` : ''}
       <div style="flex:1"></div>
       <button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button>
