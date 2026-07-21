@@ -5893,8 +5893,20 @@ function _workRowHtml(row) {
         <div style="font-family:var(--font-b);font-weight:700;font-size:12px;color:var(--text-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(row.title)}</div>
         <div style="font-size:10px;color:var(--text-light);margin-top:2px">${escH(projName)}${row.subtitle ? ' · ' + escH(row.subtitle) : ''}${age ? ' · ' + age : ''}</div>
       </div>
-      <span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>
+      ${row.kind === 'notification'
+        ? `<button onclick="dismissWorkNotification('${row.id}', event)" title="Dismiss" style="flex-shrink:0;background:none;border:none;color:var(--text-light);font-size:17px;line-height:1;cursor:pointer;padding:3px 8px;border-radius:4px" onmouseover="this.style.color='var(--russet)';this.style.background='rgba(var(--text-rgb),0.06)'" onmouseout="this.style.color='var(--text-light)';this.style.background='none'">×</button>`
+        : `<span style="color:var(--text-light);font-size:16px;flex-shrink:0">›</span>`}
     </div>`;
+}
+
+// Dismiss (mark read) a notification straight from the Work queue without
+// navigating to its linked entity — clears it from "Awaiting Action" and drops
+// the sidebar badge. markNotificationRead persists read_at to Supabase.
+async function dismissWorkNotification(id, ev) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+  if (typeof markNotificationRead === 'function') await markNotificationRead(id);
+  if (typeof renderWork === 'function') renderWork();
+  else if (typeof updateWorkBadge === 'function') updateWorkBadge();
 }
 
 function _workItemRowHtml(r) {
