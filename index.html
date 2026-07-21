@@ -1340,8 +1340,10 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab active" data-wktab="queue" onclick="setWorkTab('queue')" style="margin-bottom:-1px">Queue</button>
         <button class="view-tab"        data-wktab="tasks" onclick="setWorkTab('tasks')" style="margin-bottom:-1px">Tasks</button>
       </div>
-      <div id="work-body" style="padding:20px 30px"></div>
-      <div id="work-tasks-body" style="display:none;padding:20px 30px"></div>
+      <div style="flex:1;overflow-y:auto;min-height:0">
+        <div id="work-body" style="padding:20px 30px"></div>
+        <div id="work-tasks-body" style="display:none;padding:20px 30px"></div>
+      </div>
     </div>
 
     <!-- ─────────── PROJECT DETAIL VIEW ─────────── -->
