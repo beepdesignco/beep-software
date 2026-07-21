@@ -2183,7 +2183,7 @@ tr:hover .row-btns { opacity:1; }
         </div>
         <div class="fg">
           <label class="fl">State (for tax)</label>
-          <select class="fi fsel" id="ps-state" onchange="onStateSelectChange('ps-state','ps-taxrate','ps-taxfreight','ps-timetaxable')"></select>
+          <select class="fi fsel" id="ps-state" onchange="onStateSelectChange('ps-state','ps-taxrate','ps-taxfreight','ps-timetaxable', function(n){ _renderProjectJurisdictions(n, null); })"></select>
         </div>
       </div>
       <div class="frow">
@@ -2201,6 +2201,13 @@ tr:hover .row-btns { opacity:1; }
             Time is taxable
           </label>
         </div>
+      </div>
+      <!-- §7 Phase 2: which of the state's tax jurisdictions apply to THIS
+           project's address. Only shown when the state has multiple rate
+           components. Toggling recomputes the Tax Rate above. -->
+      <div class="fg" id="ps-jurisdictions-wrap" style="display:none">
+        <label class="fl">Tax Jurisdictions <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(which apply to this address — sums to the Tax Rate above)</span></label>
+        <div id="ps-jurisdictions" style="display:flex;flex-direction:column;gap:5px;padding:8px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs)"></div>
       </div>
       <div style="font-size:10px;color:var(--text-light);font-style:italic;margin-top:-6px">Tax settings flow from App Settings → Categories → Tax States. Changing the state here pulls in its defaults.</div>
     </div>
@@ -18104,6 +18111,9 @@ function openProjectSettings(pid) {
   $c('ps-taxrate').value = p.taxRate || 0;
   $c('ps-taxfreight').checked = !!p.taxFreight;
   $c('ps-timetaxable').checked = !!p.timeTaxable;
+  // §7: render the jurisdiction picker from the SAVED selection (or all-checked
+  // for legacy). Does NOT recompute the rate — ps-taxrate keeps p.taxRate.
+  _renderProjectJurisdictions(p.state || '', p.settings?.jurisdictions);
   $c('modal-proj-settings').classList.add('open');
   // View-only for members without edit permission (covers project + tax settings).
   _setModalReadOnly('modal-proj-settings', !canEditProjectSettings(),
@@ -18127,6 +18137,15 @@ function saveProjectSettings() {
   p.taxRate = parseFloat($c('ps-taxrate').value) || 0;
   p.taxFreight = $c('ps-taxfreight').checked;
   p.timeTaxable = $c('ps-timetaxable').checked;
+  // §7: persist which jurisdiction components apply (only when the picker is
+  // shown). Additive — stored in settings.jurisdictions; the charged rate is
+  // whatever's in ps-taxrate (recomputed only if the user toggled a box).
+  const jWrap = $c('ps-jurisdictions-wrap');
+  if (jWrap && jWrap.style.display !== 'none') {
+    if (!p.settings) p.settings = {};
+    p.settings.jurisdictions = [...document.querySelectorAll('#ps-jurisdictions .ps-juris-cb')]
+      .filter(cb => cb.checked).map(cb => cb.dataset.name);
+  }
   save();
 
   closeModal('modal-proj-settings');
@@ -24837,6 +24856,40 @@ function _applyTaxStateToInputs(stateName, taxRateId, taxFreightId, timeTaxableI
   if (taxRateId      && $c(taxRateId))      $c(taxRateId).value      = ts ? (Number(ts.taxRate)||0) : 0;
   if (taxFreightId   && $c(taxFreightId))   $c(taxFreightId).checked = ts ? !!ts.taxFreight  : false;
   if (timeTaxableId  && $c(timeTaxableId))  $c(timeTaxableId).checked = ts ? !!ts.timeTaxable : false;
+}
+
+// §7 Phase 2 — per-project jurisdiction picker in Project Settings. Shows a
+// checkbox per rate component of the selected state; the effective Tax Rate =
+// sum of checked components. `selected` = array of component names to check,
+// or null = check ALL (the legacy "full state rate" default — chosen so
+// opening an existing project changes NOTHING until the user unchecks one).
+// The picker only appears when the state has ≥2 named rate components.
+function _renderProjectJurisdictions(stateName, selected) {
+  const wrap = $c('ps-jurisdictions-wrap');
+  const host = $c('ps-jurisdictions');
+  if (!wrap || !host) return;
+  const ts = stateName ? (S.taxStates || []).find(s => (s.name||'').toLowerCase() === stateName.toLowerCase()) : null;
+  const comps = (ts && Array.isArray(ts.rateComponents)) ? ts.rateComponents.filter(c => (c.name||'').trim()) : [];
+  if (comps.length < 2) { wrap.style.display = 'none'; host.innerHTML = ''; return; }
+  wrap.style.display = '';
+  const sel = Array.isArray(selected) ? new Set(selected) : null;   // null → all checked
+  host.innerHTML = comps.map(c => {
+    const checked = sel ? sel.has(c.name) : true;
+    return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
+      <input type="checkbox" class="ps-juris-cb" data-name="${escH(c.name)}" data-rate="${Number(c.rate)||0}" ${checked?'checked':''} onchange="_recalcProjectTaxFromJurisdictions()" style="accent-color:var(--russet);width:14px;height:14px">
+      <span style="flex:1">${escH(c.name)}</span>
+      <span style="color:var(--text-mid);font-weight:700">${(Number(c.rate)||0).toFixed(3)}%</span>
+    </label>`;
+  }).join('');
+}
+
+// Recompute the project Tax Rate from the checked jurisdiction components.
+// Only fires on an actual user toggle — never on open — so legacy rates stand.
+function _recalcProjectTaxFromJurisdictions() {
+  let sum = 0;
+  document.querySelectorAll('#ps-jurisdictions .ps-juris-cb').forEach(cb => { if (cb.checked) sum += Number(cb.dataset.rate) || 0; });
+  const rateEl = $c('ps-taxrate');
+  if (rateEl) rateEl.value = Math.round(sum * 1000) / 1000;
 }
 
 function deleteTaxState(id) {
