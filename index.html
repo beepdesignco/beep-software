@@ -17210,12 +17210,12 @@ function openBillDeferredFreightModal() {
   const inv = (S.invoices || []).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
   const items = _faBuildDeferredBillables(inv.projectId);
-  if (!items.length) { toast('No deferred actuals ready to bill.'); return; }
+  if (!items.length) { toast('No vendor freight ready to bill.'); return; }
   _freightReconMode = 'deferred';
   if ($c('frecon-markup-row')) $c('frecon-markup-row').style.display = 'none';
   _freightReconDeferredItems = items.map(i => ({ ...i, _selected: true }));
-  $c('frecon-title').textContent = 'Bill deferred freight';
-  $c('frecon-summary').innerHTML = `Pick which deferred-freight items to bill on this invoice. Each line bills the marked-up actual for that item.`;
+  $c('frecon-title').textContent = 'Bill freight to client';
+  $c('frecon-summary').innerHTML = `Pick which items’ vendor freight to bill on this invoice. Each line bills the marked-up actual for that item.`;
   $c('frecon-deferred-picker').style.display = '';
   $c('frecon-amount-row').style.display = 'none';
   // Pre-fill taxable toggle: ON if ANY selected item has defaultTaxable=true.
@@ -30122,7 +30122,7 @@ function renderInvoiceBuilder() {
       lines.push(`
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0">
           <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
-            <strong style="color:#2d5a8a">Deferred ready to bill: ${fmt(recon.unbilledDeferred)}</strong> in vendor actuals.
+            <strong style="color:#2d5a8a">Freight to bill client: ${fmt(recon.unbilledDeferred)}</strong> — vendor freight you’ve paid but haven’t billed yet.
           </div>
           <button class="btn btn-secondary btn-sm" onclick="openBillDeferredFreightModal()" style="font-size:11px;border-color:#2d5a8a;color:#2d5a8a">Add as line item</button>
         </div>`);
