@@ -3485,6 +3485,11 @@ tr:hover .row-btns { opacity:1; }
           <option value="urgent">Urgent</option>
         </select>
       </div>
+      <div class="fg">
+        <label class="fl">Category <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(work type)</span></label>
+        <input type="text" class="fi" id="task-category" list="task-category-suggestions" placeholder="e.g. Admin, Marketing, Sourcing…" autocomplete="off">
+        <datalist id="task-category-suggestions"></datalist>
+      </div>
     </div>
     <div class="frow">
       <div class="fg">
@@ -4674,6 +4679,21 @@ function taskStatusColor(v) { return TASK_STATUSES.find(s => s.v === v)?.color |
 function taskPriorityLabel(v) { return v ? (TASK_PRIORITIES.find(p => p.v === v)?.l || v) : ''; }
 function taskPriorityColor(v) { return v ? (TASK_PRIORITIES.find(p => p.v === v)?.color || 'var(--text-mid)') : 'var(--text-light)'; }
 
+// Task category (custom_fields.category) — a single work-type label. Seed set
+// covers internal work (admin/marketing/etc.) + common project work; the
+// datalist also surfaces any categories already in use so they stay consistent.
+const TASK_CATEGORY_SEED = ['Admin', 'Marketing', 'Studio Management', 'Financials', 'Sourcing', 'Procurement', 'Install', 'Client Follow-up'];
+function taskCategorySuggestions() {
+  const used = new Set();
+  (S.tasks || []).forEach(t => { const c = (t.customFields?.category || '').trim(); if (c) used.add(c); });
+  return [...new Set([...TASK_CATEGORY_SEED, ...used])].sort((a, b) => a.localeCompare(b));
+}
+function taskCategoryPill(cat, small) {
+  if (!cat) return '';
+  const fs = small ? '8px' : '9px', pad = small ? '2px 6px' : '2px 7px', br = small ? '6px' : '8px';
+  return `<span style="font-family:var(--font-b);font-weight:700;font-size:${fs};letter-spacing:0.04em;padding:${pad};border-radius:${br};background:rgba(45,90,138,0.10);color:#2d5a8a;white-space:nowrap">${escH(cat)}</span>`;
+}
+
 // Filter state for the tasks tab. Persists within session.
 let _tasksTabFilter = { assignee: '', status: '', project: '', search: '' };
 // Active view inside the Tasks tab. 'list' | 'board' | 'calendar'.
@@ -4721,6 +4741,9 @@ function openTaskModal(taskId, opts) {
   $c('task-description').value = task?.description || '';
   $c('task-status').value = task?.status || 'todo';
   $c('task-priority').value = task?.priority || '';
+  $c('task-category').value = task?.customFields?.category || '';
+  const catDL = $c('task-category-suggestions');
+  if (catDL) catDL.innerHTML = taskCategorySuggestions().map(c => `<option value="${escH(c)}"></option>`).join('');
   $c('task-due-date').value = task?.dueDate || '';
   $c('task-tags').value = (task?.tags || []).join(', ');
   $c('task-delete-btn').style.display = isEdit ? '' : 'none';
@@ -5062,6 +5085,7 @@ function saveTaskFromModal() {
   const tags = Array.from(new Set(
     tagInput.split(',').map(t => t.trim()).filter(Boolean)
   ));
+  const category = ($c('task-category').value || '').trim();
   const payload = {
     title,
     description: $c('task-description').value.trim(),
@@ -5102,7 +5126,12 @@ function saveTaskFromModal() {
         _recordTaskActivity(id, 'completed', {});
       else if (prev.status === 'done' && payload.status !== 'done')
         _recordTaskActivity(id, 'reopened', {});
-      S.tasks[idx] = { ...prev, ...payload };
+      if ((prev.customFields?.category || '') !== category)
+        _recordTaskActivity(id, 'category_changed', { from: prev.customFields?.category || '', to: category });
+      // Category lives in custom_fields (jsonb) — merge, don't clobber other keys.
+      const mergedCF = { ...(prev.customFields || {}) };
+      if (category) mergedCF.category = category; else delete mergedCF.category;
+      S.tasks[idx] = { ...prev, ...payload, customFields: mergedCF };
     }
   } else {
     // New task: assign a sort_order at the bottom of the list.
@@ -5111,7 +5140,7 @@ function saveTaskFromModal() {
     S.tasks.unshift({
       id: newId,
       ...payload,
-      customFields: {},
+      customFields: category ? { category } : {},
       attachments: [],
       comments: [],
       sortOrder: maxSort + 10,
@@ -5230,6 +5259,7 @@ function _humanizeTaskActivity(a) {
     case 'status_changed':  return `${actor} moved status: ${taskStatusLabel(p.from || 'todo')} → ${taskStatusLabel(p.to || 'todo')}`;
     case 'assigned':        return `${actor} reassigned: ${_taskAssigneeLabel(p.from) || 'Unassigned'} → ${_taskAssigneeLabel(p.to) || 'Unassigned'}`;
     case 'priority_changed': return `${actor} set priority: ${p.from ? taskPriorityLabel(p.from) : 'None'} → ${p.to ? taskPriorityLabel(p.to) : 'None'}`;
+    case 'category_changed': return `${actor} set category: ${p.from || 'None'} → ${p.to || 'None'}`;
     case 'due_date_changed': return `${actor} changed due date: ${p.from || 'none'} → ${p.to || 'none'}`;
     case 'title_changed':   return `${actor} renamed: "${p.from || ''}" → "${p.to || ''}"`;
     case 'commented':       return `${actor} commented${p.preview ? `: "${p.preview}"` : ''}`;
@@ -5389,6 +5419,7 @@ function _renderTasksList() {
     const projectName = t.projectId ? ((S.projects || []).find(p => p.id === t.projectId)?.name || '') : '';
     const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
     const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
+    const cat = taskCategoryPill(t.customFields?.category, false);
     const tagChips = (t.tags || []).length ? (t.tags || []).slice(0, 4).map(tg => `<span style="font-family:var(--font-b);font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('') : '';
     // §13 Session 5 link indicators.
     const subCount = (S.tasks || []).filter(x => x.parentTaskId === t.id).length;
@@ -5405,6 +5436,7 @@ function _renderTasksList() {
           <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
             <button onclick="event.stopPropagation();cycleTaskStatus('${t.id}')" title="Click to advance status" style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${sColor}18;color:${sColor};border:none;cursor:pointer">${escH(taskStatusLabel(t.status))}</button>
             ${pri}
+            ${cat}
             ${tagChips}
             ${dueLabel ? `<span style="font-family:var(--font-b);font-size:11px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}${isOverdue ? ' (overdue)' : ''}</span>` : ''}
             ${assigneeName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">👤 ${escH(assigneeName)}</span>` : ''}
@@ -5445,12 +5477,14 @@ function _renderTasksBoard() {
       const projectName = t.projectId ? ((S.projects || []).find(p => p.id === t.projectId)?.name || '') : '';
       const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
       const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:8px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 6px;border-radius:6px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
+      const cat = taskCategoryPill(t.customFields?.category, true);
       const tags = (t.tags || []).length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:3px">${(t.tags || []).slice(0, 3).map(tg => `<span style="font-family:var(--font-b);font-size:9px;padding:1px 6px;border-radius:6px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('')}</div>` : '';
       return `
         <div draggable="true" ondragstart="onTaskDragStart(event, '${t.id}')" onclick="openTaskModal('${t.id}')" style="background:var(--white);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px;cursor:grab;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
           <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700;line-height:1.35">${escH(t.title || '(untitled)')}</div>
           <div style="display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap">
             ${pri}
+            ${cat}
             ${dueLabel ? `<span style="font-family:var(--font-b);font-size:10px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}</span>` : ''}
             ${assigneeName ? `<span style="font-family:var(--font-b);font-size:10px;color:var(--text-mid)">👤 ${escH(assigneeName.split(' ')[0])}</span>` : ''}
           </div>
