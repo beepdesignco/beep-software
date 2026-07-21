@@ -26032,7 +26032,7 @@ function _renderTimerWidget() {
   if (display)  { display.textContent = str; display.classList.remove('idle'); }
   if (idle)     idle.style.display = 'none';
   if (running)  { running.style.display = 'flex'; }
-  if ($c('tt-timer-proj-label')) $c('tt-timer-proj-label').textContent = proj ? proj.name : '';
+  if ($c('tt-timer-proj-label')) $c('tt-timer-proj-label').textContent = proj ? proj.name : (t.projectId === '__internal__' ? 'Internal · business' : '');
   if (navPill)  { navPill.style.display = ''; navPill.textContent = '⏱ ' + str.replace(/^00:/,''); }
 }
  
@@ -26055,7 +26055,7 @@ function stopTimer() {
   _lastTimerBounds = { startMs: t.startMs, stopMs };  // must be set *after* openNewTimeModal which clears it
   // Override defaults with timer data
   const sel = $c('tm-project');
-  if (sel) sel.value = t.projectId;
+  if (sel) { sel.value = t.projectId; tmProjectChange(); }
   const isCustom = !TEAM.find(tm => tm.id === t.person);
   $c('tm-person').value = isCustom ? 'other' : t.person;
   $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
@@ -26082,8 +26082,9 @@ function initTimer() {
   // Populate project dropdowns
   const sel = $c('tt-timer-proj');
   if (sel) {
-    sel.innerHTML = '<option value="">— Pick a project —</option>' +
-      (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+    sel.innerHTML = '<option value="">— Pick a project —</option>'
+      + '<option value="__internal__">— Internal · business —</option>'
+      + (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
     if (S.activeTimer) sel.value = S.activeTimer.projectId;
   }
   if (S.activeTimer) _startTimerTick();
@@ -35405,8 +35406,9 @@ function renderTime() {
   const timerProjSel = $c('tt-timer-proj');
   if (timerProjSel) {
     const curT = S.activeTimer?.projectId || timerProjSel.value;
-    timerProjSel.innerHTML = '<option value="">— Pick a project —</option>' +
-      (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===curT?'selected':''}>${escH(p.name)}</option>`).join('');
+    timerProjSel.innerHTML = '<option value="">— Pick a project —</option>'
+      + `<option value="__internal__" ${curT==='__internal__'?'selected':''}>— Internal · business —</option>`
+      + (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===curT?'selected':''}>${escH(p.name)}</option>`).join('');
   }
 
   // Toggle visibility of from/to inputs based on cycle filter.
@@ -35451,7 +35453,7 @@ function renderTimeSummary(entries) {
   const hrsFmt = h => h % 1 === 0 ? String(h) : h.toFixed(2);
   const cards = Object.entries(byProj).map(([pid, ents]) => {
     const proj = (S.projects||[]).find(p => p.id === pid);
-    const name = proj ? proj.name : 'Unknown Project';
+    const name = proj ? proj.name : (pid ? 'Unknown Project' : 'Internal · business');
     const client = proj ? getClientName(proj.clientId) : '';
     let totalHrs = 0, totalFee = 0;
     let unbilledHrs = 0, unbilledFee = 0;
@@ -35525,7 +35527,7 @@ function renderTimeLog(entries) {
     return `
       <tr class="${billState==='billed'?'is-billed':''}">
         <td>${escH(fmtEntryWhen(e))}</td>
-        <td style="font-weight:600">${escH(proj?.name || 'Unknown')}</td>
+        <td style="font-weight:600">${escH(proj?.name || (e.projectId ? 'Unknown' : 'Internal'))}</td>
         <td>${escH(personLabel)}</td>
         <td style="text-align:right;font-family:var(--font-b);white-space:nowrap">${escH(fmtDurationFromSeconds(e.durationSeconds ?? (parseFloat(e.hours) || 0) * 3600))}</td>
         <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
@@ -35784,10 +35786,12 @@ function openNewTimeModal() {
   $c('tm-title').textContent = 'Log Time';
   $c('tm-id').value = '';
   $c('tm-delete-btn').style.display = 'none';
-  // Populate project select
+  // Populate project select. "__internal__" = business/internal work: no
+  // client, non-billable, but still paid (counts toward payroll hours).
   const sel = $c('tm-project');
-  sel.innerHTML = '<option value="">— Select project —</option>' +
-    (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">— Select project —</option>'
+    + '<option value="__internal__">— Internal · business (non-billable) —</option>'
+    + (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
   // Defaults
   $c('tm-date').value = new Date().toISOString().slice(0,10);
   $c('tm-person').value = 'baylor';
@@ -35842,8 +35846,10 @@ function openEditTimeModal(id) {
   $c('tm-id').value = e.id;
   $c('tm-delete-btn').style.display = '';
   const sel = $c('tm-project');
-  sel.innerHTML = '<option value="">— Select project —</option>' +
-    (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===e.projectId?'selected':''}>${escH(p.name)}</option>`).join('');
+  const isInternalEntry = !e.projectId;   // no project = internal/business time
+  sel.innerHTML = '<option value="">— Select project —</option>'
+    + `<option value="__internal__" ${isInternalEntry?'selected':''}>— Internal · business (non-billable) —</option>`
+    + (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===e.projectId?'selected':''}>${escH(p.name)}</option>`).join('');
   $c('tm-date').value = e.date || new Date().toISOString().slice(0,10);
   const isCustom = !TEAM.find(t=>t.id===e.person);
   $c('tm-person').value = isCustom ? 'other' : e.person;
@@ -35864,6 +35870,7 @@ function openEditTimeModal(id) {
   $c('tm-notes').value = e.notes || '';
   $c('tm-billed').checked = e.billable !== false;     // default true if undefined
   updateTimeFee();
+  tmProjectChange();   // lock billable/rate if this is an internal entry
   _applyTimeModalPermissions();
   $c('modal-time').classList.add('open');
 }
@@ -35880,7 +35887,23 @@ function tmPersonChange() {
 }
  
 function tmProjectChange() {
-  // nothing extra needed yet — reserved for future project-rate overrides
+  // Internal / business time = non-billable, no rate. Lock those controls.
+  const isInternal = $c('tm-project')?.value === '__internal__';
+  const billed   = $c('tm-billed');
+  const rate     = $c('tm-rate');
+  const rateWrap = $c('tm-rate-wrap');
+  const feePrev  = $c('tm-fee-preview');
+  if (isInternal) {
+    if (billed) { billed.checked = false; billed.disabled = true; }
+    if (rate)   { rate.value = ''; rate.disabled = true; }
+    if (rateWrap) rateWrap.style.opacity = '0.45';
+    if (feePrev)  feePrev.style.display = 'none';
+  } else {
+    if (billed) billed.disabled = false;
+    if (rate)   rate.disabled = false;
+    if (rateWrap) rateWrap.style.opacity = '';
+    if (feePrev)  feePrev.style.display = '';
+  }
 }
  
 function updateTimeFee() {
@@ -35895,16 +35918,19 @@ function updateTimeFee() {
  
 function saveTimeEntry() {
   const id       = $c('tm-id').value;
-  const projId   = $c('tm-project').value;
+  const projSel  = $c('tm-project').value;
+  const isInternal = projSel === '__internal__';   // business/internal time: no client, non-billable, still paid
+  const projId   = isInternal ? '' : projSel;
   const personRaw = $c('tm-person').value;
   const person   = personRaw === 'other' ? ($c('tm-person-custom').value.trim() || 'Other') : personRaw;
   const rateRaw  = $c('tm-rate').value.trim();
   // Rate default for the DB write: the user's own hourly_rate when the field is blank.
   // The UI number box still shows whatever was entered/prefilled (legacy TEAM defaults),
-  // so behavior is unchanged when the user has already typed a rate.
-  const rate     = rateRaw
+  // so behavior is unchanged when the user has already typed a rate. Internal
+  // time carries no billing rate.
+  const rate     = isInternal ? null : (rateRaw
     ? (parseFloat(rateRaw) || 0)
-    : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null);
+    : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null));
   const hInput   = parseInt($c('tm-h').value, 10) || 0;
   const mInput   = parseInt($c('tm-m').value, 10) || 0;
   const sInput   = parseInt($c('tm-s').value, 10) || 0;
@@ -35912,9 +35938,9 @@ function saveTimeEntry() {
   const totalSec = Math.round(hours * 3600);
   const date     = $c('tm-date').value;
   const notes    = $c('tm-notes').value.trim();
-  const billable = $c('tm-billed').checked;            // is this work billable to the client?
+  const billable = isInternal ? false : $c('tm-billed').checked;   // billable to the client?
 
-  if (!projId) { $c('tm-project').focus(); return; }
+  if (!isInternal && !projId) { $c('tm-project').focus(); toast('Pick a project, or choose Internal.'); return; }
   if (totalSec <= 0) { $c('tm-h').focus(); toast('Enter a duration.'); return; }
 
   const data = {
