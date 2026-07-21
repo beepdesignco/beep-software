@@ -35449,6 +35449,41 @@ function renderDashboardTax(from, to, clientId, projectId) {
   body.innerHTML = html + '</div>';
 }
 
+// §7 Phase 7B — allocate a state's ALREADY-COLLECTED tax across its
+// jurisdiction components, for filing. Display-only: each payment's taxPaid is
+// split proportionally across the components that applied to that invoice's
+// project (project.settings.jurisdictions, or ALL of the state's components for
+// legacy projects). Sum of the parts == the state's collected tax; nothing is
+// mutated. Returns [{name, rate, tax}] sorted by tax desc.
+function _taxJurisdictionBreakdown(records) {
+  const byJur = new Map();
+  (records || []).forEach(r => {
+    const taxPaid = r.alloc?.taxPaid || 0;
+    if (taxPaid <= 0.0001) return;
+    const inv = r.invoice;
+    const state = getInvoiceStateName(inv);
+    const ts = (S.taxStates || []).find(s => (s.name || '').toLowerCase() === state.toLowerCase());
+    const allComps = (ts && Array.isArray(ts.rateComponents)) ? ts.rateComponents.filter(c => (c.name || '').trim()) : [];
+    const proj = (S.projects || []).find(p => p.id === inv.projectId);
+    const sel = proj?.settings?.jurisdictions;
+    let comps = allComps;
+    if (Array.isArray(sel) && sel.length) comps = allComps.filter(c => sel.includes(c.name));
+    const sumRate = comps.reduce((s, c) => s + (Number(c.rate) || 0), 0);
+    if (comps.length && sumRate > 0) {
+      comps.forEach(c => {
+        const e = byJur.get(c.name) || { rate: Number(c.rate) || 0, tax: 0 };
+        e.tax += taxPaid * ((Number(c.rate) || 0) / sumRate);
+        byJur.set(c.name, e);
+      });
+    } else {
+      const e = byJur.get('State tax') || { rate: null, tax: 0 };
+      e.tax += taxPaid;
+      byJur.set('State tax', e);
+    }
+  });
+  return [...byJur.entries()].map(([name, v]) => ({ name, rate: v.rate, tax: v.tax })).sort((a, b) => b.tax - a.tax);
+}
+
 function renderTaxDrilldown(records) {
   if (!records || !records.length) {
     return '<div style="font-size:11px;color:var(--text-light);font-style:italic">No records.</div>';
@@ -35469,7 +35504,25 @@ function renderTaxDrilldown(records) {
   });
   const thMini = 'text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);border-bottom:1px solid var(--border)';
   const tdMini = 'padding:6px 8px;border-bottom:1px solid rgba(var(--text-rgb),0.06);font-size:11px;font-family:var(--font-b)';
-  let html = `<table style="width:100%;border-collapse:collapse">
+  // §7 Phase 7B — "Tax collected by jurisdiction" breakdown (shown only when the
+  // state resolves to more than one jurisdiction). Sums to the state's tax.
+  const jur = _taxJurisdictionBreakdown(records);
+  let jurHtml = '';
+  if (jur.length > 1) {
+    const jTot = jur.reduce((s, j) => s + j.tax, 0);
+    jurHtml = `<div style="margin-bottom:14px">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-bottom:6px">Tax collected by jurisdiction (for filing)</div>
+      <table style="border-collapse:collapse;max-width:440px">
+        ${jur.map(j => `<tr>
+          <td style="padding:4px 10px 4px 8px;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">${escH(j.name)}</td>
+          <td style="padding:4px 10px;text-align:right;font-family:var(--font-b);font-size:11px;color:var(--text-mid)">${j.rate != null ? (Number(j.rate) || 0).toFixed(3) + '%' : ''}</td>
+          <td style="padding:4px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--mahogany)">${fmt(j.tax)}</td>
+        </tr>`).join('')}
+        <tr style="border-top:1px solid var(--border)"><td style="padding:5px 8px;font-family:var(--font-h);font-weight:800;font-size:11px">Total</td><td></td><td style="padding:5px 8px;text-align:right;font-family:var(--font-h);font-weight:800;font-size:12px;color:var(--mahogany)">${fmt(jTot)}</td></tr>
+      </table>
+    </div>`;
+  }
+  let html = jurHtml + `<table style="width:100%;border-collapse:collapse">
     <thead><tr>
       <th style="${thMini}">Invoice</th>
       <th style="${thMini}">Client</th>
