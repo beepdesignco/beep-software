@@ -7275,6 +7275,7 @@ async function loadFromSupabase() {
     estimatesRes, expenseAllocationsRes, freightActualAllocationsRes,
     invoiceFreightAllocationsRes,
     tasksRes, taskActivityRes, taskFieldDefsRes, taskDependenciesRes,
+    payrollRunsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -7303,9 +7304,10 @@ async function loadFromSupabase() {
     sb.from('task_activity').select('*').eq('studio_id', studioId).order('created_at', { ascending: false }).limit(500),
     sb.from('task_field_defs').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('task_dependencies').select('*, tasks!task_dependencies_task_id_fkey(studio_id)'),
+    sb.from('payroll_runs').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -7386,6 +7388,7 @@ async function loadFromSupabase() {
   S.freightCharges    = (freightChargesRes.data    || []).map(dbFreightChargeToS);
   S.freightActuals    = (freightActualsRes.data    || []).map(dbFreightActualToS);
   S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
+  S.payrollRuns = (payrollRunsRes.data || []).map(dbPayrollRunToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -7742,6 +7745,21 @@ function dbFreightSettlementToS(r) {
     notes: r.notes || '',
     created: r.created_at,
     updated: r.updated_at,
+  };
+}
+
+function dbPayrollRunToS(r) {
+  return {
+    id: r.id,
+    periodStart: r.period_start || '',
+    periodEnd:   r.period_end || '',
+    label:       r.label || '',
+    breakdown:   Array.isArray(r.breakdown) ? r.breakdown : [],
+    totalHours:  r.total_hours != null ? Number(r.total_hours) : 0,
+    totalGross:  r.total_gross != null ? Number(r.total_gross) : 0,
+    paidAt:      r.paid_at || null,
+    notes:       r.notes || '',
+    created:     r.created_at,
   };
 }
 
@@ -8158,6 +8176,7 @@ const _sbShadow = {
   freightCharges: new Map(),
   freightActuals: new Map(),
   freightSettlements: new Map(),
+  payrollRuns: new Map(),
   estimates: new Map(),
   expenseAllocations: new Map(),
   freightActualAllocations: new Map(),
@@ -8193,6 +8212,7 @@ function captureSbShadow() {
   _sbShadow.freightCharges    = new Map((S.freightCharges    || []).map(c => [c.id, snap(c)]));
   _sbShadow.freightActuals    = new Map((S.freightActuals    || []).map(r => [r.id, snap(r)]));
   _sbShadow.freightSettlements = new Map((S.freightSettlements || []).map(r => [r.id, snap(r)]));
+  _sbShadow.payrollRuns = new Map((S.payrollRuns || []).map(r => [r.id, snap(r)]));
   _sbShadow.expenseAllocations = new Map();
   (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
     _sbShadow.expenseAllocations.set(a.id, { ...snap(a), _expenseId: e.id })));
@@ -8363,6 +8383,23 @@ function freightSettlementToDB(r, studioId) {
     amount: Number(r.amount || 0),
     notes: r.notes || null,
     deleted_at: null,
+  };
+}
+
+// Payroll runs — an immutable snapshot of a pay period's per-person gross,
+// marked paid. breakdown is a frozen [{userId,name,hours,payRate,gross}] array.
+function payrollRunToDB(r, studioId) {
+  return {
+    id: r.id, studio_id: studioId,
+    period_start: r.periodStart || null,
+    period_end:   r.periodEnd || null,
+    label:        r.label || null,
+    breakdown:    r.breakdown || [],
+    total_hours:  Number(r.totalHours || 0),
+    total_gross:  Number(r.totalGross || 0),
+    paid_at:      r.paidAt || null,
+    notes:        r.notes || null,
+    deleted_at:   null,
   };
 }
 // ── §13 Tasks ── Asana-style task system mappings ─────────────────────
@@ -9024,6 +9061,7 @@ async function syncToSupabase() {
     }), { softDelete: false });
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
+    await syncSafe('payroll_runs', new Map((S.payrollRuns||[]).map(r => [r.id, r])), _sbShadow.payrollRuns, r => payrollRunToDB(r, studioId));
     // Three-phase to satisfy circular FKs:
     //   1. Parent (documents) without current_version_id — gives child a target
     //   2. Children (document_versions) — now their FK to parent resolves
@@ -9417,6 +9455,7 @@ let S = {
   freightCharges: [],
   freightActuals: [],
   freightSettlements: [],
+  payrollRuns: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -35577,6 +35616,7 @@ function renderTimeSummary(entries) {
 // unbilled) — pay is independent of what was billed to clients. Attribution is
 // by user_id (the logged-in person). Period = the Custom date range in the
 // filters above (all-time if none set). Pay rates come from _teamCache.
+let _lastPayroll = null;   // snapshot of the current period, used by finalizePayrollRun()
 function renderPayroll() {
   if (AUTH.member?.role !== 'owner') {
     return '<div class="no-results">Payroll is visible to the studio owner only.</div>';
@@ -35623,6 +35663,9 @@ function renderPayroll() {
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
   const totalGross = rows.reduce((s, r) => s + r.gross, 0);
   const periodLabel = useRange ? `${from || '…'} → ${to || '…'}` : 'All time';
+  // Stash for finalizePayrollRun() — snapshot only payable rows (those with a rate).
+  _lastPayroll = { from, to, periodLabel, totalHours, totalGross,
+    rows: rows.filter(r => r.hasRate).map(r => ({ name: r.name, hours: Math.round(r.hours * 100) / 100, payRate: r.payRate, gross: Math.round(r.gross * 100) / 100 })) };
   const th = 'padding:6px;text-align:right;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)';
 
   const bodyRows = rows.length ? rows.map(r => `
@@ -35652,6 +35695,74 @@ function renderPayroll() {
           <td></td>
           <td style="padding:10px 6px;text-align:right;font-family:var(--font-h);font-weight:900;color:var(--mahogany)">${fmt(totalGross)}</td>
         </tr></tfoot>
+      </table>
+      ${useRange && totalGross > 0.005 ? `<div style="margin-top:14px;display:flex;align-items:center;justify-content:flex-end;gap:10px">
+        <span style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">Snapshots this period’s ${fmt(totalGross)} and marks it paid today.</span>
+        <button class="btn btn-primary btn-sm" onclick="finalizePayrollRun()">Finalize &amp; mark paid</button>
+      </div>` : ''}
+    </div>
+    ${renderPayrollHistory()}`;
+}
+
+// Immutable snapshot of the current period's payroll, marked paid today.
+function finalizePayrollRun() {
+  if (AUTH.member?.role !== 'owner') return;
+  const pr = _lastPayroll;
+  if (!pr || pr.totalGross <= 0.005) { toast('Nothing to finalize — set a date range and pay rates first.'); return; }
+  if (!pr.from && !pr.to) { toast('Set a Custom date range first so the pay period is defined.'); return; }
+  if (!confirm(`Finalize payroll for ${pr.periodLabel}?\n\n${fmt(pr.totalGross)} across ${pr.rows.length} ${pr.rows.length === 1 ? 'person' : 'people'} — recorded as paid today. This is a snapshot; later time edits won’t change it.`)) return;
+  const when = new Date().toISOString().slice(0, 10);
+  if (!S.payrollRuns) S.payrollRuns = [];
+  S.payrollRuns.push({
+    id: uid(),
+    periodStart: pr.from || '',
+    periodEnd:   pr.to || '',
+    label:       pr.periodLabel,
+    breakdown:   pr.rows,
+    totalHours:  pr.totalHours,
+    totalGross:  pr.totalGross,
+    paidAt:      when,
+    notes:       '',
+    created:     new Date().toISOString(),
+  });
+  save();
+  toast(`Payroll finalized — ${fmt(pr.totalGross)} for ${pr.periodLabel}, marked paid ${when}.`);
+  renderTime();
+}
+
+function deletePayrollRun(id) {
+  const run = (S.payrollRuns || []).find(r => r.id === id);
+  if (!run) return;
+  if (!confirm(`Remove this payroll record (${run.label || 'period'} · ${fmt(run.totalGross)})? It won’t change any time entries or actual pay — just the record.`)) return;
+  S.payrollRuns = (S.payrollRuns || []).filter(r => r.id !== id);
+  save();
+  toast('Payroll record removed.');
+  renderTime();
+}
+
+function renderPayrollHistory() {
+  const runs = (S.payrollRuns || []).slice()
+    .sort((a, b) => String(b.paidAt || b.created || '').localeCompare(String(a.paidAt || a.created || '')));
+  if (!runs.length) return '';
+  const th = 'padding:6px;text-align:right;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)';
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);border:1px solid var(--border);padding:16px 20px;margin-top:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Payroll History</div>
+      <table style="width:100%;border-collapse:collapse;font-family:var(--font-b);font-size:12px">
+        <thead><tr>
+          <th style="padding:6px;text-align:left;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)">Period</th>
+          <th style="padding:6px;text-align:left;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)">Paid</th>
+          <th style="${th}">Hours</th><th style="${th}">Gross</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${runs.map(r => `<tr style="border-top:1px solid var(--border)">
+            <td style="padding:8px 6px;font-weight:600;color:var(--text-dark)">${escH(r.label || ((r.periodStart || '…') + ' → ' + (r.periodEnd || '…')))}</td>
+            <td style="padding:8px 6px;color:var(--text-mid)">${escH(r.paidAt || '—')}</td>
+            <td style="padding:8px 6px;text-align:right">${(Number(r.totalHours) || 0).toFixed(1)} h</td>
+            <td style="padding:8px 6px;text-align:right;font-family:var(--font-h);font-weight:800;color:var(--mahogany)">${fmt(r.totalGross)}</td>
+            <td style="padding:8px 6px;text-align:right"><button onclick="deletePayrollRun('${r.id}')" title="Remove this record" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button></td>
+          </tr>`).join('')}
+        </tbody>
       </table>
     </div>`;
 }
