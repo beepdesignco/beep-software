@@ -3545,6 +3545,13 @@ tr:hover .row-btns { opacity:1; }
       <div id="task-subtasks-list"></div>
     </div>
 
+    <!-- §13 Phase 2 Dependencies — "Blocked by" (tasks that must finish first)
+         + "This task blocks". Shown when editing an existing task. -->
+    <div id="task-dependencies-section" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:8px">Dependencies</div>
+      <div id="task-dependencies-body"></div>
+    </div>
+
     <!-- §13 Attachments — task-level file attachments. Click to view; X to
          remove. Upload button below the list adds via the existing
          uploadFile() helper that scopes paths by entity. -->
@@ -4694,6 +4701,76 @@ function taskCategoryPill(cat, small) {
   return `<span style="font-family:var(--font-b);font-weight:700;font-size:${fs};letter-spacing:0.04em;padding:${pad};border-radius:${br};background:rgba(45,90,138,0.10);color:#2d5a8a;white-space:nowrap">${escH(cat)}</span>`;
 }
 
+// ── §13 Phase 2 Task dependencies (blocks / blocked-by) ──
+// A row {taskId, dependsOnTaskId, kind:'blocks'} means taskId is BLOCKED BY
+// dependsOnTaskId (the latter must finish first).
+function _taskById(id) { return (S.tasks || []).find(t => t.id === id) || null; }
+function taskBlockers(taskId) {   // tasks this one depends on
+  return (S.taskDependencies || []).filter(d => d.taskId === taskId).map(d => _taskById(d.dependsOnTaskId)).filter(Boolean);
+}
+function taskBlocking(taskId) {    // tasks that depend on this one
+  return (S.taskDependencies || []).filter(d => d.dependsOnTaskId === taskId).map(d => _taskById(d.taskId)).filter(Boolean);
+}
+function taskIsBlocked(taskId) { return taskBlockers(taskId).some(t => t && t.status !== 'done'); }
+// Does `a` depend on `b` directly or transitively (following blockers)? Cycle guard.
+function _taskDependsOnTransitively(a, b, seen) {
+  seen = seen || new Set();
+  if (seen.has(a)) return false;
+  seen.add(a);
+  for (const d of (S.taskDependencies || []).filter(d => d.taskId === a)) {
+    if (d.dependsOnTaskId === b || _taskDependsOnTransitively(d.dependsOnTaskId, b, seen)) return true;
+  }
+  return false;
+}
+function addTaskDependency(taskId, dependsOnTaskId) {
+  if (!taskId || !dependsOnTaskId || taskId === dependsOnTaskId) { toast('Pick a different task.'); return; }
+  if ((S.taskDependencies || []).some(d => d.taskId === taskId && d.dependsOnTaskId === dependsOnTaskId)) return;
+  if (_taskDependsOnTransitively(dependsOnTaskId, taskId)) { toast('That would create a circular dependency.'); return; }
+  if (!S.taskDependencies) S.taskDependencies = [];
+  S.taskDependencies.push({ id: uid(), taskId, dependsOnTaskId, kind: 'blocks', created: new Date().toISOString() });
+  _recordTaskActivity(taskId, 'dependency_added', { blocker: _taskById(dependsOnTaskId)?.title || '' });
+  save();
+  renderTaskDependencies(taskId);
+  renderTasksTab();
+}
+function removeTaskDependency(depId, taskId) {
+  S.taskDependencies = (S.taskDependencies || []).filter(d => d.id !== depId);
+  save();
+  renderTaskDependencies(taskId);
+  renderTasksTab();
+}
+function renderTaskDependencies(taskId) {
+  const host = $c('task-dependencies-body');
+  if (!host) return;
+  const _dot = (t) => t.status === 'done' ? '#1a6e3a' : '#c47a20';
+  const blockers = taskBlockers(taskId);
+  const depIdFor = new Map((S.taskDependencies || []).filter(d => d.taskId === taskId).map(d => [d.dependsOnTaskId, d.id]));
+  const blockerIds = new Set(blockers.map(t => t.id));
+  const eligible = (S.tasks || []).filter(t => t.id !== taskId && !blockerIds.has(t.id) && !_taskDependsOnTransitively(t.id, taskId))
+    .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  const blockersHtml = blockers.length ? blockers.map(t => `
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:rgba(var(--text-rgb),0.03);border-radius:var(--rs);margin-bottom:4px">
+      <span style="width:7px;height:7px;border-radius:50%;background:${_dot(t)};flex-shrink:0"></span>
+      <span style="flex:1;font-family:var(--font-b);font-size:12px;color:${t.status==='done'?'var(--text-light)':'var(--text-dark)'};${t.status==='done'?'text-decoration:line-through':''}">${escH(t.title || '(untitled)')}</span>
+      <button onclick="removeTaskDependency('${depIdFor.get(t.id)}','${taskId}')" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:12px">✕</button>
+    </div>`).join('') : '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic">Nothing blocking this task.</div>';
+  const addSel = eligible.length ? `
+    <select class="fi fsel" onchange="if(this.value){addTaskDependency('${taskId}',this.value);this.value='';}" style="font-size:12px;padding:5px 8px;margin-top:6px;width:100%">
+      <option value="">+ Add a blocker…</option>
+      ${eligible.map(t => `<option value="${t.id}">${escH(t.title || '(untitled)')}</option>`).join('')}
+    </select>` : '';
+  const blocking = taskBlocking(taskId);
+  const blockingHtml = blocking.length ? `
+    <div style="margin-top:12px">
+      <div style="font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-bottom:4px">This task blocks</div>
+      ${blocking.map(t => `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:rgba(var(--text-rgb),0.02);border-radius:var(--rs);margin-bottom:4px">
+        <span style="width:7px;height:7px;border-radius:50%;background:${_dot(t)};flex-shrink:0"></span>
+        <span style="flex:1;font-family:var(--font-b);font-size:12px;color:var(--text-mid)">${escH(t.title || '(untitled)')}</span>
+      </div>`).join('')}
+    </div>` : '';
+  host.innerHTML = `<div style="font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-bottom:4px">Blocked by</div>${blockersHtml}${addSel}${blockingHtml}`;
+}
+
 // Filter state for the tasks tab. Persists within session.
 let _tasksTabFilter = { assignee: '', status: '', project: '', category: '', search: '' };
 // Active view inside the Tasks tab. 'list' | 'board' | 'calendar'.
@@ -4780,17 +4857,20 @@ function openTaskModal(taskId, opts) {
   parentSel.innerHTML = '<option value="">— None (top-level task) —</option>' +
     parentCandidates.map(t => `<option value="${escH(t.id)}" ${t.id === initialParent ? 'selected' : ''}>${escH(t.title || '(untitled)')}</option>`).join('');
 
-  // Subtasks, attachments, comments — edit mode only.
+  // Subtasks, dependencies, attachments, comments — edit mode only.
   const subSection = $c('task-subtasks-section');
+  const depSection = $c('task-dependencies-section');
   const attSection = $c('task-attachments-section');
   const cmtSection = $c('task-comments-section');
   const actSection = $c('task-activity-section');
   if (isEdit) {
     subSection.style.display = '';
+    depSection.style.display = '';
     attSection.style.display = '';
     cmtSection.style.display = '';
     actSection.style.display = '';
     _renderTaskSubtasksList(taskId);
+    renderTaskDependencies(taskId);
     _renderTaskAttachmentsList(taskId);
     _renderTaskCommentsList(taskId);
     _renderTaskActivityList(taskId);
@@ -4798,6 +4878,7 @@ function openTaskModal(taskId, opts) {
     $c('task-comment-mention-popover').style.display = 'none';
   } else {
     subSection.style.display = 'none';
+    depSection.style.display = 'none';
     attSection.style.display = 'none';
     cmtSection.style.display = 'none';
     actSection.style.display = 'none';
@@ -5261,6 +5342,7 @@ function _humanizeTaskActivity(a) {
     case 'assigned':        return `${actor} reassigned: ${_taskAssigneeLabel(p.from) || 'Unassigned'} → ${_taskAssigneeLabel(p.to) || 'Unassigned'}`;
     case 'priority_changed': return `${actor} set priority: ${p.from ? taskPriorityLabel(p.from) : 'None'} → ${p.to ? taskPriorityLabel(p.to) : 'None'}`;
     case 'category_changed': return `${actor} set category: ${p.from || 'None'} → ${p.to || 'None'}`;
+    case 'dependency_added': return `${actor} added a blocker: ${escH(p.blocker || 'a task')}`;
     case 'due_date_changed': return `${actor} changed due date: ${p.from || 'none'} → ${p.to || 'none'}`;
     case 'title_changed':   return `${actor} renamed: "${p.from || ''}" → "${p.to || ''}"`;
     case 'commented':       return `${actor} commented${p.preview ? `: "${p.preview}"` : ''}`;
@@ -5424,6 +5506,7 @@ function _renderTasksList() {
     const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
     const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
     const cat = taskCategoryPill(t.customFields?.category, false);
+    const blk = taskIsBlocked(t.id) ? `<span style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:rgba(179,51,51,0.12);color:#b33;white-space:nowrap">Blocked</span>` : '';
     const tagChips = (t.tags || []).length ? (t.tags || []).slice(0, 4).map(tg => `<span style="font-family:var(--font-b);font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('') : '';
     // §13 Session 5 link indicators.
     const subCount = (S.tasks || []).filter(x => x.parentTaskId === t.id).length;
@@ -5441,6 +5524,7 @@ function _renderTasksList() {
             <button onclick="event.stopPropagation();cycleTaskStatus('${t.id}')" title="Click to advance status" style="font-family:var(--font-h);font-weight:700;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 7px;border-radius:8px;background:${sColor}18;color:${sColor};border:none;cursor:pointer">${escH(taskStatusLabel(t.status))}</button>
             ${pri}
             ${cat}
+            ${blk}
             ${tagChips}
             ${dueLabel ? `<span style="font-family:var(--font-b);font-size:11px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}${isOverdue ? ' (overdue)' : ''}</span>` : ''}
             ${assigneeName ? `<span style="font-family:var(--font-b);font-size:11px;color:var(--text-mid)">👤 ${escH(assigneeName)}</span>` : ''}
@@ -5482,6 +5566,7 @@ function _renderTasksBoard() {
       const assigneeName = _taskAssigneeLabel(t.assigneeUserId);
       const pri = t.priority ? `<span style="font-family:var(--font-h);font-weight:700;font-size:8px;letter-spacing:0.07em;text-transform:uppercase;padding:2px 6px;border-radius:6px;background:${taskPriorityColor(t.priority)}20;color:${taskPriorityColor(t.priority)}">${escH(taskPriorityLabel(t.priority))}</span>` : '';
       const cat = taskCategoryPill(t.customFields?.category, true);
+      const blk = taskIsBlocked(t.id) ? `<span style="font-family:var(--font-h);font-weight:700;font-size:8px;letter-spacing:0.06em;text-transform:uppercase;padding:2px 6px;border-radius:6px;background:rgba(179,51,51,0.12);color:#b33;white-space:nowrap">Blocked</span>` : '';
       const tags = (t.tags || []).length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:3px">${(t.tags || []).slice(0, 3).map(tg => `<span style="font-family:var(--font-b);font-size:9px;padding:1px 6px;border-radius:6px;background:rgba(var(--text-rgb),0.06);color:var(--text-mid)">${escH(tg)}</span>`).join('')}</div>` : '';
       return `
         <div draggable="true" ondragstart="onTaskDragStart(event, '${t.id}')" onclick="openTaskModal('${t.id}')" style="background:var(--white);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px;cursor:grab;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
@@ -5489,6 +5574,7 @@ function _renderTasksBoard() {
           <div style="display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap">
             ${pri}
             ${cat}
+            ${blk}
             ${dueLabel ? `<span style="font-family:var(--font-b);font-size:10px;color:${isOverdue ? '#b33' : 'var(--text-mid)'};font-weight:${isOverdue ? '700' : '400'}">📅 ${escH(dueLabel)}</span>` : ''}
             ${assigneeName ? `<span style="font-family:var(--font-b);font-size:10px;color:var(--text-mid)">👤 ${escH(assigneeName.split(' ')[0])}</span>` : ''}
           </div>
