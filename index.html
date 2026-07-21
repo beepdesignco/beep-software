@@ -11171,7 +11171,11 @@ function renderPDProposal(proj, pid) {
     <button class="btn btn-dark btn-sm" onclick="printProposal()">\u2193 Print / Export</button>
     <button class="btn btn-secondary btn-sm" onclick="openEstimateWizard()">Save Current Proposal Version</button>
     <button class="btn btn-secondary btn-sm" onclick="openBatchStatusModal('${pid}')">Batch Update Statuses</button>
-    <div class="view-tabs" style="margin-left:auto;margin-right:8px">
+    <select class="fi fsel" onchange="setPropStatusFilter(this.value)" style="font-size:11px;padding:4px 8px;width:150px;margin-left:auto;margin-right:8px" title="Filter items by status">
+      <option value="">All statuses</option>
+      ${getAllPipelineStatuses().map(s => `<option value="${escH(s.v)}" ${_propStatusFilter===s.v?'selected':''}>${escH(s.l)}</option>`).join('')}
+    </select>
+    <div class="view-tabs" style="margin-right:8px">
       <button class="view-tab${_propFilter==='all'?' active':''}" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
       <button class="view-tab${_propFilter==='allowances'?' active':''}" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
     </div>
@@ -18251,7 +18255,8 @@ function renderPropBody() {
 function renderSpace(sp, pid) {
   let items = sp.items || [];
   if (_propFilter === 'allowances') items = items.filter(i => i.allowance);
-  if (!items.length && _propFilter === 'allowances') return '';
+  if (_propStatusFilter) items = items.filter(i => (i.status || '') === _propStatusFilter);
+  if (!items.length && (_propFilter === 'allowances' || _propStatusFilter)) return '';
   let rows = items.map(item => renderItemRow(item, sp.id, pid)).join('');
 
   // Room note: shown below the items table. If empty + not focused, the
@@ -21592,6 +21597,13 @@ function deleteItemFromModal() {
 // ─── CLIENT VIEW ──────────────────────────────────────────
  
 let _propFilter = 'all'; // 'all' | 'allowances'
+let _propStatusFilter = ''; // '' = all statuses; else a pipeline status value
+
+function setPropStatusFilter(v) {
+  _propStatusFilter = v;
+  if (S._detailProjectId && _projDetailTab === 'proposal') renderProjectDetail();
+  else if (S.currentPropProject) renderPropBody();
+}
 
 function setPropFilter(filter) {
   _propFilter = filter;
@@ -21627,7 +21639,8 @@ function printProposalAsDocument(pid) {
   let itemsHtml = '';
   (prop.spaces || []).forEach(sp => {
     const spaceItems = (sp.items || []).filter(it =>
-      _propFilter === 'allowances' ? it.allowance : true
+      (_propFilter === 'allowances' ? it.allowance : true) &&
+      (!_propStatusFilter || (it.status || '') === _propStatusFilter)
     );
     if (!spaceItems.length) return;
     itemsHtml += `<tr class="space-row"><td colspan="4">${escH(sp.name||'Unnamed Space')}</td></tr>`;
