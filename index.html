@@ -30406,10 +30406,11 @@ function renderInvoiceBuilder() {
     const linkBtn = (inv.status === 'sent' || inv.status === 'partial')
       ? `<button class="btn btn-ghost btn-sm" onclick="copyPaymentLink('${inv.id}')">Copy Payment Link</button>`
       : '';
-    const reminderBtn = (inv.status === 'sent' || inv.status === 'partial')
+    const canSend = hasPermission('send_invoices');   // owner bypass; gates all send actions
+    const reminderBtn = (canSend && (inv.status === 'sent' || inv.status === 'partial'))
       ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}', { reminder: true })">Send Reminder</button>`
       : '';
-    const receiptBtn = inv.status === 'paid'
+    const receiptBtn = (canSend && inv.status === 'paid')
       ? `<button class="btn btn-secondary btn-sm" onclick="openSendInvoiceModal('${inv.id}', { receipt: true })">Send Receipt</button>`
       : '';
     if (!canEditInvoices()) {
@@ -30425,7 +30426,7 @@ function renderInvoiceBuilder() {
         ${previewBtn}
         <button class="btn btn-danger btn-sm" onclick="deleteDraft()">Delete Draft</button>
         <button class="btn btn-secondary btn-sm" onclick="saveInvoiceFromBuilder('draft')">Save Draft</button>
-        <button class="btn btn-primary btn-sm" onclick="openSendInvoiceFromBuilder()">Send Invoice</button>`;
+        ${canSend ? `<button class="btn btn-primary btn-sm" onclick="openSendInvoiceFromBuilder()">Send Invoice</button>` : ''}`;
     } else if (inv.status === 'paid') {
       // §3 cleanup: paid invoices no longer have a standalone "Revert to
       // Sent" button — the Recording Error option inside the Refund/Credit
@@ -31279,6 +31280,7 @@ function isBuiltinModified(id) {
 }
 
 function openSendInvoiceModal(invoiceId, opts = {}) {
+  if (!hasPermission('send_invoices')) { toast('You don’t have permission to send invoices.'); return; }
   const inv = (S.invoices||[]).find(i => i.id === invoiceId);
   if (!inv) return;
   _sendInvId = invoiceId;
@@ -31757,6 +31759,7 @@ function markInvoiceSent(invId, meta = {}) {
 //   - open the Send Invoice modal; on success, transition to 'sent' if currently draft
 function openSendInvoiceFromBuilder() {
   if (!canEditInvoices()) { toast('You have view-only access to invoices.'); return; }
+  if (!hasPermission('send_invoices')) { toast('You don’t have permission to send invoices.'); return; }
   const inv = (S.invoices||[]).find(i => i.id === _currentInvoiceId);
   if (!inv) return;
   if (!_invLineItems.length) { toast('Add at least one line item.'); return; }
