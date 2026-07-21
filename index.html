@@ -24861,11 +24861,36 @@ function renderTeamMemberRow(m, isOwner) {
             onchange="updateMemberField('${m.id}','phone',this.value.trim())" style="font-size:11px;padding:3px 6px;width:auto;min-width:120px">` :
             `<span>${escH(m.phone||'')}</span>`}
         </div>
+        ${isOwner ? `
+        <div style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--text-mid);font-family:var(--font-b)">
+          <label style="display:flex;align-items:center;gap:4px" title="What you PAY this person per hour (payroll). Not affected by client billing.">
+            <span style="color:var(--text-light);text-transform:uppercase;letter-spacing:0.05em;font-size:9px;font-weight:700">Pay</span> $
+            <input type="number" class="fi" value="${m.pay_rate != null ? m.pay_rate : ''}" placeholder="0" min="0" step="1"
+              onchange="updateMemberRate('${m.id}','pay_rate',this.value)" style="font-size:11px;padding:3px 6px;width:64px">/hr
+          </label>
+          <label style="display:flex;align-items:center;gap:4px" title="Default rate CHARGED TO CLIENTS for this person's billable time.">
+            <span style="color:var(--text-light);text-transform:uppercase;letter-spacing:0.05em;font-size:9px;font-weight:700">Bill</span> $
+            <input type="number" class="fi" value="${m.hourly_rate != null ? m.hourly_rate : ''}" placeholder="0" min="0" step="5"
+              onchange="updateMemberRate('${m.id}','hourly_rate',this.value)" style="font-size:11px;padding:3px 6px;width:64px">/hr
+          </label>
+        </div>` : ''}
       </div>
       ${canRemove ? `<button class="btn btn-danger btn-sm" onclick="removeMember('${m.id}')" style="font-size:10px;padding:4px 8px">Remove</button>` : ''}
     </div>
     <div style="display:flex;gap:4px;flex-wrap:wrap">${permPills}</div>
   </div>`;
+}
+
+// Owner-only: update a member's pay_rate / hourly_rate. Blank clears to null;
+// otherwise stored as a number.
+async function updateMemberRate(memberId, field, rawValue) {
+  const v = (rawValue == null || String(rawValue).trim() === '') ? null : (parseFloat(rawValue) || 0);
+  const { error } = await sb.from('studio_members').update({ [field]: v }).eq('id', memberId);
+  if (error) { toast('Update failed: ' + error.message); return; }
+  const m = _teamMembers.find(x => x.id === memberId);
+  if (m) m[field] = v;
+  if (AUTH.member && memberId === AUTH.member.id) AUTH.member[field] = v;
+  toast('Saved.');
 }
 
 async function updateMemberField(memberId, field, value) {
