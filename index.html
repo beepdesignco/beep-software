@@ -4756,14 +4756,27 @@ function _locateSpace(spaceId) {
   }
   return null;
 }
-function _pmRealtimeRerender(pid) {
-  // Only refresh the project item LIST (not an open item-detail sub-view, which
-  // could be mid-edit). Data in S is already patched regardless.
-  if (S.currentView === 'project-detail' && !_pmDetailItem &&
-      (pid == null || S._detailProjectId === pid) &&
-      typeof renderProjectDetail === 'function') {
-    renderProjectDetail();
-  }
+// True if the user is actively typing/editing in a field right now — used to
+// defer a live re-render so we never yank a draft (a note being typed, an inline
+// field being edited) out from under them. The data is already patched into S;
+// they'll see the merged result on their next render (e.g. when they post/blur).
+function _pmDetailHasActiveInput() {
+  const ae = document.activeElement;
+  if (!ae) return false;
+  const tag = ae.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable === true;
+}
+
+function _pmRealtimeRerender(pid, changedItemId) {
+  // Data in S is already patched. Re-render whatever the user is viewing —
+  // the item LIST or the open item DETAIL (notes/activity, links, tracking,
+  // fields) — so another user's change shows without a reload.
+  if (S.currentView !== 'project-detail') return;
+  if (pid != null && S._detailProjectId !== pid) return;
+  if (_pmDetailHasActiveInput()) return;                 // protect an active edit
+  // If viewing a single item's detail, only refresh when THAT item changed.
+  if (_pmDetailItem && changedItemId && _pmDetailItem.itemId !== changedItemId) return;
+  if (typeof renderProjectDetail === 'function') renderProjectDetail();
 }
 
 function _onProposalItemRealtime(payload) {
@@ -4772,15 +4785,13 @@ function _onProposalItemRealtime(payload) {
   const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
   if (!row || !row.id) return;
   const id = row.id;
-  // Protect an item the user currently has open in detail (mid-edit): let local win.
-  if (_pmDetailItem && _pmDetailItem.itemId === id) return;
 
   const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
   if (isDelete) {
     const loc = _locateItem(id);
     if (loc) loc.space.items.splice(loc.index, 1);
     if (typeof _sbShadow !== 'undefined' && _sbShadow?.items) _sbShadow.items.delete(id);
-    _pmRealtimeRerender(loc ? loc.pid : null);
+    _pmRealtimeRerender(loc ? loc.pid : null, id);
     try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
     return;
   }
@@ -4792,7 +4803,7 @@ function _onProposalItemRealtime(payload) {
     Object.assign(loc.item, mapped);
     if (typeof _sbShadow !== 'undefined' && _sbShadow?.items)
       _sbShadow.items.set(id, { ...clone(loc.item), _spaceId: loc.space.id, _sortOrder: loc.index });
-    _pmRealtimeRerender(loc.pid);
+    _pmRealtimeRerender(loc.pid, id);
   } else {
     const sLoc = _locateSpace(row.space_id);
     if (sLoc) {
@@ -4801,7 +4812,7 @@ function _onProposalItemRealtime(payload) {
       sLoc.space.items.push(mapped);
       if (typeof _sbShadow !== 'undefined' && _sbShadow?.items)
         _sbShadow.items.set(id, { ...clone(mapped), _spaceId: sLoc.space.id, _sortOrder: sLoc.space.items.length - 1 });
-      _pmRealtimeRerender(sLoc.pid);
+      _pmRealtimeRerender(sLoc.pid, id);
     }
   }
   try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
@@ -4813,8 +4824,6 @@ function _onProposalComponentRealtime(payload) {
   const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
   if (!row || !row.id) return;
   const ownerItemId = row.item_id;
-  // Protect the owning item if it's open in detail (its components show there).
-  if (_pmDetailItem && ownerItemId && _pmDetailItem.itemId === ownerItemId) return;
   const loc = ownerItemId ? _locateItem(ownerItemId) : null;
   if (!loc) return;   // owning item not loaded — nothing to patch
   if (!Array.isArray(loc.item.components)) loc.item.components = [];
@@ -4834,7 +4843,7 @@ function _onProposalComponentRealtime(payload) {
     if (typeof _sbShadow !== 'undefined' && _sbShadow?.components)
       _sbShadow.components.set(cid, { ...clone(comps[idx]), _itemId: ownerItemId, _sortOrder: idx });
   }
-  _pmRealtimeRerender(loc.pid);
+  _pmRealtimeRerender(loc.pid, ownerItemId);
   try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
 }
 
