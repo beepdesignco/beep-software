@@ -4444,6 +4444,7 @@ async function afterSignIn() {
   subscribeExpensesRealtime();
   subscribeTimeRealtime();
   subscribeStudioRealtime();
+  subscribePMItemsRealtime();
 
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
@@ -4727,6 +4728,124 @@ function subscribeStudioRealtime() {
         // Keep the vendor modal's type datalist fresh too.
         if (typeof populateVendorTypeDatalist === 'function') populateVendorTypeDatalist();
       })
+    .subscribe();
+}
+
+// ── PM (proposal) items + components live-sync ──
+// Actual costs, statuses, PM info, adds/removes made by one user appear on
+// another's screen without a reload. Items live nested at
+// S.proposals[pid].spaces[].items[].components[]; we patch the exact node in
+// place, keep the sync shadow aligned (so the local writer doesn't re-push or
+// clobber), and re-render the project item list if it's on screen.
+
+function _locateItem(itemId) {
+  for (const pid of Object.keys(S.proposals || {})) {
+    const spaces = S.proposals[pid].spaces || [];
+    for (let si = 0; si < spaces.length; si++) {
+      const items = spaces[si].items || [];
+      const ii = items.findIndex(i => i.id === itemId);
+      if (ii > -1) return { pid, space: spaces[si], index: ii, item: items[ii] };
+    }
+  }
+  return null;
+}
+function _locateSpace(spaceId) {
+  for (const pid of Object.keys(S.proposals || {})) {
+    const sp = (S.proposals[pid].spaces || []).find(s => s.id === spaceId);
+    if (sp) return { pid, space: sp };
+  }
+  return null;
+}
+function _pmRealtimeRerender(pid) {
+  // Only refresh the project item LIST (not an open item-detail sub-view, which
+  // could be mid-edit). Data in S is already patched regardless.
+  if (S.currentView === 'project-detail' && !_pmDetailItem &&
+      (pid == null || S._detailProjectId === pid) &&
+      typeof renderProjectDetail === 'function') {
+    renderProjectDetail();
+  }
+}
+
+function _onProposalItemRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  // Protect an item the user currently has open in detail (mid-edit): let local win.
+  if (_pmDetailItem && _pmDetailItem.itemId === id) return;
+
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    const loc = _locateItem(id);
+    if (loc) loc.space.items.splice(loc.index, 1);
+    if (typeof _sbShadow !== 'undefined' && _sbShadow?.items) _sbShadow.items.delete(id);
+    _pmRealtimeRerender(loc ? loc.pid : null);
+    try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+    return;
+  }
+
+  const mapped = dbItemToS(row);
+  delete mapped.components;   // bare row has no components join — never wipe them
+  const loc = _locateItem(id);
+  if (loc) {
+    Object.assign(loc.item, mapped);
+    if (typeof _sbShadow !== 'undefined' && _sbShadow?.items)
+      _sbShadow.items.set(id, { ...clone(loc.item), _spaceId: loc.space.id, _sortOrder: loc.index });
+    _pmRealtimeRerender(loc.pid);
+  } else {
+    const sLoc = _locateSpace(row.space_id);
+    if (sLoc) {
+      if (!sLoc.space.items) sLoc.space.items = [];
+      if (mapped.components === undefined) mapped.components = [];
+      sLoc.space.items.push(mapped);
+      if (typeof _sbShadow !== 'undefined' && _sbShadow?.items)
+        _sbShadow.items.set(id, { ...clone(mapped), _spaceId: sLoc.space.id, _sortOrder: sLoc.space.items.length - 1 });
+      _pmRealtimeRerender(sLoc.pid);
+    }
+  }
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _onProposalComponentRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const ownerItemId = row.item_id;
+  // Protect the owning item if it's open in detail (its components show there).
+  if (_pmDetailItem && ownerItemId && _pmDetailItem.itemId === ownerItemId) return;
+  const loc = ownerItemId ? _locateItem(ownerItemId) : null;
+  if (!loc) return;   // owning item not loaded — nothing to patch
+  if (!Array.isArray(loc.item.components)) loc.item.components = [];
+  const comps = loc.item.components;
+  const cid = row.id;
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    const ci = comps.findIndex(c => c.id === cid);
+    if (ci > -1) comps.splice(ci, 1);
+    if (typeof _sbShadow !== 'undefined' && _sbShadow?.components) _sbShadow.components.delete(cid);
+  } else {
+    const mappedC = dbCompToS(row);
+    const ci = comps.findIndex(c => c.id === cid);
+    if (ci > -1) Object.assign(comps[ci], mappedC);
+    else comps.push(mappedC);
+    const idx = comps.findIndex(c => c.id === cid);
+    if (typeof _sbShadow !== 'undefined' && _sbShadow?.components)
+      _sbShadow.components.set(cid, { ...clone(comps[idx]), _itemId: ownerItemId, _sortOrder: idx });
+  }
+  _pmRealtimeRerender(loc.pid);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+let _pmItemsRealtimeChannel = null;
+function subscribePMItemsRealtime() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  if (_pmItemsRealtimeChannel) { sb.removeChannel(_pmItemsRealtimeChannel); _pmItemsRealtimeChannel = null; }
+  _pmItemsRealtimeChannel = sb
+    .channel('pm-items-' + AUTH.studio.id)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'proposal_items' },      _onProposalItemRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'proposal_components' }, _onProposalComponentRealtime)
     .subscribe();
 }
 
