@@ -9913,6 +9913,66 @@ function getItemCostReconciliation(item, pid) {
   };
 }
 
+// §2 per-item Profit / Loss — folds the freight stream and the cost stream
+// into one number per the spec formula:
+//   P/L = (freight collected − freight actual) + (invoiced item net − cost actual)
+// Returns BOTH the baseline (RAW actuals — what the studio factually earned,
+// the literal §2 number) and the reconciliation net (MARKED-UP actuals — the
+// credit/overage that nets against the client), mirroring Budget → Overview's
+// Baseline Profit + Overall Δ split. See [[freight-model]] / [[budget-tab]].
+function getItemPL(item, pid) {
+  if (!item) return null;
+  const f = getItemFreightReconciliation(item.id, item, pid);
+  const c = getItemCostReconciliation(item, pid);
+  const freightNet = f.rawNet || 0;                 // freight collected − freight raw actual
+  const costNet    = c.rawNet || 0;                 // invoiced − cost raw actual
+  const baseline   = freightNet + costNet;          // = the §2 formula (raw)
+  const reconNet   = (f.realNet || 0) + (c.realNet || 0); // marked-up credit/overage
+  const hasData = (f.collected > 0) || (f.rawActual > 0) || (c.invoiced > 0) || (c.rawActual > 0);
+  return {
+    freight: f, cost: c,
+    freightNet, costNet, baseline, reconNet, hasData,
+    isProfit: baseline > 0.005,
+    isLoss:   baseline < -0.005,
+  };
+}
+
+// Item P/L summary card — the rollup the Cost Tracking + Freight cards below
+// it break down. Hidden until the item has invoiced/collected/actual data.
+function renderItemPLCard(item, pid) {
+  const pl = getItemPL(item, pid);
+  if (!pl || !pl.hasData) return '';
+  const money = (n) => (n < -0.005 ? '−' : '+') + fmt(Math.abs(n));
+  const netColor = (n) => n > 0.005 ? '#1a6e3a' : n < -0.005 ? '#b33' : 'var(--text-mid)';
+  const heroColor = netColor(pl.baseline);
+  const heroLabel = pl.isProfit ? 'profit' : pl.isLoss ? 'loss' : 'break-even';
+  const streamCell = (label, n) => `
+    <div style="flex:1;text-align:center">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">${label}</div>
+      <div style="font-family:var(--font-h);font-weight:800;font-size:15px;color:${netColor(n)};line-height:1.1">${money(n)}</div>
+    </div>`;
+  // Marked-up reconciliation subline — only shown when it differs from baseline.
+  const reconLine = Math.abs(pl.reconNet - pl.baseline) > 0.01
+    ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:8px;text-align:center">With markup applied, reconciles to <strong style="color:${netColor(pl.reconNet)}">${money(pl.reconNet)}</strong> ${pl.reconNet > 0.005 ? 'credit' : pl.reconNet < -0.005 ? 'overage' : ''} against the client</div>`
+    : '';
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:12px">Item Profit / Loss</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1.5;text-align:center;padding:8px 12px;background:${heroColor}0d;border:1px solid ${heroColor}33;border-radius:var(--rs)">
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Baseline P/L</div>
+          <div style="font-family:var(--font-h);font-weight:900;font-size:22px;color:${heroColor};line-height:1.05">${money(pl.baseline)}</div>
+          <div style="font-family:var(--font-b);font-size:10px;color:${heroColor};font-style:italic;margin-top:2px">${heroLabel}</div>
+        </div>
+        <div style="font-size:15px;color:var(--text-light)">=</div>
+        ${streamCell('Freight net', pl.freightNet)}
+        <div style="font-size:14px;color:var(--text-light)">+</div>
+        ${streamCell('Cost net', pl.costNet)}
+      </div>
+      ${reconLine}
+    </div>`;
+}
+
 function hasAnyActualInput(item) {
   if (!item) return false;
   if ((item.costActual || '').toString().trim()) return true;
@@ -12712,6 +12772,8 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         </div>
 
         ${renderItemLeadTimeCard(item, pid, spId, itemId)}
+
+        ${!isAllowance ? renderItemPLCard(item, pid) : ''}
 
         ${!isAllowance ? renderCostTrackingCard(pid, spId, itemId, item) : ''}
 
