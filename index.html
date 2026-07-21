@@ -5903,10 +5903,24 @@ function _workRowHtml(row) {
 
 // Dismiss (mark read) a notification straight from the Work queue without
 // navigating to its linked entity — clears it from "Awaiting Action" and drops
-// the sidebar badge. markNotificationRead persists read_at to Supabase.
+// the sidebar badge. Optimistic: the row is cleared from the UI immediately,
+// then the read flag is persisted to Supabase in the background. If the persist
+// fails (network/RLS), it stays cleared for the session and is logged rather
+// than silently leaving the badge stuck.
 async function dismissWorkNotification(id, ev) {
   if (ev) { ev.stopPropagation(); ev.preventDefault(); }
-  if (typeof markNotificationRead === 'function') await markNotificationRead(id);
+  const n = (NOTIFICATIONS.items || []).find(x => x.id === id);
+  if (n && !n.read_at) {
+    n.read_at = new Date().toISOString();                       // optimistic local clear
+    NOTIFICATIONS.unread = Math.max(0, (NOTIFICATIONS.unread || 0) - 1);
+    if (typeof renderNotificationBell === 'function') renderNotificationBell();
+    try {
+      const { error } = await sb.from('notifications').update({ read_at: n.read_at }).eq('id', id);
+      if (error) console.warn('[dismiss-notification] persist failed (kept cleared locally):', error);
+    } catch (e) {
+      console.warn('[dismiss-notification] persist threw (kept cleared locally):', e);
+    }
+  }
   if (typeof renderWork === 'function') renderWork();
   else if (typeof updateWorkBadge === 'function') updateWorkBadge();
 }
