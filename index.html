@@ -1513,6 +1513,7 @@ tr:hover .row-btns { opacity:1; }
       <div style="padding:0 30px;border-bottom:1px solid var(--border);background:var(--cloud);display:flex;gap:0">
         <button class="view-tab active" data-ttab="summary" onclick="setTimeTab('summary')" style="margin-bottom:-1px">Summary</button>
         <button class="view-tab" data-ttab="log" onclick="setTimeTab('log')" style="margin-bottom:-1px">Full Log</button>
+        <button class="view-tab" data-ttab="payroll" id="tt-tab-payroll" onclick="setTimeTab('payroll')" style="margin-bottom:-1px;display:none">Payroll</button>
       </div>
       <div class="contacts-body" id="tt-body">
         <div class="no-results">No time entries yet. Hit + Log Time to start the clock.</div>
@@ -4490,7 +4491,7 @@ async function loadTeamCache() {
   if (!AUTH.ready || !AUTH.studio) return;
   const { data, error } = await sb
     .from('studio_members')
-    .select('id, user_id, display_name, role')
+    .select('id, user_id, display_name, role, pay_rate, hourly_rate')
     .eq('studio_id', AUTH.studio.id);
   if (error) { console.error('[team cache]', error); return; }
   _teamCache = data || [];
@@ -35383,6 +35384,12 @@ function renderTime() {
   const newBtn = $c('tt-new-entry-btn');
   if (newBtn) newBtn.style.display = canAdjustTimeEntries() ? '' : 'none';
 
+  // Payroll tab: owner-only. Hide the tab and bounce non-owners off it.
+  const isOwnerTT = AUTH.member?.role === 'owner';
+  const payrollTab = $c('tt-tab-payroll');
+  if (payrollTab) payrollTab.style.display = isOwnerTT ? '' : 'none';
+  if (_currentTimeTab === 'payroll' && !isOwnerTT) _currentTimeTab = 'summary';
+
   // Populate project filter + timer project dropdowns
   const projSel = $c('tt-filter-proj');
   if (projSel) {
@@ -35417,6 +35424,10 @@ function renderTime() {
   const toEl   = $c('tt-filter-to');
   if (fromEl) fromEl.style.display = fCycle === 'custom' ? '' : 'none';
   if (toEl)   toEl.style.display   = fCycle === 'custom' ? '' : 'none';
+
+  // Payroll view reads ALL entries in the period (billing status is irrelevant
+  // to pay), so it routes before the billing-oriented empty-entries check.
+  if (_currentTimeTab === 'payroll') { body.innerHTML = renderPayroll(); return; }
 
   const entries = collectFilteredTimeEntries();
   const fProj    = $c('tt-filter-proj')?.value    || '';
@@ -35508,6 +35519,90 @@ function renderTimeSummary(entries) {
   return `<div class="tt-summary-grid">${cards}</div>`;
 }
  
+// Payroll timesheet (owner-only): per person, gross pay = clocked hours × pay
+// rate over the selected period. Counts ALL hours (client + internal, billed +
+// unbilled) — pay is independent of what was billed to clients. Attribution is
+// by user_id (the logged-in person). Period = the Custom date range in the
+// filters above (all-time if none set). Pay rates come from _teamCache.
+function renderPayroll() {
+  if (AUTH.member?.role !== 'owner') {
+    return '<div class="no-results">Payroll is visible to the studio owner only.</div>';
+  }
+  const cycle = $c('tt-filter-cycle')?.value || 'since';
+  const from  = $c('tt-filter-from')?.value || '';
+  const to    = $c('tt-filter-to')?.value || '';
+  const useRange = cycle === 'custom' && (from || to);
+  const dateOf = e => e.date || (e.startedAt ? String(e.startedAt).slice(0, 10) : '');
+  const secOf  = e => e.durationSeconds != null ? Number(e.durationSeconds) : (parseFloat(e.hours) || 0) * 3600;
+
+  const src = (S.timeEntries || []).filter(e => {
+    if (!useRange) return true;
+    const d = dateOf(e);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  });
+
+  const cache = _teamCache || [];
+  const byUser = {};
+  src.forEach(e => {
+    const key = e.userId || ('name:' + (e.person || '—'));
+    (byUser[key] = byUser[key] || []).push(e);
+  });
+
+  const hFmt = h => h % 1 === 0 ? String(h) : h.toFixed(2);
+  const rows = Object.entries(byUser).map(([key, ents]) => {
+    const member = key.startsWith('name:') ? null : cache.find(m => m.user_id === key);
+    const name = member?.display_name || (key.startsWith('name:') ? key.slice(5) : 'Unknown');
+    const totalSec = ents.reduce((s, e) => s + secOf(e), 0);
+    const billSec  = ents.filter(e => e.projectId).reduce((s, e) => s + secOf(e), 0);
+    const hours = totalSec / 3600;
+    const payRate = member?.pay_rate != null ? Number(member.pay_rate) : null;
+    return {
+      name, hours,
+      billableHours: billSec / 3600,
+      internalHours: (totalSec - billSec) / 3600,
+      payRate, hasRate: payRate != null,
+      gross: payRate != null ? hours * payRate : 0,
+    };
+  }).sort((a, b) => b.hours - a.hours);
+
+  const totalHours = rows.reduce((s, r) => s + r.hours, 0);
+  const totalGross = rows.reduce((s, r) => s + r.gross, 0);
+  const periodLabel = useRange ? `${from || '…'} → ${to || '…'}` : 'All time';
+  const th = 'padding:6px;text-align:right;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)';
+
+  const bodyRows = rows.length ? rows.map(r => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 6px;font-family:var(--font-b);font-weight:600;color:var(--text-dark)">${escH(r.name)}</td>
+      <td style="padding:8px 6px;text-align:right;font-family:var(--font-b);white-space:nowrap">${hFmt(r.hours)} h
+        <div style="font-size:9px;color:var(--text-light)">${hFmt(r.billableHours)} client · ${hFmt(r.internalHours)} internal</div></td>
+      <td style="padding:8px 6px;text-align:right;font-family:var(--font-b)">${r.hasRate ? '$' + r.payRate + '/hr' : '<span style="color:#c47a20;font-size:11px">set pay rate</span>'}</td>
+      <td style="padding:8px 6px;text-align:right;font-family:var(--font-h);font-weight:800;color:${r.hasRate ? 'var(--mahogany)' : 'var(--text-light)'}">${r.hasRate ? fmt(r.gross) : '—'}</td>
+    </tr>`).join('') : '<tr><td colspan="4" style="padding:14px 6px;color:var(--text-light);font-style:italic">No hours tracked in this period.</td></tr>';
+
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);border:1px solid var(--border);padding:18px 20px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;margin-bottom:6px;flex-wrap:wrap">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Payroll · ${escH(periodLabel)}</div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;max-width:440px;text-align:right">Gross pay = all clocked hours × pay rate, independent of client billing. Set the period with the Custom date range in the filters above; edit pay rates in App Settings → Team.</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="padding:6px;text-align:left;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)">Person</th>
+          <th style="${th}">Hours worked</th><th style="${th}">Pay rate</th><th style="${th}">Gross pay</th>
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot><tr style="border-top:2px solid var(--border)">
+          <td style="padding:10px 6px;font-family:var(--font-h);font-weight:800">Total</td>
+          <td style="padding:10px 6px;text-align:right;font-family:var(--font-b);font-weight:700">${hFmt(totalHours)} h</td>
+          <td></td>
+          <td style="padding:10px 6px;text-align:right;font-family:var(--font-h);font-weight:900;color:var(--mahogany)">${fmt(totalGross)}</td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+}
+
 function renderTimeLog(entries) {
   const sorted = [...entries].sort((a,b) => (b.date||'').localeCompare(a.date||''));
   const totalFee  = sorted.reduce((s,e) => s + (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0), 0);
