@@ -11573,7 +11573,8 @@ function renderPDProposal(proj, pid) {
 }
 
 let _pmDetailItem = null; // {pid, spId, itemId} when viewing item detail
-let _pmSearch = '';
+let _pmSearch = '';       // normalized (lowercased/trimmed) for matching
+let _pmSearchRaw = '';    // exactly what the user typed, for the input's value
 let _pmStatusFilters = []; // empty = show all
 let _pmExpandedSpaces = {}; // {spaceId: true/false}
 let _pmHasNoteFilter = false; // when true, only show items where item.notes is non-empty
@@ -12515,8 +12516,18 @@ function dismissNotification(pid, notifId) {
 }
 
 function pmSearchChanged(val) {
+  _pmSearchRaw = val;
   _pmSearch = val.toLowerCase().trim();
   renderProjectDetail();
+  // renderProjectDetail rebuilds the DOM (a brand-new input node), so restore
+  // focus + caret to the search box — otherwise every keystroke kicks the user
+  // out and they have to click back in.
+  const el = document.getElementById('pm-search-input');
+  if (el && document.activeElement !== el) {
+    el.focus();
+    const n = el.value.length;
+    try { el.setSelectionRange(n, n); } catch (_e) {}
+  }
 }
 
 function togglePMStatusFilter(status) {
@@ -13032,7 +13043,7 @@ function renderPDManagement(proj, pid) {
   // Search bar
   html += `
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
-    <input type="text" class="search-in" value="${escH(_pmSearch)}" placeholder="Search items, vendors, workrooms…" oninput="pmSearchChanged(this.value)" style="width:260px">
+    <input type="text" id="pm-search-input" class="search-in" value="${escH(_pmSearchRaw)}" placeholder="Search items, vendors, workrooms…" oninput="pmSearchChanged(this.value)" style="width:260px">
     <button class="btn btn-ghost btn-sm" onclick="document.getElementById('pm-filter-panel').style.display=document.getElementById('pm-filter-panel').style.display==='none'?'':'none'" style="font-size:11px">
       ◇ Filter by Status ${_pmStatusFilters.length ? `(${_pmStatusFilters.length})` : ''}
     </button>
