@@ -1234,6 +1234,21 @@ tr:hover .row-btns { opacity:1; }
         <button type="button" onclick="sendPasswordReset()" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-light);text-decoration:underline">Forgot password?</button>
       </div>
     </form>
+    <!-- Set-password form: shown when the user arrives via an invite / reset
+         link (Supabase recovery flow). Lets them choose their own password. -->
+    <form id="auth-setpass-form" style="display:none" onsubmit="return submitNewPassword(event)">
+      <div class="fg">
+        <label class="fl">New password</label>
+        <input type="password" class="fi" id="auth-newpass" autocomplete="new-password" minlength="8" required autofocus>
+      </div>
+      <div class="fg">
+        <label class="fl">Confirm password</label>
+        <input type="password" class="fi" id="auth-newpass2" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div id="auth-setpass-error" style="display:none;background:rgba(179,51,51,0.08);border:1px solid rgba(179,51,51,0.3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-family:var(--font-b);font-size:11px;color:#b33"></div>
+      <button type="submit" id="auth-setpass-submit" class="btn btn-primary" style="width:100%;margin-top:8px">Set password &amp; continue</button>
+      <div style="text-align:center;margin-top:10px;font-family:var(--font-b);font-size:10px;color:var(--text-light)">At least 8 characters.</div>
+    </form>
     <div id="auth-loading" style="display:none;text-align:center;padding:20px 0;font-family:var(--font-b);font-size:12px;color:var(--text-mid)">Loading your studio…</div>
   </div>
 </div>
@@ -7500,10 +7515,75 @@ async function initAuth() {
     { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'beep_hq_auth' } }
   );
 
+  // Password recovery / invite flow: when a new member (or anyone resetting a
+  // password) clicks the email link, Supabase sends them back here with a
+  // recovery token in the URL hash and fires PASSWORD_RECOVERY. Show the
+  // set-password screen instead of trying to boot the app on a temporary
+  // recovery session (which would leave them unable to sign in later).
+  const _isRecoveryUrl = /[#&?]type=(recovery|invite|signup)\b/.test(window.location.hash + window.location.search);
+  let _recoveryHandled = false;
+  sb.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY' && !_recoveryHandled) {
+      _recoveryHandled = true;
+      showSetPasswordScreen();
+    }
+  });
+  if (_isRecoveryUrl) {
+    _recoveryHandled = true;
+    showSetPasswordScreen();
+    return;   // don't fall through to afterSignIn on the recovery session
+  }
+
   const { data: { session } } = await sb.auth.getSession();
-  if (session) {
+  if (session && !_recoveryHandled) {
     await afterSignIn();
   }
+}
+
+// Show the "choose your password" screen (invite / reset link landing).
+function showSetPasswordScreen() {
+  const overlay = document.getElementById('auth-overlay');
+  if (overlay) overlay.classList.add('open');
+  const signIn = document.getElementById('auth-form');
+  const setPass = document.getElementById('auth-setpass-form');
+  const loading = document.getElementById('auth-loading');
+  const sub = overlay ? overlay.querySelector('.modal > div > div:last-child') : null;
+  if (signIn)  signIn.style.display = 'none';
+  if (loading) loading.style.display = 'none';
+  if (setPass) setPass.style.display = '';
+  if (sub) sub.textContent = 'Choose a password to finish setting up';
+}
+
+function _setPassErr(msg) {
+  const el = document.getElementById('auth-setpass-error');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.display = msg ? '' : 'none';
+}
+
+// Set the user's chosen password via the active recovery session, then boot the
+// app. Clicking the recovery link also verifies the email, so afterSignIn works.
+async function submitNewPassword(ev) {
+  if (ev) ev.preventDefault();
+  const p1 = document.getElementById('auth-newpass').value || '';
+  const p2 = document.getElementById('auth-newpass2').value || '';
+  if (p1.length < 8) { _setPassErr('Use at least 8 characters.'); return false; }
+  if (p1 !== p2)     { _setPassErr('Passwords do not match.'); return false; }
+  _setPassErr('');
+  const btn = document.getElementById('auth-setpass-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Setting password…'; }
+  try {
+    const { error } = await sb.auth.updateUser({ password: p1 });
+    if (error) throw new Error(error.message);
+    // Clear the recovery token from the URL so a refresh doesn't re-trigger.
+    try { history.replaceState(null, '', window.location.pathname); } catch (_e) {}
+    if (typeof toast === 'function') toast('Password set — welcome!');
+    await afterSignIn();
+  } catch (e) {
+    _setPassErr(e?.message || 'Could not set password. The link may have expired — request a new one from "Forgot password?".');
+    if (btn) { btn.disabled = false; btn.textContent = 'Set password & continue'; }
+  }
+  return false;
 }
 
 // Kick off auth as soon as the script parses
