@@ -9704,6 +9704,7 @@ const STATUSES = [
 const STATUS_FLAGS = [
   { v:'needs_attention', l:'Needs Attention', color:'#b33' },
   { v:'in_production',   l:'In Production',   color:'#c47a20' },
+  { v:'needs_work_order', l:'Needs Work Order', color:'#2d5a8a' },
 ];
 
 const SHIPPING_STATUSES = [
@@ -12084,10 +12085,48 @@ function toggleStatusFlag(pid, spId, itemId, flag) {
   if (!item) return;
   if (!item.statusFlags) item.statusFlags = [];
   const idx = item.statusFlags.indexOf(flag);
+  const turningOn = idx === -1;
   if (idx > -1) item.statusFlags.splice(idx, 1);
   else item.statusFlags.push(flag);
   save();
   renderProjectDetail();
+  // Flagging "Needs Work Order" ON offers to log it in the task queue.
+  if (flag === 'needs_work_order' && turningOn) _offerWorkOrderTask(pid, spId, itemId);
+}
+
+// Prompt to log a work-order task in the task queue for an item, right from its
+// PM page. Creates a task in S.tasks (the shared queue) linked to the project +
+// item, categorized "Work Order". Declining just leaves the flag set.
+function _offerWorkOrderTask(pid, spId, itemId) {
+  const item = _getItem(pid, spId, itemId);
+  const itemName = item?.name || 'this item';
+  if (!confirm(`Log a work order for "${itemName}" as a task in the task queue?`)) return;
+  if (!S.tasks) S.tasks = [];
+  const maxSort = S.tasks.reduce((m, t) => Math.max(m, t.sortOrder || 0), 0);
+  S.tasks.unshift({
+    id: uid(),
+    title: `Work Order: ${itemName}`,
+    description: '',
+    status: 'todo',
+    priority: '',
+    assigneeUserId: null,
+    dueDate: '',
+    projectId: pid,
+    proposalItemId: itemId,
+    invoiceId: null,
+    parentTaskId: null,
+    tags: [],
+    customFields: { category: 'Work Order' },
+    attachments: [],
+    comments: [],
+    sortOrder: maxSort + 10,
+    completedAt: null,
+    updated: new Date().toISOString(),
+    created: new Date().toISOString(),
+    createdByUserId: AUTH.user?.id || null,
+  });
+  save();
+  toast('Work order added to the task queue.');
 }
 
 // ── Tracking Numbers (enhanced: carrier + description) ──
