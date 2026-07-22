@@ -1511,10 +1511,6 @@ tr:hover .row-btns { opacity:1; }
           <select class="tt-timer-project-sel" id="tt-timer-proj">
             <option value="">— Pick a project —</option>
           </select>
-          <select class="tt-timer-person-sel" id="tt-timer-person">
-            <option value="baylor">Baylor</option>
-            <option value="support">Support Staff</option>
-          </select>
           <button class="tt-timer-start" onclick="startTimer()">▶ Start</button>
         </div>
         <div id="tt-timer-running" style="display:none;align-items:center;gap:10px">
@@ -2923,13 +2919,9 @@ tr:hover .row-btns { opacity:1; }
     </div>
  
     <div class="frow">
-      <div class="fg">
+      <div class="fg" id="tm-person-group">
         <label class="fl">Person</label>
-        <select class="fi" id="tm-person" onchange="tmPersonChange()">
-          <option value="baylor">Baylor</option>
-          <option value="support">Support Staff</option>
-          <option value="other">Other…</option>
-        </select>
+        <select class="fi" id="tm-person" onchange="tmPersonChange()"></select>
       </div>
       <div class="fg" id="tm-person-custom-wrap" style="display:none">
         <label class="fl">Name</label>
@@ -26753,7 +26745,7 @@ function startTimer() {
   // on the phone shows up on the web (and vice-versa) and can be stopped from
   // either device. The row is finalized on stop and deleted on cancel.
   const projId = $c('tt-timer-proj')?.value || '';
-  const person = $c('tt-timer-person')?.value || AUTH.user?.id || 'baylor';
+  const person = AUTH.user?.id || 'baylor';   // timer always logs as whoever runs it
   const isInternal = projId === '__internal__';
   const nowIso = new Date().toISOString();
   const entry = {
@@ -36287,6 +36279,15 @@ function renderTime() {
     projSel.innerHTML = '<option value="">All Projects</option>' +
       (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===cur?'selected':''}>${escH(p.name)}</option>`).join('');
   }
+  // Person filter = real studio members (value = user_id), matching the new
+  // attribution model (entries are keyed by user_id, not the legacy person label).
+  const personSel = $c('tt-filter-person');
+  if (personSel) {
+    const cur = personSel.value;
+    personSel.innerHTML = '<option value="">All People</option>' +
+      (_teamCache || []).slice().sort((a,b) => (a.display_name||'').localeCompare(b.display_name||''))
+        .map(m => `<option value="${m.user_id}" ${m.user_id===cur?'selected':''}>${escH(m.display_name || m.role || 'Member')}</option>`).join('');
+  }
   // Populate invoice filter — only invoices that actually carry time entries
   const invSel = $c('tt-filter-invoice');
   if (invSel) {
@@ -36851,9 +36852,7 @@ function openNewTimeModal() {
     + (S.projects||[]).map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
   // Defaults
   $c('tm-date').value = new Date().toISOString().slice(0,10);
-  $c('tm-person').value = 'baylor';
-  $c('tm-person-custom-wrap').style.display = 'none';
-  $c('tm-person-custom').value = '';
+  _populateTimePersonPicker(AUTH.user?.id);   // default to self; owner may reassign
   $c('tm-rate').value = '195';
   $c('tm-h').value = '';
   $c('tm-m').value = '';
@@ -36912,10 +36911,7 @@ function openEditTimeModal(id) {
     + `<option value="__internal__" ${isInternalEntry?'selected':''}>— Internal · business (non-billable) —</option>`
     + (S.projects||[]).map(p => `<option value="${p.id}" ${p.id===e.projectId?'selected':''}>${escH(p.name)}</option>`).join('');
   $c('tm-date').value = e.date || new Date().toISOString().slice(0,10);
-  const isCustom = !TEAM.find(t=>t.id===e.person);
-  $c('tm-person').value = isCustom ? 'other' : e.person;
-  $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
-  $c('tm-person-custom').value = isCustom ? e.person : '';
+  _populateTimePersonPicker(e.userId || AUTH.user?.id);   // owner can reassign; member locked to self
   $c('tm-rate').value = e.rate || '';
   // Derive h/m/s from whichever is authoritative — durationSeconds wins if present,
   // else fall back to the legacy decimal-hours field (older rows).
@@ -36936,14 +36932,40 @@ function openEditTimeModal(id) {
   $c('modal-time').classList.add('open');
 }
  
-function tmPersonChange() {
-  const val = $c('tm-person').value;
-  const isCustom = val === 'other';
-  $c('tm-person-custom-wrap').style.display = isCustom ? '' : 'none';
-  if (!isCustom) {
-    const t = TEAM.find(t=>t.id===val);
-    if (t) $c('tm-rate').value = t.rate;
+// Populate the Log Time "Person" picker. A non-owner is LOCKED to themselves —
+// the field is hidden and they can only ever log their own time. The owner gets
+// a picker of real studio members (value = user_id) and can attribute the entry
+// to anyone (on-behalf logging), which sets the entry's user_id for payroll.
+function _populateTimePersonPicker(selectedUserId) {
+  const grp = $c('tm-person-group');
+  const sel = $c('tm-person');
+  const cw  = $c('tm-person-custom-wrap');
+  if (cw) cw.style.display = 'none';          // legacy free-text is retired
+  const me = AUTH.user?.id || '';
+  const isOwner = AUTH.member?.role === 'owner';
+  if (!isOwner) {
+    if (grp) grp.style.display = 'none';       // locked to self
+    if (sel) sel.innerHTML = `<option value="${me}">${escH(AUTH.member?.display_name || 'Me')}</option>`;
+    if (sel) sel.value = me;
+    return;
   }
+  if (grp) grp.style.display = '';
+  const members = (_teamCache || []).slice()
+    .sort((a, b) => (a.display_name || '').localeCompare(b.display_name || ''));
+  if (sel) {
+    sel.innerHTML = members.map(m =>
+      `<option value="${m.user_id}">${escH(m.display_name || m.role || 'Member')}${m.user_id === me ? ' (me)' : ''}</option>`
+    ).join('') || `<option value="${me}">${escH(AUTH.member?.display_name || 'Me')}</option>`;
+    sel.value = selectedUserId || me;
+    if (!sel.value) sel.value = me;
+  }
+}
+
+function tmPersonChange() {
+  // Default the rate to the selected member's billable (hourly) rate.
+  const val = $c('tm-person').value;
+  const member = (_teamCache || []).find(m => m.user_id === val);
+  if (member && member.hourly_rate != null && $c('tm-rate')) $c('tm-rate').value = member.hourly_rate;
   updateTimeFee();
 }
  
@@ -36982,16 +37004,19 @@ function saveTimeEntry() {
   const projSel  = $c('tm-project').value;
   const isInternal = projSel === '__internal__';   // business/internal time: no client, non-billable, still paid
   const projId   = isInternal ? '' : projSel;
-  const personRaw = $c('tm-person').value;
-  const person   = personRaw === 'other' ? ($c('tm-person-custom').value.trim() || 'Other') : personRaw;
+  // Attribution: a non-owner is always themselves; only an owner may pick another
+  // member (on-behalf). This sets the entry's user_id, which drives payroll.
+  const isOwner = AUTH.member?.role === 'owner';
+  const targetUserId = isOwner ? ($c('tm-person').value || AUTH.user?.id) : (AUTH.user?.id || null);
+  const person   = targetUserId;   // mirrors user_id; label resolves via _timePersonLabel
+  const targetMember = (_teamCache || []).find(m => m.user_id === targetUserId);
   const rateRaw  = $c('tm-rate').value.trim();
-  // Rate default for the DB write: the user's own hourly_rate when the field is blank.
-  // The UI number box still shows whatever was entered/prefilled (legacy TEAM defaults),
-  // so behavior is unchanged when the user has already typed a rate. Internal
-  // time carries no billing rate.
+  // Rate default when blank: the *attributed* member's billable (hourly) rate,
+  // falling back to the logger's own. Internal time carries no billing rate.
   const rate     = isInternal ? null : (rateRaw
     ? (parseFloat(rateRaw) || 0)
-    : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null));
+    : (targetMember?.hourly_rate != null ? Number(targetMember.hourly_rate)
+       : (AUTH.member?.hourly_rate != null ? Number(AUTH.member.hourly_rate) : null)));
   const hInput   = parseInt($c('tm-h').value, 10) || 0;
   const mInput   = parseInt($c('tm-m').value, 10) || 0;
   const sInput   = parseInt($c('tm-s').value, 10) || 0;
@@ -37005,7 +37030,7 @@ function saveTimeEntry() {
   if (totalSec <= 0) { $c('tm-h').focus(); toast('Enter a duration.'); return; }
 
   const data = {
-    projectId: projId, person, rate, hours, date, notes, billable,
+    projectId: projId, person, userId: targetUserId, rate, hours, date, notes, billable,
     durationSeconds: totalSec,
   };
 
@@ -37032,7 +37057,7 @@ function saveTimeEntry() {
     if (idx > -1) Object.assign(S.timeEntries[idx], data);
     toast('Entry updated.');
   } else {
-    S.timeEntries.push({ id:uid(), userId: AUTH.user?.id, ...data });
+    S.timeEntries.push({ id:uid(), ...data });   // data.userId carries attribution
     toast('Time logged.');
   }
   save();
