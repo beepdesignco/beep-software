@@ -29078,10 +29078,13 @@ function _renderWOBlock(doc, b, i) {
     </div>`).join('');
 
   const imgThumbs = imgs.map((im, ix) => `
-    <div style="position:relative;width:64px;height:64px;border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;background:var(--bg-subtle)">
-      <img class="lazy-doc-img" data-path="${escH(im.storagePath)}" style="width:100%;height:100%;object-fit:cover" alt="Image ${ix+1}">
-      <button onclick="removeWOImage('${b.id}','${im.id}')" title="Remove image" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:3px;font-size:10px;line-height:1;padding:1px 4px;cursor:pointer">✕</button>
-      <span style="position:absolute;bottom:1px;left:2px;background:rgba(0,0,0,0.5);color:#fff;font-size:8px;padding:0 3px;border-radius:2px">${ix+1}</span>
+    <div style="display:flex;flex-direction:column;gap:3px;width:96px">
+      <div style="position:relative;width:96px;height:72px;border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;background:var(--bg-subtle)">
+        <img class="lazy-doc-img" data-path="${escH(im.storagePath)}" style="width:100%;height:100%;object-fit:cover" alt="Image ${ix+1}">
+        <button onclick="removeWOImage('${b.id}','${im.id}')" title="Remove image" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:3px;font-size:10px;line-height:1;padding:1px 4px;cursor:pointer">✕</button>
+        <span style="position:absolute;bottom:1px;left:2px;background:rgba(0,0,0,0.5);color:#fff;font-size:8px;padding:0 3px;border-radius:2px">${ix+1}</span>
+      </div>
+      <input type="text" class="fi" value="${escH(im.caption||'')}" placeholder="Caption…" onchange="updateWOImageCaption('${b.id}','${im.id}',this.value)" style="font-size:10px;padding:2px 5px;width:96px">
     </div>`).join('');
 
   return `<div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px">
@@ -29152,17 +29155,17 @@ function removeWOImage(bid, imgId) {
   (b.paragraphs || []).forEach(p => { if (p.imageId === imgId) p.imageId = ''; });
   d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d);
 }
+function updateWOImageCaption(bid, imgId, caption) {
+  const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); const im = b?.images.find(x => x.id === imgId); if (!im) return;
+  im.caption = caption; d.updated = new Date().toISOString(); save();
+}
 
 // ── Work order PDF ──
 async function _woLoadImage(storagePath) {
-  try {
-    const dataUrl = await _resolveFileAsDataUrl({ storagePath });
-    if (!dataUrl) return null;
-    const dims = await new Promise(res => { const im = new Image(); im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = () => res(null); im.src = dataUrl; });
-    if (!dims) return null;
-    const fmt = /^data:image\/png/i.test(dataUrl) ? 'PNG' : 'JPEG';
-    return { dataUrl, w: dims.w, h: dims.h, fmt };
-  } catch (_e) { return null; }
+  // _resolveFileAsDataUrl returns { data, type, name, w, h } — NOT a URL string.
+  const rec = await _resolveFileAsDataUrl({ storagePath });
+  if (!rec || !rec.data) return null;
+  return { dataUrl: rec.data, w: rec.w || 1, h: rec.h || 1, fmt: (typeof _exportImageFormat === 'function' ? _exportImageFormat(rec.type) : 'PNG') };
 }
 
 async function generateWorkOrderPDF(doc) {
@@ -29242,15 +29245,23 @@ async function generateWorkOrderPDF(doc) {
     // Paragraphs
     for (const p of (b.paragraphs || [])) {
       const img = p.imageId ? imgCache[p.imageId] : null;
+      const imgRec = p.imageId ? (b.images || []).find(im => im.id === p.imageId) : null;
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10.5); pdf.setTextColor(...DARK);
       if (img) {
         const imgW = contentW * 0.34, imgH = Math.min(imgW * (img.h / img.w), 150);
+        const capLines = imgRec?.caption ? pdf.splitTextToSize(imgRec.caption, imgW) : [];
         const textW = contentW * 0.60;
         const lines = pdf.splitTextToSize(p.text || '', textW);
-        const rowH = Math.max(lines.length * 14, imgH) + 12;
+        const imgBlockH = imgH + (capLines.length ? capLines.length * 10 + 4 : 0);
+        const rowH = Math.max(lines.length * 14, imgBlockH) + 12;
         ensure(rowH);
         pdf.text(lines, M, y + 8);
         try { pdf.addImage(img.dataUrl, img.fmt, pageW - M - imgW, y, imgW, imgH); } catch (_e) {}
+        if (capLines.length) {
+          pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8); pdf.setTextColor(...MID);
+          pdf.text(capLines, pageW - M - imgW, y + imgH + 10);
+          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10.5); pdf.setTextColor(...DARK);
+        }
         y += rowH;
       } else {
         const lines = pdf.splitTextToSize(p.text || '', contentW);
@@ -29259,21 +29270,35 @@ async function generateWorkOrderPDF(doc) {
       }
     }
 
-    // Unassigned images beneath (grid of up to 3 across)
+    // Unassigned images beneath (grid of up to 3 across), each with caption
     const assigned = new Set((b.paragraphs || []).map(p => p.imageId).filter(Boolean));
-    const beneath = (b.images || []).filter(im => !assigned.has(im.id)).map(im => imgCache[im.id]).filter(Boolean);
+    const beneath = (b.images || []).filter(im => !assigned.has(im.id))
+      .map(im => ({ rec: im, img: imgCache[im.id] })).filter(x => x.img);
     if (beneath.length) {
       y += 4;
       const per = 3, gap = 10, cellW = (contentW - gap * (per - 1)) / per;
       for (let i = 0; i < beneath.length; i += per) {
-        const rowImgs = beneath.slice(i, i + per);
-        const rowH = Math.max(...rowImgs.map(im => Math.min(cellW * (im.h / im.w), 160)));
-        ensure(rowH + 8);
-        rowImgs.forEach((im, ix) => {
-          const iw = cellW, ih = Math.min(cellW * (im.h / im.w), 160);
-          try { pdf.addImage(im.dataUrl, im.fmt, M + ix * (cellW + gap), y, iw, ih); } catch (_e) {}
+        const rowCells = beneath.slice(i, i + per);
+        // Row height = tallest image + its caption.
+        const cellHeights = rowCells.map(c => {
+          const ih = Math.min(cellW * (c.img.h / c.img.w), 160);
+          const capLines = c.rec.caption ? pdf.splitTextToSize(c.rec.caption, cellW) : [];
+          return ih + (capLines.length ? capLines.length * 10 + 3 : 0);
         });
-        y += rowH + 8;
+        const rowH = Math.max(...cellHeights);
+        ensure(rowH + 8);
+        rowCells.forEach((c, ix) => {
+          const iw = cellW, ih = Math.min(cellW * (c.img.h / c.img.w), 160);
+          const x = M + ix * (cellW + gap);
+          try { pdf.addImage(c.img.dataUrl, c.img.fmt, x, y, iw, ih); } catch (_e) {}
+          if (c.rec.caption) {
+            const capLines = pdf.splitTextToSize(c.rec.caption, cellW);
+            pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8); pdf.setTextColor(...MID);
+            pdf.text(capLines, x, y + ih + 9);
+            pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...DARK);
+          }
+        });
+        y += rowH + 10;
       }
     }
 
