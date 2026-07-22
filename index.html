@@ -8530,6 +8530,9 @@ function dbDocumentToS(d) {
     notes: activeData.notes || '',
     date: activeData.date || '',
     exportConfig: activeData.exportConfig || null,
+    blocks: activeData.blocks || [],   // work-order composer content
+    wo: activeData.wo || null,         // work-order header
+
     version: active?.letter || 'A',
     revision: (active?.revision || 0) + 1,
     created: d.created_at,
@@ -28913,6 +28916,7 @@ function hydrateDocLazyImages(root) {
 function renderDocEditor() {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
+  if (doc.templateId === 'purchase_order') { renderWorkOrderEditor(doc); return; }
   if (!doc.items) doc.items = [];
   const proj = S.projects.find(p => p.id === doc.projectId);
   const client = (S.clients||[]).find(c => c.id === proj?.clientId);
@@ -28957,6 +28961,329 @@ function renderDocEditor() {
   html += '</div>';
   $c('doce-body').innerHTML = html;
   hydrateDocLazyImages($c('doce-body'));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WORK ORDER COMPOSER  (templateId === 'purchase_order')
+// ═══════════════════════════════════════════════════════════════
+// A text-primary document builder. Header = Attention (recipient + contact),
+// Project, Submitted/Due dates, Studio info (auto). Body = ordered blocks:
+//  • item block: Header Text + body paragraphs (each paragraph may sit beside an
+//    image); item images not assigned to a paragraph render beneath the text.
+//  • page-break block: forces a new page in the PDF.
+// Field edits use onchange (save only, no re-render → no focus loss); structural
+// changes (add/remove/move/image) re-render.
+
+function _woDoc() { return (S.documents || []).find(d => d.id === _currentDocId); }
+function _woInit(doc) {
+  if (!doc.wo) doc.wo = { attentionName: '', attentionContact: '', submittedDate: doc.date || new Date().toISOString().slice(0,10), dueDate: '' };
+  if (!Array.isArray(doc.blocks)) {
+    doc.blocks = [];
+    // Light migration: convert any legacy swatch items into item blocks.
+    (doc.items || []).forEach(it => {
+      doc.blocks.push({
+        id: uid(), type: 'item', proposalItemId: it.proposalItemId || null,
+        headerText: it.name || '', paragraphs: it.description ? [{ id: uid(), text: it.description, imageId: '' }] : [],
+        images: it.image?.storagePath ? [{ id: uid(), name: it.name || 'image', storagePath: it.image.storagePath }] : [],
+      });
+    });
+  }
+}
+
+function renderWorkOrderEditor(doc) {
+  _woInit(doc);
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const client = (S.clients || []).find(c => c.id === proj?.clientId);
+  $c('doce-title').textContent = doc.title;
+  $c('doce-subtitle').textContent = ['Purchase Order / Work Order', proj?.name, client?.name].filter(Boolean).join(' · ');
+  const studio = (typeof getStudio === 'function' ? getStudio() : (S.studio || {})) || {};
+  const studioLines = [studio.name, studio.address1, studio.address2, studio.phone, studio.email, studio.website].filter(Boolean);
+  const wo = doc.wo;
+
+  let html = `<div style="max-width:820px;margin:0 auto">`;
+  html += `<div style="font-size:11px;color:var(--text-light);font-family:var(--font-b);font-style:italic;margin-bottom:12px">Edits auto-save locally; click <strong>Save</strong> (top right) to store a version + sync to your team, and <strong>Print / PDF</strong> to generate the work order.</div>`;
+
+  // Header card
+  html += `<div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:18px 20px;margin-bottom:16px">
+    <div class="frow">
+      <div class="fg" style="flex:2"><label class="fl">Document Title</label>
+        <input type="text" class="fi" value="${escH(doc.title)}" onchange="updateDocField('title',this.value.trim())"></div>
+    </div>
+    <div class="frow" style="margin-top:8px">
+      <div class="fg" style="flex:2"><label class="fl">Attention — who it's for</label>
+        <input type="text" class="fi" value="${escH(wo.attentionName||'')}" placeholder="Vendor / workroom / recipient name" onchange="updateWOField('attentionName',this.value)"></div>
+    </div>
+    <div class="fg" style="margin-top:8px"><label class="fl">Their contact info</label>
+      <textarea class="fi" style="resize:vertical;min-height:52px;font-size:12px" placeholder="Contact name, email, phone, address…" onchange="updateWOField('attentionContact',this.value)">${escH(wo.attentionContact||'')}</textarea></div>
+    <div class="frow" style="margin-top:8px">
+      <div class="fg" style="flex:1"><label class="fl">Submitted</label>
+        <input type="date" class="fi" value="${escH(wo.submittedDate||'')}" onchange="updateWOField('submittedDate',this.value)"></div>
+      <div class="fg" style="flex:1"><label class="fl">Due</label>
+        <input type="date" class="fi" value="${escH(wo.dueDate||'')}" onchange="updateWOField('dueDate',this.value)"></div>
+    </div>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);font-size:11px;color:var(--text-mid);font-family:var(--font-b)">
+      <span style="text-transform:uppercase;letter-spacing:0.05em;font-weight:700;color:var(--text-light)">Project:</span> ${escH(proj?.name || '—')}
+      &nbsp;·&nbsp; <span style="text-transform:uppercase;letter-spacing:0.05em;font-weight:700;color:var(--text-light)">From:</span> ${escH(studioLines.join(' · ') || 'Set studio info in App Settings')}
+    </div>
+  </div>`;
+
+  // Blocks
+  html += `<div style="display:flex;flex-direction:column;gap:12px">`;
+  if (!doc.blocks.length) {
+    html += `<div style="text-align:center;color:var(--text-light);font-family:var(--font-b);font-size:12px;font-style:italic;padding:20px">No content yet — add an item block below.</div>`;
+  }
+  doc.blocks.forEach((b, i) => { html += _renderWOBlock(doc, b, i); });
+  html += `</div>`;
+
+  // Add row
+  const prop = S.proposals[doc.projectId];
+  const itemOpts = [];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => itemOpts.push(`<option value="${it.id}|${sp.id}">${escH(it.name || '(unnamed)')} · ${escH(sp.name || 'Unassigned')}</option>`)));
+  html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;align-items:center">
+    <button class="btn btn-secondary btn-sm" onclick="addWOBlock('item')">+ Item block</button>
+    ${itemOpts.length ? `<select class="fi" style="font-size:12px;padding:6px 10px;width:auto" onchange="if(this.value){addWOFromProposal(this.value);this.value=''}">
+      <option value="">+ Add from proposal…</option>${itemOpts.join('')}</select>` : ''}
+    <button class="btn btn-ghost btn-sm" onclick="addWOBlock('pagebreak')">+ Page break</button>
+  </div>`;
+
+  html += `</div>`;
+  $c('doce-body').innerHTML = html;
+  hydrateDocLazyImages($c('doce-body'));
+}
+
+function _renderWOBlock(doc, b, i) {
+  const last = doc.blocks.length - 1;
+  const moveBtns = `<div style="display:flex;gap:2px">
+    <button class="btn btn-ghost btn-sm" title="Move up" ${i===0?'disabled':''} onclick="moveWOBlock('${b.id}',-1)" style="font-size:11px;padding:2px 6px">↑</button>
+    <button class="btn btn-ghost btn-sm" title="Move down" ${i===last?'disabled':''} onclick="moveWOBlock('${b.id}',1)" style="font-size:11px;padding:2px 6px">↓</button>
+    <button class="btn btn-danger btn-sm" title="Remove" onclick="removeWOBlock('${b.id}')" style="font-size:11px;padding:2px 6px">✕</button>
+  </div>`;
+
+  if (b.type === 'pagebreak') {
+    return `<div style="display:flex;align-items:center;gap:10px;padding:6px 12px;border:1px dashed var(--pecan);border-radius:var(--r);background:rgba(159,102,64,0.04)">
+      <span style="flex:1;font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:var(--pecan)">⤓ Page break</span>${moveBtns}</div>`;
+  }
+
+  const imgs = b.images || [];
+  const imgOptions = id => `<option value="">— beneath text —</option>` +
+    imgs.map((im, ix) => `<option value="${im.id}" ${id===im.id?'selected':''}>Image ${ix+1}</option>`).join('');
+
+  const paras = (b.paragraphs || []).map(p => `
+    <div style="display:flex;gap:8px;align-items:flex-start;margin-top:8px">
+      <textarea class="fi" style="flex:1;resize:vertical;min-height:56px;font-size:12px" placeholder="Body paragraph…" onchange="updateWOParagraph('${b.id}','${p.id}',this.value)">${escH(p.text||'')}</textarea>
+      <div style="display:flex;flex-direction:column;gap:4px;width:140px;flex-shrink:0">
+        ${imgs.length ? `<select class="fi" style="font-size:11px;padding:3px 6px" title="Show an image beside this paragraph" onchange="assignWOImage('${b.id}','${p.id}',this.value)">${imgOptions(p.imageId||'')}</select>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="removeWOParagraph('${b.id}','${p.id}')" style="font-size:10px;padding:2px 6px;align-self:flex-end">Remove ¶</button>
+      </div>
+    </div>`).join('');
+
+  const imgThumbs = imgs.map((im, ix) => `
+    <div style="position:relative;width:64px;height:64px;border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;background:var(--bg-subtle)">
+      <img class="lazy-doc-img" data-path="${escH(im.storagePath)}" style="width:100%;height:100%;object-fit:cover" alt="Image ${ix+1}">
+      <button onclick="removeWOImage('${b.id}','${im.id}')" title="Remove image" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:3px;font-size:10px;line-height:1;padding:1px 4px;cursor:pointer">✕</button>
+      <span style="position:absolute;bottom:1px;left:2px;background:rgba(0,0,0,0.5);color:#fff;font-size:8px;padding:0 3px;border-radius:2px">${ix+1}</span>
+    </div>`).join('');
+
+  return `<div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+      <input type="text" class="fi" style="flex:1;font-family:var(--font-h);font-weight:700;font-size:14px" placeholder="Header text (e.g. item name / section title)" value="${escH(b.headerText||'')}" onchange="updateWOBlockField('${b.id}','headerText',this.value)">
+      ${moveBtns}
+    </div>
+    ${paras}
+    <button class="btn btn-ghost btn-sm" onclick="addWOParagraph('${b.id}')" style="font-size:11px;margin-top:8px">+ Paragraph</button>
+    <div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:700;color:var(--text-light)">Images</span>
+        <label class="btn btn-ghost btn-sm" style="font-size:11px;cursor:pointer;margin:0">+ Add image
+          <input type="file" accept="image/*" style="display:none" onchange="uploadWOImage('${b.id}',this)"></label>
+      </div>
+      ${imgs.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${imgThumbs}</div>
+      <div style="font-size:10px;color:var(--text-light);margin-top:4px;font-style:italic">Unassigned images print beneath the text; assign one to a paragraph (dropdown) to place it beside that paragraph.</div>` : ''}
+    </div>
+  </div>`;
+}
+
+// ── Work order handlers ──
+function updateWOField(key, val) { const d = _woDoc(); if (!d) return; d.wo[key] = val; d.updated = new Date().toISOString(); save(); }
+function updateWOBlockField(bid, key, val) { const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); if (!b) return; b[key] = val; d.updated = new Date().toISOString(); save(); }
+function addWOBlock(type) {
+  const d = _woDoc(); if (!d) return;
+  d.blocks.push(type === 'pagebreak' ? { id: uid(), type: 'pagebreak' } : { id: uid(), type: 'item', proposalItemId: null, headerText: '', paragraphs: [{ id: uid(), text: '', imageId: '' }], images: [] });
+  d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d);
+}
+function addWOFromProposal(val) {
+  const [itemId, spId] = String(val).split('|');
+  const d = _woDoc(); if (!d) return;
+  const prop = S.proposals[d.projectId];
+  const sp = prop?.spaces?.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  if (!item) return;
+  const block = { id: uid(), type: 'item', proposalItemId: item.id, headerText: item.name || '', paragraphs: [], images: [] };
+  if (item.description) block.paragraphs.push({ id: uid(), text: item.description, imageId: '' });
+  const main = (typeof getItemMainImage === 'function') ? getItemMainImage(item) : null;
+  if (main?.storagePath) block.images.push({ id: uid(), name: item.name || 'image', storagePath: main.storagePath });
+  d.blocks.push(block);
+  d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d);
+}
+function removeWOBlock(bid) { const d = _woDoc(); if (!d) return; d.blocks = d.blocks.filter(b => b.id !== bid); d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d); }
+function moveWOBlock(bid, dir) {
+  const d = _woDoc(); if (!d) return;
+  const i = d.blocks.findIndex(b => b.id === bid); const j = i + dir;
+  if (i < 0 || j < 0 || j >= d.blocks.length) return;
+  [d.blocks[i], d.blocks[j]] = [d.blocks[j], d.blocks[i]];
+  d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d);
+}
+function addWOParagraph(bid) { const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); if (!b) return; (b.paragraphs = b.paragraphs || []).push({ id: uid(), text: '', imageId: '' }); d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d); }
+function updateWOParagraph(bid, pid, text) { const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); const p = b?.paragraphs.find(x => x.id === pid); if (!p) return; p.text = text; d.updated = new Date().toISOString(); save(); }
+function removeWOParagraph(bid, pid) { const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); if (!b) return; b.paragraphs = b.paragraphs.filter(p => p.id !== pid); d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d); }
+function assignWOImage(bid, pid, imgId) { const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); const p = b?.paragraphs.find(x => x.id === pid); if (!p) return; p.imageId = imgId || ''; d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d); }
+async function uploadWOImage(bid, input) {
+  const file = input.files?.[0]; if (!file) return;
+  const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); if (!b) return;
+  try {
+    const rec = await uploadFile(file, 'documents', d.id);
+    (b.images = b.images || []).push({ id: uid(), name: rec.name, storagePath: rec.storagePath });
+    d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d);
+  } catch (e) { toast('Image upload failed: ' + (e?.message || e)); }
+}
+function removeWOImage(bid, imgId) {
+  const d = _woDoc(); const b = d?.blocks.find(x => x.id === bid); if (!b) return;
+  b.images = (b.images || []).filter(im => im.id !== imgId);
+  (b.paragraphs || []).forEach(p => { if (p.imageId === imgId) p.imageId = ''; });
+  d.updated = new Date().toISOString(); save(); renderWorkOrderEditor(d);
+}
+
+// ── Work order PDF ──
+async function _woLoadImage(storagePath) {
+  try {
+    const dataUrl = await _resolveFileAsDataUrl({ storagePath });
+    if (!dataUrl) return null;
+    const dims = await new Promise(res => { const im = new Image(); im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = () => res(null); im.src = dataUrl; });
+    if (!dims) return null;
+    const fmt = /^data:image\/png/i.test(dataUrl) ? 'PNG' : 'JPEG';
+    return { dataUrl, w: dims.w, h: dims.h, fmt };
+  } catch (_e) { return null; }
+}
+
+async function generateWorkOrderPDF(doc) {
+  if (!doc) return;
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded. Check your connection and retry.'); return; }
+  _woInit(doc);
+  toast('Building work order…');
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ unit: 'pt', format: 'letter', orientation: 'portrait' });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const M = 48;
+  const contentW = pageW - M * 2;
+  const MAHOGANY = [63, 21, 28], PECAN = [159, 102, 64], DARK = [40, 32, 28], MID = [110, 100, 90], LIGHT = [160, 150, 140], BORDER = [220, 210, 198];
+  let y = M;
+
+  // Pre-resolve all images.
+  const imgCache = {};
+  for (const b of doc.blocks) {
+    for (const im of (b.images || [])) { if (!imgCache[im.id]) imgCache[im.id] = await _woLoadImage(im.storagePath); }
+  }
+
+  const proj = S.projects.find(p => p.id === doc.projectId);
+  const studio = (typeof getStudio === 'function' ? getStudio() : (S.studio || {})) || {};
+  const wo = doc.wo;
+  const fmtDate = s => { if (!s) return ''; const d = new Date(s + 'T00:00:00'); return isNaN(d) ? s : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); };
+
+  const ensure = (needed) => { if (y + needed > pageH - M) { pdf.addPage(); y = M; } };
+
+  // ── Header ──
+  pdf.setTextColor(...MAHOGANY); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20);
+  pdf.text('WORK ORDER', M, y + 6);
+  pdf.setFontSize(11); pdf.setTextColor(...DARK);
+  pdf.text(doc.title || '', M, y + 24);
+  // Studio info (right)
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(...MID);
+  const studioLines = [studio.name, studio.address1, studio.address2, studio.phone, studio.email, studio.website].filter(Boolean);
+  let sy = y + 2;
+  studioLines.forEach((ln, ix) => { pdf.setFont('helvetica', ix === 0 ? 'bold' : 'normal'); if (ix===0) pdf.setTextColor(...DARK); else pdf.setTextColor(...MID); pdf.text(String(ln), pageW - M, sy, { align: 'right' }); sy += 12; });
+  y = Math.max(y + 34, sy) + 6;
+  pdf.setDrawColor(...BORDER); pdf.setLineWidth(1); pdf.line(M, y, pageW - M, y); y += 16;
+
+  // ── Attention / meta ──
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(...PECAN);
+  pdf.text('ATTENTION', M, y);
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(...DARK);
+  pdf.text(wo.attentionName || '—', M + 74, y);
+  // meta on the right
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(...MID);
+  const metaR = [];
+  if (proj?.name) metaR.push(`Project: ${proj.name}`);
+  if (wo.submittedDate) metaR.push(`Submitted: ${fmtDate(wo.submittedDate)}`);
+  if (wo.dueDate) metaR.push(`Due: ${fmtDate(wo.dueDate)}`);
+  let my = y;
+  metaR.forEach(ln => { pdf.text(ln, pageW - M, my, { align: 'right' }); my += 12; });
+  y += 14;
+  if (wo.attentionContact) {
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(...MID);
+    const cl = pdf.splitTextToSize(wo.attentionContact, contentW * 0.6);
+    pdf.text(cl, M, y); y += cl.length * 11;
+  }
+  y = Math.max(y, my) + 8;
+  pdf.setDrawColor(...BORDER); pdf.line(M, y, pageW - M, y); y += 18;
+
+  // ── Blocks ──
+  for (const b of doc.blocks) {
+    if (b.type === 'pagebreak') { pdf.addPage(); y = M; continue; }
+
+    // Header text
+    if (b.headerText) {
+      ensure(24);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(...MAHOGANY);
+      const hl = pdf.splitTextToSize(b.headerText, contentW);
+      pdf.text(hl, M, y); y += hl.length * 16 + 4;
+    }
+
+    // Paragraphs
+    for (const p of (b.paragraphs || [])) {
+      const img = p.imageId ? imgCache[p.imageId] : null;
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10.5); pdf.setTextColor(...DARK);
+      if (img) {
+        const imgW = contentW * 0.34, imgH = Math.min(imgW * (img.h / img.w), 150);
+        const textW = contentW * 0.60;
+        const lines = pdf.splitTextToSize(p.text || '', textW);
+        const rowH = Math.max(lines.length * 14, imgH) + 12;
+        ensure(rowH);
+        pdf.text(lines, M, y + 8);
+        try { pdf.addImage(img.dataUrl, img.fmt, pageW - M - imgW, y, imgW, imgH); } catch (_e) {}
+        y += rowH;
+      } else {
+        const lines = pdf.splitTextToSize(p.text || '', contentW);
+        ensure(lines.length * 14 + 6);
+        pdf.text(lines, M, y + 8); y += lines.length * 14 + 8;
+      }
+    }
+
+    // Unassigned images beneath (grid of up to 3 across)
+    const assigned = new Set((b.paragraphs || []).map(p => p.imageId).filter(Boolean));
+    const beneath = (b.images || []).filter(im => !assigned.has(im.id)).map(im => imgCache[im.id]).filter(Boolean);
+    if (beneath.length) {
+      y += 4;
+      const per = 3, gap = 10, cellW = (contentW - gap * (per - 1)) / per;
+      for (let i = 0; i < beneath.length; i += per) {
+        const rowImgs = beneath.slice(i, i + per);
+        const rowH = Math.max(...rowImgs.map(im => Math.min(cellW * (im.h / im.w), 160)));
+        ensure(rowH + 8);
+        rowImgs.forEach((im, ix) => {
+          const iw = cellW, ih = Math.min(cellW * (im.h / im.w), 160);
+          try { pdf.addImage(im.dataUrl, im.fmt, M + ix * (cellW + gap), y, iw, ih); } catch (_e) {}
+        });
+        y += rowH + 8;
+      }
+    }
+
+    y += 10;
+    ensure(1);
+  }
+
+  const safe = (doc.title || 'work-order').replace(/[^\w.-]+/g, '_');
+  pdf.save(`${safe}.pdf`);
+  toast('Work order PDF ready.');
 }
 
 // ── SWATCH SCHEDULE EDITOR (material, furniture, tile, lighting, hardware) ──
@@ -29462,6 +29789,8 @@ function pushDocVersion(doc) {
       date: doc.date || '',
       exportConfig: doc.exportConfig || null,
       title: doc.title || '',
+      blocks: doc.blocks || [],      // work-order composer content
+      wo: doc.wo || null,            // work-order header (attention, dates)
     },
     files: [],
     created: new Date().toISOString(),
@@ -29483,8 +29812,10 @@ function saveCurrentDoc() {
   const lastItems = last ? JSON.stringify(last.data?.items || []) : JSON.stringify([]);
   const notesChanged = last ? (last.data?.notes || '') !== (doc.notes || '') : !!(doc.notes || '');
   const titleChanged = last ? (last.data?.title || '') !== (doc.title || '') : !!(doc.title || '');
+  const blocksChanged = last ? JSON.stringify(last.data?.blocks || []) !== JSON.stringify(doc.blocks || []) : !!(doc.blocks && doc.blocks.length);
+  const woChanged = last ? JSON.stringify(last.data?.wo || null) !== JSON.stringify(doc.wo || null) : !!doc.wo;
 
-  if (last && currentItems === lastItems && !notesChanged && !titleChanged) {
+  if (last && currentItems === lastItems && !notesChanged && !titleChanged && !blocksChanged && !woChanged) {
     toast('No changes to save.');
     return;
   }
@@ -29633,6 +29964,7 @@ function deleteDoc(docId) {
 async function printCurrentDoc() {
   const doc = (S.documents||[]).find(d => d.id === _currentDocId);
   if (!doc) return;
+  if (doc.templateId === 'purchase_order') { return generateWorkOrderPDF(doc); }
   const proj = S.projects.find(p => p.id === doc.projectId);
   const client = (S.clients||[]).find(c => c.id === proj?.clientId);
   const logoUrl = await resolveStudioLogoUrl();
