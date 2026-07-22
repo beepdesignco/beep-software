@@ -1756,7 +1756,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0;flex-wrap:wrap" id="settings-tabs">
         <button class="view-tab active" data-settab="studio"  onclick="setSettingsTab('studio')"  style="margin-bottom:-1px">Studio Info</button>
-        <button class="view-tab"        data-settab="team"    onclick="setSettingsTab('team')"    style="margin-bottom:-1px">Team</button>
+        <button class="view-tab" id="settab-btn-team" data-settab="team"    onclick="setSettingsTab('team')"    style="margin-bottom:-1px">Team</button>
         <button class="view-tab"        data-settab="units"   onclick="setSettingsTab('units')"   style="margin-bottom:-1px">Quantity Units</button>
         <button class="view-tab"        data-settab="statuses" onclick="setSettingsTab('statuses')" style="margin-bottom:-1px">Statuses</button>
         <button class="view-tab"        data-settab="cards"   onclick="setSettingsTab('cards')"   style="margin-bottom:-1px">Payment Cards</button>
@@ -23887,6 +23887,12 @@ function clientSelectOptions(selectedId) {
 // ═════════════════════════════════════════════════════════════
 
 function openAppSettings() {
+  // The Team card (member rates + permissions) is owner-only. Hide the tab for
+  // non-owners and bounce them to Studio Info if they were parked on it.
+  const isOwner = AUTH.member?.role === 'owner';
+  const teamBtn = document.getElementById('settab-btn-team');
+  if (teamBtn) teamBtn.style.display = isOwner ? '' : 'none';
+  if (!isOwner && _settingsTab === 'team') _settingsTab = 'studio';
   showView('settings');
 }
 
@@ -23894,6 +23900,8 @@ let _settingsTab = 'studio';
 function setSettingsTab(tab) {
   // Remap legacy tab names from before the Statuses consolidation (2026-04-23).
   if (tab === 'tasks' || tab === 'colors') tab = 'statuses';
+  // Team card is owner-only.
+  if (tab === 'team' && AUTH.member?.role !== 'owner') tab = 'studio';
   _settingsTab = tab;
   if (typeof saveUIState === 'function') saveUIState();
   $a('[data-settab]').forEach(b => b.classList.toggle('active', b.dataset.settab === tab));
