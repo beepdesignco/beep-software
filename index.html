@@ -28976,7 +28976,8 @@ function renderDocEditor() {
 
 function _woDoc() { return (S.documents || []).find(d => d.id === _currentDocId); }
 function _woInit(doc) {
-  if (!doc.wo) doc.wo = { attentionName: '', attentionContact: '', submittedDate: doc.date || new Date().toISOString().slice(0,10), dueDate: '' };
+  if (!doc.wo) doc.wo = { attentionName: '', attentionContact: '', submittedDate: doc.date || new Date().toISOString().slice(0,10), dueDate: '', orientation: 'portrait' };
+  if (!doc.wo.orientation) doc.wo.orientation = 'portrait';
   if (!Array.isArray(doc.blocks)) {
     doc.blocks = [];
     // Light migration: convert any legacy swatch items into item blocks.
@@ -29020,6 +29021,11 @@ function renderWorkOrderEditor(doc) {
         <input type="date" class="fi" value="${escH(wo.submittedDate||'')}" onchange="updateWOField('submittedDate',this.value)"></div>
       <div class="fg" style="flex:1"><label class="fl">Due</label>
         <input type="date" class="fi" value="${escH(wo.dueDate||'')}" onchange="updateWOField('dueDate',this.value)"></div>
+      <div class="fg" style="flex:1"><label class="fl">PDF Orientation</label>
+        <select class="fi" onchange="updateWOField('orientation',this.value)">
+          <option value="portrait" ${wo.orientation==='portrait'?'selected':''}>Portrait</option>
+          <option value="landscape" ${wo.orientation==='landscape'?'selected':''}>Landscape</option>
+        </select></div>
     </div>
     <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);font-size:11px;color:var(--text-mid);font-family:var(--font-b)">
       <span style="text-transform:uppercase;letter-spacing:0.05em;font-weight:700;color:var(--text-light)">Project:</span> ${escH(proj?.name || '—')}
@@ -29174,7 +29180,7 @@ async function generateWorkOrderPDF(doc) {
   _woInit(doc);
   toast('Building work order…');
   const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ unit: 'pt', format: 'letter', orientation: 'portrait' });
+  const pdf = new jsPDF({ unit: 'pt', format: 'letter', orientation: (doc.wo?.orientation === 'landscape' ? 'landscape' : 'portrait') });
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
   const M = 48;
