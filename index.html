@@ -12103,8 +12103,9 @@ function _offerWorkOrderTask(pid, spId, itemId) {
   if (!confirm(`Log a work order for "${itemName}" as a task in the task queue?`)) return;
   if (!S.tasks) S.tasks = [];
   const maxSort = S.tasks.reduce((m, t) => Math.max(m, t.sortOrder || 0), 0);
+  const newId = uid();
   S.tasks.unshift({
-    id: uid(),
+    id: newId,
     title: `Work Order: ${itemName}`,
     description: '',
     status: 'todo',
@@ -12127,6 +12128,8 @@ function _offerWorkOrderTask(pid, spId, itemId) {
   });
   save();
   toast('Work order added to the task queue.');
+  // Open the new task so they can set assignee, due date, etc. right away.
+  if (typeof openTaskModal === 'function') openTaskModal(newId);
 }
 
 // ── Tracking Numbers (enhanced: carrier + description) ──
