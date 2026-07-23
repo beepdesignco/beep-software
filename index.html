@@ -8421,6 +8421,7 @@ function dbFreightActualAllocationToS(r) {
     id: r.id,
     freightActualId: r.freight_actual_id,
     proposalItemId: r.proposal_item_id || null,
+    proposalComponentId: r.proposal_component_id || null,
     amount: r.amount != null ? Number(r.amount) : 0,
     notes: r.notes || '',
     created: r.created_at,
@@ -9186,6 +9187,7 @@ function freightActualAllocationToDB(a, studioId) {
     studio_id: studioId,
     freight_actual_id: a.freightActualId,
     proposal_item_id: a.proposalItemId || null,
+    proposal_component_id: a.proposalComponentId || null,
     amount: Number(a.amount || 0),
     notes: a.notes || null,
     deleted_at: null,
@@ -14526,6 +14528,8 @@ function _faMarkupRateFor(charge, proj) {
 function _faCategoryMarkupRate(categoryId, proj) {
   const cat = (S.freightCategories || []).find(x => x.id === categoryId);
   if (cat && cat.defaultMarkupPct != null) return Number(cat.defaultMarkupPct);
+  // Blank category = plain freight → project freight markup (not item markup).
+  if (!categoryId) return getProjectFreightMarkupPct(proj?.id);
   return Number(proj?.markupPct || 0);
 }
 
@@ -14634,7 +14638,9 @@ function getProjectFreightMarkupPct(pid) {
 function _faActualMarkupPct(actual, pid) {
   const catId = actual.freightCategoryId;
   const primaryId = getPrimaryFreightCategoryId();
-  if (catId && catId === primaryId) return getProjectFreightMarkupPct(pid);
+  // Blank category ("— Any —") is plain freight — inherit the project
+  // freight markup, same as the primary Freight category (per Baylor 2026-07-23).
+  if (!catId || catId === primaryId) return getProjectFreightMarkupPct(pid);
   const cat = (S.freightCategories || []).find(c => c.id === catId);
   return cat?.defaultMarkupPct != null ? Number(cat.defaultMarkupPct) : 0;
 }
@@ -16323,7 +16329,8 @@ function _bfLinesMissingActuals(inv, kind) {
     return (S.freightActuals || []).some(a => {
       if (!matchesKind(a)) return false;
       if (line.proposalComponentId) {
-        return a.proposalComponentId === line.proposalComponentId;
+        return a.proposalComponentId === line.proposalComponentId ||
+          (a.allocations || []).some(x => x.proposalComponentId === line.proposalComponentId);
       }
       if (a.proposalItemId === line.proposalItemId && !a.proposalComponentId) return true;
       return (a.allocations || []).some(x => x.proposalItemId === line.proposalItemId);
@@ -16414,15 +16421,24 @@ function _lineFreightActualSums(line, pid, primaryCatId) {
       if (a.proposalComponentId === line.proposalComponentId) {
         matchAmt = Number(a.amount) || 0;
         matched = true;
+      } else if ((a.allocations || []).some(x => x.proposalComponentId === line.proposalComponentId)) {
+        // Split slice targeting this specific component.
+        matchAmt = (a.allocations || [])
+          .filter(x => x.proposalComponentId === line.proposalComponentId)
+          .reduce((s, x) => s + (Number(x.amount) || 0), 0);
+        matched = true;
       }
     } else {
-      if (a.proposalItemId === line.proposalItemId && !a.proposalComponentId) {
+      // Item-level line: direct item actuals + split slices WITHOUT a
+      // componentId. Component-tagged slices render as sub-rows in the
+      // modal (componentRowsFor) — excluding them here avoids double-count.
+      const itemSlices = (a.allocations || []).filter(x =>
+        x.proposalItemId === line.proposalItemId && !x.proposalComponentId);
+      if (a.proposalItemId === line.proposalItemId && !a.proposalComponentId && !(a.allocations || []).length) {
         matchAmt = Number(a.amount) || 0;
         matched = true;
-      } else if ((a.allocations || []).some(x => x.proposalItemId === line.proposalItemId)) {
-        matchAmt = (a.allocations || [])
-          .filter(x => x.proposalItemId === line.proposalItemId)
-          .reduce((s, x) => s + (Number(x.amount) || 0), 0);
+      } else if (itemSlices.length) {
+        matchAmt = itemSlices.reduce((s, x) => s + (Number(x.amount) || 0), 0);
         matched = true;
       }
     }
@@ -16473,13 +16489,24 @@ function openBudgetFreightItemsModal(invoiceId) {
     const it = _findItemById(l.proposalItemId);
     if (!it || !(it.components || []).length) return [];
     const byComp = new Map();
+    const bump = (cid, amt) => {
+      const cur = byComp.get(cid) || { raw: 0, count: 0 };
+      cur.raw += amt;
+      cur.count++;
+      byComp.set(cid, cur);
+    };
     (S.freightActuals || []).forEach(a => {
       if (a.freightCategoryId && a.freightCategoryId !== primaryCatId) return;
-      if (a.proposalItemId !== l.proposalItemId || !a.proposalComponentId) return;
-      const cur = byComp.get(a.proposalComponentId) || { raw: 0, count: 0 };
-      cur.raw += Number(a.amount) || 0;
-      cur.count++;
-      byComp.set(a.proposalComponentId, cur);
+      // Whole-entry actual tagged to a component of this item.
+      if (a.proposalItemId === l.proposalItemId && a.proposalComponentId) {
+        bump(a.proposalComponentId, Number(a.amount) || 0);
+      }
+      // Split slices tagged to a component of this item.
+      (a.allocations || []).forEach(x => {
+        if (x.proposalItemId === l.proposalItemId && x.proposalComponentId) {
+          bump(x.proposalComponentId, Number(x.amount) || 0);
+        }
+      });
     });
     return Array.from(byComp.entries()).map(([cid, v]) => {
       const comp = (it.components || []).find(c => c.id === cid);
@@ -17602,7 +17629,7 @@ function openEditFreightActual(id) {
   // Hydrate split UI from existing allocations.
   const allocs = fa.allocations || [];
   if (allocs.length) {
-    _faAllocDraft = allocs.map(a => ({ id: a.id, proposalItemId: a.proposalItemId || '', amount: a.amount }));
+    _faAllocDraft = allocs.map(a => ({ id: a.id, proposalItemId: a.proposalItemId || '', proposalComponentId: a.proposalComponentId || null, amount: a.amount }));
     $c('fa-split-toggle').checked = true;
     $c('fa-split-wrap').style.display = '';
     $c('fa-item-single-wrap').style.display = 'none';
@@ -17628,10 +17655,11 @@ function onFASplitToggle() {
   if (on) {
     if (!_faAllocDraft.length) {
       const seedItemId = $c('fa-item')?.value || '';
+      const seedCompId = seedItemId ? ($c('fa-component')?.value || null) : null;
       const amt = parseFloat($c('fa-amount').value) || 0;
       _faAllocDraft = [
-        { id: uid(), proposalItemId: seedItemId, amount: amt },
-        { id: uid(), proposalItemId: '', amount: 0 },
+        { id: uid(), proposalItemId: seedItemId, proposalComponentId: seedCompId, amount: amt },
+        { id: uid(), proposalItemId: '', proposalComponentId: null, amount: 0 },
       ];
     }
     renderFAAllocRows();
@@ -17641,28 +17669,44 @@ function onFASplitToggle() {
 function renderFAAllocRows() {
   const pid = $c('fa-project-id').value;
   const prop = pid ? S.proposals[pid] : null;
-  const items = [];
+  // Each split target is an item OR a component of a constructed item.
+  // One combined dropdown per row: components render indented under their
+  // item, value-encoded as "itemId::componentId".
+  const targets = [];
   (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
-    items.push({ id: it.id, label: `${sp.name || 'Space'} · ${it.name || '(unnamed)'}` });
+    targets.push({ v: it.id, label: `${sp.name || 'Space'} · ${it.name || '(unnamed)'}` });
+    (it.components || []).forEach(c => {
+      targets.push({ v: `${it.id}::${c.id}`, label: `  ↳ ${c.name || '(component)'}` });
+    });
   }));
-  const optionsHtml = '<option value="">— Pick item —</option>' +
-    items.map(i => `<option value="${i.id}">${escH(i.label)}</option>`).join('');
 
   const wrap = $c('fa-split-rows');
   if (!wrap) return;
-  wrap.innerHTML = _faAllocDraft.map((a, i) => `
+  wrap.innerHTML = _faAllocDraft.map((a, i) => {
+    const selected = a.proposalComponentId
+      ? `${a.proposalItemId}::${a.proposalComponentId}`
+      : (a.proposalItemId || '');
+    const optionsHtml = '<option value="">— Pick item —</option>' +
+      targets.map(t => `<option value="${t.v}" ${t.v === selected ? 'selected' : ''}>${escH(t.label)}</option>`).join('');
+    return `
     <div style="display:flex;gap:8px;align-items:center">
-      <select class="fi fsel" style="flex:1;font-size:12px;padding:5px 8px" onchange="_setFAAllocItem(${i}, this.value)">${optionsHtml.replace(`value="${a.proposalItemId}"`, `value="${a.proposalItemId}" selected`)}</select>
+      <select class="fi fsel" style="flex:1;font-size:12px;padding:5px 8px" onchange="_setFAAllocItem(${i}, this.value)">${optionsHtml}</select>
       <input type="text" class="fi" style="width:110px;font-size:12px;padding:5px 8px;text-align:right" value="${a.amount || ''}" placeholder="$0.00" oninput="_setFAAllocAmount(${i}, this.value)">
       <button class="btn btn-ghost btn-sm" onclick="_removeFAAllocRow(${i})" style="font-size:11px;color:#b94a3a;padding:2px 8px">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   updateFASplitSum();
 }
 
-function _setFAAllocItem(i, value) { _faAllocDraft[i].proposalItemId = value || null; updateFASplitSum(); }
+function _setFAAllocItem(i, value) {
+  const [itemId, compId] = String(value || '').split('::');
+  _faAllocDraft[i].proposalItemId = itemId || null;
+  _faAllocDraft[i].proposalComponentId = compId || null;
+  updateFASplitSum();
+}
 function _setFAAllocAmount(i, value) { _faAllocDraft[i].amount = parseFloat(value) || 0; updateFASplitSum(); }
 function _removeFAAllocRow(i) { _faAllocDraft.splice(i, 1); renderFAAllocRows(); }
-function addFAAllocationRow() { _faAllocDraft.push({ id: uid(), proposalItemId: '', amount: 0 }); renderFAAllocRows(); }
+function addFAAllocationRow() { _faAllocDraft.push({ id: uid(), proposalItemId: '', proposalComponentId: null, amount: 0 }); renderFAAllocRows(); }
 function splitFAEvenly() {
   if (!_faAllocDraft.length) return;
   const amt = parseFloat($c('fa-amount').value) || 0;
@@ -17773,6 +17817,7 @@ async function saveFreightActual() {
       id: a.id,
       freightActualId: id || null,
       proposalItemId: a.proposalItemId,
+      proposalComponentId: a.proposalComponentId || null,
       amount: Number(a.amount),
       notes: '',
     }));
