@@ -15941,7 +15941,12 @@ function getProjectAvailableCredit(pid) {
 // {creditId, amountDrawn} slices that consumed the requested amount, or
 // less if the total available was less than requested. Mutates the
 // credit balances in place. Caller must save() after.
-function _drawProjectCredits(pid, amountNeeded) {
+// When `lineId` is passed, each drawn credit records the draw in its
+// durable `draws[]` (jsonb on proj.settings.credits) so removing that
+// invoice line can restore the exact balances — see
+// _restoreProjectCreditDraws. Without this, removing a credit line
+// permanently lost the drawn credit from the pool.
+function _drawProjectCredits(pid, amountNeeded, lineId) {
   const proj = getProject(pid);
   if (!proj) return { applied: 0, slices: [] };
   const credits = (proj.settings?.credits || [])
@@ -15953,10 +15958,35 @@ function _drawProjectCredits(pid, amountNeeded) {
     if (remaining <= 0.005) break;
     const take = Math.min(remaining, Number(c.balance));
     c.balance = Math.round((Number(c.balance) - take) * 100) / 100;
+    if (lineId) {
+      if (!Array.isArray(c.draws)) c.draws = [];
+      c.draws.push({ lineId, amount: take, date: new Date().toISOString() });
+    }
     slices.push({ creditId: c.id, amountDrawn: take, source: c.source, sourceInvoiceNumber: c.sourceInvoiceNumber });
     remaining -= take;
   }
   return { applied: amountNeeded - remaining, slices };
+}
+
+// Reverse the draws a credit line made — restores balances and removes the
+// draw records. Returns the restored total. Credit lines created before
+// draw-tracking (no draws recorded) restore nothing, matching old behavior.
+function _restoreProjectCreditDraws(pid, lineId) {
+  const proj = getProject(pid);
+  if (!proj || !lineId) return 0;
+  let restored = 0;
+  (proj.settings?.credits || []).forEach(c => {
+    const draws = Array.isArray(c.draws) ? c.draws : [];
+    const keep = [];
+    draws.forEach(d => {
+      if (d.lineId === lineId) {
+        c.balance = Math.round((Number(c.balance) + Number(d.amount)) * 100) / 100;
+        restored += Number(d.amount);
+      } else keep.push(d);
+    });
+    c.draws = keep;
+  });
+  return restored;
 }
 
 // Apply project credit toward an item's deferred freight. Requires a
@@ -15985,7 +16015,8 @@ function applyCreditToDeferredFreight(pid, itemId, invoiceId) {
   const remainingMarkedUp = Math.round(remainingRaw * (1 + markupPct / 100) * 100) / 100;
 
   const applyAmount = Math.min(remainingMarkedUp, available);
-  const draw = _drawProjectCredits(pid, applyAmount);
+  const creditLineId = uid();
+  const draw = _drawProjectCredits(pid, applyAmount, creditLineId);
   if (draw.applied <= 0.005) { toast('Nothing applied.'); return; }
 
   // Add marked-up freight to the invoice
@@ -16008,7 +16039,7 @@ function applyCreditToDeferredFreight(pid, itemId, invoiceId) {
   if (!Array.isArray(inv.lineItems)) inv.lineItems = [];
   const creditNoteParts = draw.slices.map(s => s.sourceInvoiceNumber ? `credit from ${s.sourceInvoiceNumber}` : 'project credit');
   inv.lineItems.push({
-    id: uid(),
+    id: creditLineId,
     name: `Freight paid via project credit${draw.slices.length > 1 ? ' (' + draw.slices.length + ' slices)' : ''}`,
     description: creditNoteParts.join('; '),
     qty: 1,
@@ -30956,6 +30987,15 @@ function removeInvLine(idx) {
   if (line?._freightRecon && line._settlementId) {
     S.freightSettlements = (S.freightSettlements || []).filter(s => s.id !== line._settlementId);
   }
+  // Credit lines drawn from proj.settings.credits: restore the exact
+  // balances via the draw records. (Lines from before draw-tracking have
+  // no records and restore nothing — matches old behavior.)
+  if (line?._reconType === 'credit' && !line._settlementId) {
+    const inv = _currentInvoiceId ? (S.invoices || []).find(i => i.id === _currentInvoiceId) : null;
+    const pid = inv ? inv.projectId : ($c('inv-project')?.value || '');
+    const restored = _restoreProjectCreditDraws(pid, line.id);
+    if (restored > 0.005) toast(`${fmt(restored)} credit returned to the project pool.`);
+  }
   _invLineItems.splice(idx, 1);
   recalcInvFreight();
   renderInvoiceBuilder();
@@ -31090,12 +31130,24 @@ function removeInvCreditLineById(lineId) {
 }
 
 // Renders the Credit row(s) under the Invoice Summary block. One row per
-// credit line so each can be removed individually. Hidden when no credits.
+// credit line so each can be removed individually. Also offers "Apply
+// project credit" whenever the project has available credit and the
+// invoice is still a draft — the generic path for spending credit on
+// anything billed (items, lampshades, freight alike): bill the thing as a
+// normal (taxable) line, then offset it with a non-taxable credit line so
+// tax is charged on the sale while the credit covers the price.
 function _renderInvCreditRow() {
   const host = $c('inv-credit-row-host');
   if (!host) return;
   const credits = _invLineItems.filter(l => l._reconType === 'credit');
-  if (!credits.length) { host.innerHTML = ''; return; }
+  const inv = _currentInvoiceId ? (S.invoices || []).find(i => i.id === _currentInvoiceId) : null;
+  const pid = inv ? inv.projectId : ($c('inv-project')?.value || '');
+  const available = pid ? getProjectAvailableCredit(pid) : 0;
+  const canApply = available > 0.005 && (!inv || inv.status === 'draft');
+  const applyBtn = canApply
+    ? `<div style="margin-top:6px;text-align:right"><button class="btn btn-ghost btn-sm" onclick="applyProjectCreditToInvoice()" style="font-size:11px;color:#1a6e3a" title="Draw down project credit (oldest first) and add a credit line to this invoice">+ Apply project credit (${fmt(available)} available)</button></div>`
+    : '';
+  if (!credits.length) { host.innerHTML = applyBtn; return; }
   // Slot the credit row into the same totals grid as Subtotal/Freight/etc.
   // Each row carries its own X button so a single click reverses one credit.
   host.innerHTML = `
@@ -31105,7 +31157,44 @@ function _renderInvCreditRow() {
         <span style="text-align:right;color:#1a6e3a;font-weight:700">${fmt((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</span>
         <button onclick="removeInvCreditLineById('${c.id}')" title="Remove this credit (returns to project's available pool)" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:0 2px">✕</button>
       `).join('')}
-    </div>`;
+    </div>${applyBtn}`;
+}
+
+// Generic project-credit application from the invoice builder. Draws FIFO
+// from the project's credit pool and adds a negative NON-TAXABLE line —
+// credit is post-tax dollars, so it must never shrink the tax base (see
+// [discount vs credit]: discount = pre-tax, credit = post-tax). Requires a
+// saved draft so an abandoned builder can't strand drawn-down credit.
+function applyProjectCreditToInvoice() {
+  const inv = _currentInvoiceId ? (S.invoices || []).find(i => i.id === _currentInvoiceId) : null;
+  if (!inv) { toast('Save the invoice as a draft first.'); return; }
+  if (inv.status !== 'draft') { toast('Credit can only be applied to draft invoices.'); return; }
+  const pid = inv.projectId;
+  const available = getProjectAvailableCredit(pid);
+  if (available <= 0.005) { toast('No project credit available.'); return; }
+  const currentTotal = parse$($c('inv-grand-total')?.textContent || '');
+  const suggested = Math.max(0, Math.min(available, currentTotal));
+  const raw = prompt(`Apply how much project credit? ${fmt(available)} available.`, suggested.toFixed(2));
+  if (raw === null) return;
+  const amt = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+  if (!(amt > 0)) { toast('Enter a positive amount.'); return; }
+  if (amt > available + 0.005) { toast(`Only ${fmt(available)} credit is available.`); return; }
+  const lineId = uid();
+  const draw = _drawProjectCredits(pid, amt, lineId);
+  if (draw.applied <= 0.005) { toast('Nothing applied.'); return; }
+  const noteParts = draw.slices.map(s => s.sourceInvoiceNumber ? `credit from ${s.sourceInvoiceNumber}` : 'project credit');
+  _invLineItems.push({
+    id: lineId,
+    name: 'Project credit applied',
+    description: noteParts.join('; '),
+    qty: 1,
+    price: -draw.applied,
+    taxable: false,
+    _reconType: 'credit',
+  });
+  save();
+  recalcInvoice();
+  toast(`Applied ${fmt(draw.applied)} project credit.`);
 }
 
 function toggleInvLineDesc(idx) {
@@ -35894,7 +35983,11 @@ function renderDashboard() {
     if (!taxByState[key]) taxByState[key] = { state, rate, taxInvoiced:0, taxCollected:0, nonTaxedSubtotal:0 };
     const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
     const total = inv.total || 0;
-    const paidFrac = total > 0 ? Math.min(1, paid / total) : 0;
+    // total <= 0 means the invoice was fully covered by credit lines —
+    // there is nothing left to collect, so its tax counts as collected
+    // (the credit was real money already received). Treating it as 0
+    // would silently drop that tax from the filing numbers.
+    const paidFrac = total > 0 ? Math.min(1, paid / total) : 1;
     taxByState[key].taxInvoiced += (inv.tax||0);
     taxByState[key].taxCollected += (inv.tax||0) * paidFrac;
     // Non-taxed subtotal: sum of non-taxable line items + non-taxable freight
