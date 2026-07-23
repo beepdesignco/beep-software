@@ -8003,13 +8003,6 @@ async function loadFromSupabase() {
     (_allocsByExpense[a.expenseId] = _allocsByExpense[a.expenseId] || []).push(a);
   });
   S.expenses.forEach(e => { e.allocations = _allocsByExpense[e.id] || []; });
-  // Same fold for freight_actual_allocations.
-  const _faAllocsByActual = {};
-  (freightActualAllocationsRes.data || []).forEach(r => {
-    const a = dbFreightActualAllocationToS(r);
-    (_faAllocsByActual[a.freightActualId] = _faAllocsByActual[a.freightActualId] || []).push(a);
-  });
-  (S.freightActuals || []).forEach(fa => { fa.allocations = _faAllocsByActual[fa.id] || []; });
   // §1 freight overhaul: fold invoice_freight_allocations onto each invoice
   // as inv.freightAllocations[]. Per-item collected freight is computed
   // from these rows (see getItemFreightCollected).
@@ -8050,6 +8043,17 @@ async function loadFromSupabase() {
                         .sort((a,b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
   S.freightCharges    = (freightChargesRes.data    || []).map(dbFreightChargeToS);
   S.freightActuals    = (freightActualsRes.data    || []).map(dbFreightActualToS);
+  // Fold freight_actual_allocations onto each actual as `fa.allocations[]`.
+  // MUST run after the S.freightActuals assignment above — this fold used to
+  // sit before it and ran against the about-to-be-replaced array, so every
+  // fresh session loaded split freight actuals with no allocations and they
+  // vanished from all per-item + budget math (found 2026-07-23).
+  const _faAllocsByActual = {};
+  (freightActualAllocationsRes.data || []).forEach(r => {
+    const a = dbFreightActualAllocationToS(r);
+    (_faAllocsByActual[a.freightActualId] = _faAllocsByActual[a.freightActualId] || []).push(a);
+  });
+  S.freightActuals.forEach(fa => { fa.allocations = _faAllocsByActual[fa.id] || []; });
   S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
   S.payrollRuns = (payrollRunsRes.data || []).map(dbPayrollRunToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
