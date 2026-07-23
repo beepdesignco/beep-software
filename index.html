@@ -4437,6 +4437,7 @@ async function afterSignIn() {
   subscribeTimeRealtime();
   subscribeStudioRealtime();
   subscribePMItemsRealtime();
+  subscribeFreightRealtime();
 
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
@@ -4528,6 +4529,15 @@ async function loadTeamCache() {
     .eq('studio_id', AUTH.studio.id);
   if (error) { console.error('[team cache]', error); return; }
   _teamCache = data || [];
+}
+
+// Canonical member list for the task UI (assignee dropdowns, @mentions, filters,
+// reports). _teamCache loads at startup for every user; _teamMembers only populates
+// when the owner opens Settings → Team — so never key task UI off _teamMembers alone.
+function _taskMembers() {
+  if (Array.isArray(_teamCache) && _teamCache.length) return _teamCache;
+  if (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers) && _teamMembers.length) return _teamMembers;
+  return AUTH.member ? [AUTH.member] : [];
 }
 
 function getMentionableMembers(filter = '') {
@@ -4850,6 +4860,97 @@ function subscribePMItemsRealtime() {
     .subscribe();
 }
 
+// ── Freight actuals + split allocations live-sync ──
+// A freight actual entered by one user — including one whose net is SPLIT
+// across multiple proposal items via freight_actual_allocations — must appear
+// on another user's screen without a reload: it feeds Budget → Freight math
+// and the PM item reconciliation strip. Requires migration phase0_49
+// (realtime publication on both tables). Same contract as the PM handlers:
+// patch S in place, keep _sbShadow aligned so the local writer neither
+// re-pushes nor clobbers, then re-render if the affected project is on screen.
+
+function _onFreightActualRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  if (!S.freightActuals) S.freightActuals = [];
+  const id = row.id;
+  const existing = S.freightActuals.find(x => x.id === id);
+
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (existing) {
+      // Drop the allocation shadows too, so the next local sync doesn't issue
+      // redundant soft-deletes for children the server already removed.
+      (existing.allocations || []).forEach(a => _sbShadow?.freightActualAllocations?.delete(a.id));
+      S.freightActuals = S.freightActuals.filter(x => x.id !== id);
+    }
+    _sbShadow?.freightActuals?.delete(id);
+    _pmRealtimeRerender(existing ? existing.projectId : null, null);
+    try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+    return;
+  }
+
+  const mapped = dbFreightActualToS(row);
+  let rec;
+  if (existing) {
+    // Bare row has no allocations join — never wipe the nested slices.
+    rec = Object.assign(existing, mapped);
+  } else {
+    rec = { ...mapped, allocations: [] };
+    S.freightActuals.push(rec);
+  }
+  if (typeof _sbShadow !== 'undefined' && _sbShadow?.freightActuals)
+    _sbShadow.freightActuals.set(id, clone(rec));
+  _pmRealtimeRerender(rec.projectId, null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _onFreightActualAllocationRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const parent = (S.freightActuals || []).find(x => x.id === row.freight_actual_id);
+  if (!parent) return;   // parent not loaded (its own event lands first in sync order)
+  if (!Array.isArray(parent.allocations)) parent.allocations = [];
+  const allocs = parent.allocations;
+  const aid = row.id;
+
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    const ai = allocs.findIndex(a => a.id === aid);
+    if (ai > -1) allocs.splice(ai, 1);
+    _sbShadow?.freightActualAllocations?.delete(aid);
+  } else {
+    const mapped = dbFreightActualAllocationToS(row);
+    const ai = allocs.findIndex(a => a.id === aid);
+    if (ai > -1) Object.assign(allocs[ai], mapped);
+    else allocs.push(mapped);
+    if (typeof _sbShadow !== 'undefined' && _sbShadow?.freightActualAllocations)
+      _sbShadow.freightActualAllocations.set(aid, { ...clone(mapped), _freightActualId: parent.id });
+  }
+  // The parent's shadow snapshot nests allocations — keep it aligned too, or
+  // the local writer's next diff would see a phantom change on the parent.
+  if (typeof _sbShadow !== 'undefined' && _sbShadow?.freightActuals)
+    _sbShadow.freightActuals.set(parent.id, clone(parent));
+  _pmRealtimeRerender(parent.projectId, null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+let _freightRealtimeChannel = null;
+
+function subscribeFreightRealtime() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  if (_freightRealtimeChannel) { sb.removeChannel(_freightRealtimeChannel); _freightRealtimeChannel = null; }
+  _freightRealtimeChannel = sb
+    .channel('freight-' + AUTH.studio.id)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'freight_actuals' },            _onFreightActualRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'freight_actual_allocations' }, _onFreightActualAllocationRealtime)
+    .subscribe();
+}
+
 function subscribeNotifications() {
   if (!AUTH.ready) return;
   if (NOTIFICATIONS.channel) { sb.removeChannel(NOTIFICATIONS.channel); NOTIFICATIONS.channel = null; }
@@ -5090,11 +5191,9 @@ function openTaskModal(taskId, opts) {
   $c('task-tags').value = (task?.tags || []).join(', ');
   $c('task-delete-btn').style.display = isEdit ? '' : 'none';
 
-  // Populate assignee dropdown from studio members. Falls back to AUTH.member
-  // if the cache hasn't loaded yet.
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers) && _teamMembers.length)
-    ? _teamMembers
-    : (AUTH.member ? [AUTH.member] : []);
+  // Populate assignee dropdown from studio members (falls back to self if the
+  // cache hasn't loaded yet).
+  const members = _taskMembers();
   const assigneeSel = $c('task-assignee');
   assigneeSel.innerHTML = '<option value="">— Unassigned —</option>' +
     members.map(m => `<option value="${escH(m.user_id)}" ${task?.assigneeUserId === m.user_id ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
@@ -5267,7 +5366,7 @@ function onTaskCommentInput() {
   // Stop suggesting if there's a space or newline since the @.
   if (/[\s\n]/.test(queryRaw)) { popover.style.display = 'none'; return; }
   const q = queryRaw.toLowerCase();
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const members = _taskMembers();
   const matches = members.filter(m => {
     const name = (m.display_name || m.email || '').toLowerCase();
     return name.includes(q);
@@ -5305,7 +5404,7 @@ function postTaskComment() {
   const task = (S.tasks || []).find(t => t.id === taskId);
   if (!task) return;
   // Detect mentions: scan for "@DisplayName" matching team members.
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const members = _taskMembers();
   const mentions = [];
   members.forEach(m => {
     const name = m.display_name || m.email || '';
@@ -5462,8 +5561,10 @@ function saveTaskFromModal() {
         _recordTaskActivity(id, 'title_changed', { from: prev.title, to: payload.title });
       if (prev.status !== payload.status)
         _recordTaskActivity(id, 'status_changed', { from: prev.status, to: payload.status });
-      if ((prev.assigneeUserId || null) !== (payload.assigneeUserId || null))
+      if ((prev.assigneeUserId || null) !== (payload.assigneeUserId || null)) {
         _recordTaskActivity(id, 'assigned', { from: prev.assigneeUserId, to: payload.assigneeUserId });
+        _notifyTaskAssigned(id, payload.assigneeUserId, title);
+      }
       if ((prev.priority || '') !== (payload.priority || ''))
         _recordTaskActivity(id, 'priority_changed', { from: prev.priority, to: payload.priority });
       if ((prev.dueDate || '') !== (payload.dueDate || ''))
@@ -5495,7 +5596,10 @@ function saveTaskFromModal() {
       createdByUserId: AUTH.user?.id || null,
     });
     _recordTaskActivity(newId, 'created', { title });
-    if (payload.assigneeUserId) _recordTaskActivity(newId, 'assigned', { from: null, to: payload.assigneeUserId });
+    if (payload.assigneeUserId) {
+      _recordTaskActivity(newId, 'assigned', { from: null, to: payload.assigneeUserId });
+      _notifyTaskAssigned(newId, payload.assigneeUserId, title);
+    }
   }
   save();
   closeModal('modal-task');
@@ -5577,6 +5681,17 @@ function _taskItemName(itemId) {
 }
 
 // §13 Session 7: append-only activity log + render helpers + notification surface.
+// Notify a member that a task was assigned to them (skips self-assignment).
+// Rides the existing notifications pipeline (realtime bell + work queue).
+function _notifyTaskAssigned(taskId, assigneeUserId, title) {
+  if (!assigneeUserId || assigneeUserId === AUTH.user?.id) return;
+  createNotifications([assigneeUserId], {
+    linkEntityType: 'task',
+    linkEntityId: taskId,
+    message: `assigned you a task: ${title || '(untitled)'}`,
+  });
+}
+
 function _recordTaskActivity(taskId, kind, payload) {
   if (!taskId || !kind) return;
   if (!Array.isArray(S.taskActivity)) S.taskActivity = [];
@@ -5663,7 +5778,7 @@ function _myTaskAlerts() {
 // Friendly label for an assignee user id. Falls back to email then to —.
 function _taskAssigneeLabel(uid) {
   if (!uid) return '';
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const members = _taskMembers();
   const m = members.find(x => x.user_id === uid);
   return m?.display_name || m?.email || '—';
 }
@@ -5700,7 +5815,7 @@ function onTaskBoardColDrop(e, statusV) {
 function renderTasksTab() {
   const host = $c('work-tasks-body');
   if (!host) return;
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
+  const members = _taskMembers();
 
   // Filter bar (shared across views).
   const assigneeOpts = '<option value="">All assignees</option>' +
@@ -5750,8 +5865,8 @@ function _renderTasksReport() {
   const tasks = S.tasks || [];
   const open = tasks.filter(t => t.status !== 'done');
   const today = todayYMDInStudioTZ();
-  const members = (typeof _teamMembers !== 'undefined' && Array.isArray(_teamMembers)) ? _teamMembers : [];
-  const nameOf = (uid) => uid ? (members.find(m => m.user_id === uid)?.display_name || 'Unknown') : 'Unassigned';
+  const members = _taskMembers();
+  const nameOf = (uid) => uid ? (members.find(m => m.user_id === uid)?.display_name || m?.email || 'Unknown') : 'Unassigned';
   const daysLate = (ymd) => Math.floor((new Date(today + 'T00:00:00') - new Date(ymd + 'T00:00:00')) / 86400000);
 
   const byPerson = new Map();
@@ -7512,6 +7627,11 @@ async function openNotification(id) {
     document.getElementById('notif-panel').style.display = 'none';
   } else if (n.link_entity_type === 'project' && n.link_entity_id) {
     openProjectDetail(n.link_entity_id);
+    document.getElementById('notif-panel').style.display = 'none';
+  } else if (n.link_entity_type === 'task' && n.link_entity_id) {
+    showView('work');
+    setWorkTab('tasks');
+    setTimeout(() => { if (typeof openTaskModal === 'function') openTaskModal(n.link_entity_id); }, 80);
     document.getElementById('notif-panel').style.display = 'none';
   }
   renderNotificationPanel();
@@ -9374,20 +9494,48 @@ function componentToDB(c) {
   };
 }
 
+const _syncDropWarned = new Set();
+
 async function _syncTable(table, current, shadow, toRow, opts = {}) {
   const { softDelete = true } = opts;
   const toUpsert = [];
+  const toUpsertIds = [];
+  // Snapshot every item AT DIFF TIME. `current` holds LIVE references — if a
+  // concurrent handler mutates an item while we await the upsert below (e.g.
+  // file #2 of a multi-upload pushing into a jsonb files array), cloning the
+  // live object into the shadow afterwards would record that mutation as
+  // "already persisted" and it would never sync (permanent data loss). The
+  // shadow must reflect what we actually diffed/sent, not what the object
+  // looks like after the await.
+  const snaps = new Map();
   for (const [id, item] of current) {
+    const snap = JSON.parse(JSON.stringify(item));
+    snaps.set(id, snap);
     const prev = shadow.get(id);
-    if (!prev || !_deepEq(item, prev)) toUpsert.push(toRow(item));
+    if (!prev || !_deepEq(snap, prev)) { toUpsert.push(toRow(item)); toUpsertIds.push(id); }
   }
   const toRemove = [];
   for (const id of shadow.keys()) {
     if (!current.has(id)) toRemove.push(id);
   }
   if (toUpsert.length) {
-    const { error } = await sb.from(table).upsert(toUpsert);
+    // .select('id') so we can verify rows actually landed. An RLS policy that
+    // silently filters (0 rows affected, no error) must NOT advance the
+    // shadow, or the row is marked reconciled and the write is lost forever
+    // (the studios_update lesson). Dropped ids stay out of the shadow so the
+    // next sync retries them — and we warn loudly once per table.
+    const { data, error } = await sb.from(table).upsert(toUpsert).select('id');
     if (error) throw new Error(`${table} upsert: ${error.message}`);
+    const returned = new Set((data || []).map(r => r.id));
+    const dropped = toUpsertIds.filter(id => !returned.has(String(id)) && !returned.has(id));
+    if (dropped.length) {
+      dropped.forEach(id => snaps.delete(id));
+      console.error(`[sync] ${table}: ${dropped.length} row(s) silently not written (RLS?)`, dropped);
+      if (!_syncDropWarned.has(table)) {
+        _syncDropWarned.add(table);
+        toast(`Some ${table.replace(/_/g, ' ')} changes could not be saved to the server. They will retry — if this persists, contact support.`);
+      }
+    }
   }
   if (toRemove.length) {
     if (softDelete) {
@@ -9398,10 +9546,10 @@ async function _syncTable(table, current, shadow, toRow, opts = {}) {
       if (error) throw new Error(`${table} delete: ${error.message}`);
     }
   }
-  // Update shadow in place
+  // Update shadow in place — from the diff-time snapshots, never live objects.
   shadow.clear();
-  for (const [id, item] of current) {
-    shadow.set(id, JSON.parse(JSON.stringify(item)));
+  for (const [id, snap] of snaps) {
+    shadow.set(id, snap);
   }
   return toUpsert.length + toRemove.length;
 }
@@ -12822,7 +12970,10 @@ function removeTaskLink(pid, taskId, idx) {
   renderProjectDetail();
 }
 
-async function handleTaskFileUpload(pid, taskId, inputEl) {
+// Legacy per-proposal projectTasks files (project detail tab) — NOT the §13
+// task-modal attachments. Renamed from handleTaskFileUpload: the duplicate
+// global name shadowed the modal's 1-arg handler and broke modal attachments.
+async function handleLegacyProjectTaskFileUpload(pid, taskId, inputEl) {
   const files = inputEl.files;
   if (!files || !files.length) return;
   const prop = S.proposals[pid];
@@ -12971,7 +13122,7 @@ function renderTaskDetailPanel(pid, taskId) {
           <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${filesHtml || '<span style="font-size:11px;color:var(--text-light);font-style:italic">No files.</span>'}</div>
           <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);padding:4px 0">
             <span>+ Upload</span>
-            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg" multiple style="display:none" onchange="handleTaskFileUpload('${pid}','${taskId}',this)">
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg" multiple style="display:none" onchange="handleLegacyProjectTaskFileUpload('${pid}','${taskId}',this)">
           </label>
         </div>
       </div>
