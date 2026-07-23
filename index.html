@@ -975,6 +975,8 @@ tr:hover .row-btns { opacity:1; }
   grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));
   gap:12px;
 }
+.contact-card details summary::-webkit-details-marker { display:none; }
+.contact-card details[open] .brands-caret { transform:rotate(90deg); }
 .contact-card {
   background:var(--white);
   border-radius:var(--r);
@@ -1435,15 +1437,15 @@ tr:hover .row-btns { opacity:1; }
           <button class="btn btn-primary" onclick="openNewVendorFromContacts()">+ New</button>
         </div>
       </div>
-      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <input type="text" class="search-in" id="contact-search" placeholder="Search companies or people…" oninput="renderContacts()" style="flex:1;min-width:240px">
+      <div class="contacts-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input type="text" class="search-in" id="contact-search" placeholder="Search companies or people…" oninput="renderContacts()" style="flex:1;min-width:200px">
+        <div id="contacts-type-filters" style="display:flex;align-items:center;gap:6px"></div>
+        <div id="contacts-brand-filters" style="display:flex;align-items:center;gap:6px"></div>
         <div class="view-tabs">
           <button class="view-tab active" data-csort="company" onclick="setContactsSort('company')">By Company</button>
           <button class="view-tab"        data-csort="person"  onclick="setContactsSort('person')">By Person</button>
         </div>
       </div>
-      <div id="contacts-type-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 30px 4px"></div>
-      <div id="contacts-brand-filters" style="display:flex;flex-wrap:wrap;gap:6px;padding:2px 30px 8px"></div>
       <div class="contacts-body" id="contacts-body"><!-- rendered by JS --></div>
     </div>
  
@@ -22651,44 +22653,34 @@ function renderContacts() {
   body.innerHTML = `<div class="contacts-grid">${vendorCards}</div>${legacyCards}`;
 }
 
-// Shared bits for the two contact filter dropdowns.
-const _contactsFilterLabel = (text) =>
-  `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">${text}</span>`;
+// Compact selects that sit inline in the contacts toolbar. The default
+// option labels them ("All brands" / "All types"), so no separate label.
 const _contactsFilterSelStyle =
-  'font-size:11px;font-family:var(--font-b);font-weight:700;padding:5px 28px 5px 10px;border-radius:12px;max-width:240px';
+  'font-size:11px;font-family:var(--font-b);font-weight:700;padding:5px 28px 5px 10px;border-radius:12px;max-width:200px';
 
 function renderContactsBrandFilters() {
   const host = $c('contacts-brand-filters');
   if (!host) return;
   const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const addBtn = `<button onclick="openBrandEditor(null)" style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;border:1px dashed var(--border);background:var(--white);color:var(--text-light);font-weight:700">+ Add brand</button>`;
-  if (!brands.length) {
-    host.innerHTML = _contactsFilterLabel('Filter by brand:') + addBtn;
-    return;
-  }
+  if (!brands.length) { host.innerHTML = ''; return; }
   const active = _contactsBrandFilter !== null;
-  host.innerHTML = _contactsFilterLabel('Filter by brand:')
-    + `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsBrandFilter(this.value)">
-        <option value="">All brands</option>
-        ${brands.map(b => `<option value="${b.id}" ${_contactsBrandFilter === b.id ? 'selected' : ''}>${escH(b.name)}</option>`).join('')}
-      </select>`
-    + addBtn;
+  host.innerHTML =
+    `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsBrandFilter(this.value)">
+      <option value="">All brands</option>
+      ${brands.map(b => `<option value="${b.id}" ${_contactsBrandFilter === b.id ? 'selected' : ''}>${escH(b.name)}</option>`).join('')}
+    </select>`;
 }
 
 function renderContactsTypeFilters(typesInUse) {
   const host = $c('contacts-type-filters');
   if (!host) return;
-  if (!typesInUse.length) {
-    host.innerHTML = _contactsFilterLabel('Filter by type:')
-      + '<span style="font-size:10px;color:var(--text-light);font-style:italic;align-self:center">Add vendor types when creating vendors to populate filters here.</span>';
-    return;
-  }
+  if (!typesInUse.length) { host.innerHTML = ''; return; }
   const active = _contactsTypeFilter !== null;
-  host.innerHTML = _contactsFilterLabel('Filter by type:')
-    + `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsTypeFilter(this.value)">
-        <option value="">All types</option>
-        ${typesInUse.map(t => `<option value="${escH(t)}" ${_contactsTypeFilter === t ? 'selected' : ''}>${escH(t)}</option>`).join('')}
-      </select>`;
+  host.innerHTML =
+    `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsTypeFilter(this.value)">
+      <option value="">All types</option>
+      ${typesInUse.map(t => `<option value="${escH(t)}" ${_contactsTypeFilter === t ? 'selected' : ''}>${escH(t)}</option>`).join('')}
+    </select>`;
 }
 
 function vendorCardHtml(v, vendorContacts) {
@@ -22697,14 +22689,19 @@ function vendorCardHtml(v, vendorContacts) {
   const itemCount = countItemsForVendor(v.id);
   const brandIds = new Set(v.brandIds || []);
   reps.forEach(r => (r.brandIds || []).forEach(id => brandIds.add(id)));
-  const brandsHtml = brandIds.size
-    ? '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:6px">'
-      + [...brandIds].map(id => {
-          const b = (S.brands || []).find(x => x.id === id);
-          if (!b) return '';
-          return `<span style="display:inline-block;font-size:9px;font-family:var(--font-b);background:rgba(122,74,16,0.08);color:var(--russet);padding:2px 7px;border-radius:10px;font-weight:700">${escH(b.name)}</span>`;
-        }).join('')
-      + '</div>'
+  // Brands collapse behind a summary line so vendors carrying dozens of
+  // brands don't blow the card height out relative to their row.
+  const brandNames = [...brandIds]
+    .map(id => (S.brands || []).find(x => x.id === id)?.name)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  const brandsHtml = brandNames.length
+    ? `<details style="margin-top:6px" onclick="event.stopPropagation()">
+        <summary style="cursor:pointer;font-size:10px;font-family:var(--font-b);font-weight:700;color:var(--russet);list-style:none;user-select:none"><span class="brands-caret" style="display:inline-block;transition:var(--t)">▸</span> ${brandNames.length} brand${brandNames.length !== 1 ? 's' : ''}</summary>
+        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:5px">
+          ${brandNames.map(n => `<span style="display:inline-block;font-size:9px;font-family:var(--font-b);background:rgba(122,74,16,0.08);color:var(--russet);padding:2px 7px;border-radius:10px;font-weight:700">${escH(n)}</span>`).join('')}
+        </div>
+      </details>`
     : '';
   const repsHtml = reps.slice(0, 4).map(vc => `
     <div class="poc-row" onclick="event.stopPropagation(); openVendorContactEditor('${v.id}','${vc.id}')">
