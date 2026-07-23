@@ -22551,13 +22551,15 @@ function setContactsSort(sort) {
   renderContacts();
 }
 
+// Dropdown-driven (2026-07-23): '' / null = all. The old chip-per-value UI
+// didn't scale — hundreds of brands turned the filter bar into a wall.
 function setContactsTypeFilter(type) {
-  _contactsTypeFilter = (_contactsTypeFilter === type) ? null : type;
+  _contactsTypeFilter = type || null;
   renderContacts();
 }
 
 function setContactsBrandFilter(brandId) {
-  _contactsBrandFilter = (_contactsBrandFilter === brandId) ? null : brandId;
+  _contactsBrandFilter = brandId || null;
   renderContacts();
 }
 
@@ -22649,42 +22651,44 @@ function renderContacts() {
   body.innerHTML = `<div class="contacts-grid">${vendorCards}</div>${legacyCards}`;
 }
 
+// Shared bits for the two contact filter dropdowns.
+const _contactsFilterLabel = (text) =>
+  `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">${text}</span>`;
+const _contactsFilterSelStyle =
+  'font-size:11px;font-family:var(--font-b);font-weight:700;padding:5px 28px 5px 10px;border-radius:12px;max-width:240px';
+
 function renderContactsBrandFilters() {
   const host = $c('contacts-brand-filters');
   if (!host) return;
   const brands = (S.brands || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const label = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">Filter by brand:</span>`;
-  const chip = (text, val, active) => `
-    <button onclick="setContactsBrandFilter(${val === null ? 'null' : `'${val}'`})"
-      style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? 'var(--russet)' : 'var(--border)'};background:${active ? 'rgba(122,74,16,0.12)' : 'white'};color:${active ? 'var(--russet)' : 'var(--text-mid)'};font-weight:700">${escH(text)}</button>`;
+  const addBtn = `<button onclick="openBrandEditor(null)" style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;border:1px dashed var(--border);background:var(--white);color:var(--text-light);font-weight:700">+ Add brand</button>`;
   if (!brands.length) {
-    host.innerHTML = label
-      + chip('All', null, true)
-      + `<button onclick="openBrandEditor(null)" style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;border:1px dashed var(--border);background:var(--white);color:var(--text-light);font-weight:700">+ Add brand</button>`;
+    host.innerHTML = _contactsFilterLabel('Filter by brand:') + addBtn;
     return;
   }
-  host.innerHTML = label
-    + chip('All', null, _contactsBrandFilter === null)
-    + brands.map(b => chip(b.name, b.id, _contactsBrandFilter === b.id)).join('')
-    + `<button onclick="openBrandEditor(null)" style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;border:1px dashed var(--border);background:var(--white);color:var(--text-light);font-weight:700">+ Add brand</button>`;
+  const active = _contactsBrandFilter !== null;
+  host.innerHTML = _contactsFilterLabel('Filter by brand:')
+    + `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsBrandFilter(this.value)">
+        <option value="">All brands</option>
+        ${brands.map(b => `<option value="${b.id}" ${_contactsBrandFilter === b.id ? 'selected' : ''}>${escH(b.name)}</option>`).join('')}
+      </select>`
+    + addBtn;
 }
 
 function renderContactsTypeFilters(typesInUse) {
   const host = $c('contacts-type-filters');
   if (!host) return;
-  const chip = (label, val, active) => `
-    <button onclick="setContactsTypeFilter(${val === null ? 'null' : `'${escH(val).replace(/'/g, "\\'")}'`})"
-      style="font-size:10px;font-family:var(--font-b);padding:4px 12px;border-radius:12px;cursor:pointer;transition:var(--t);border:1px solid ${active ? 'var(--russet)' : 'var(--border)'};background:${active ? 'rgba(122,74,16,0.12)' : 'white'};color:${active ? 'var(--russet)' : 'var(--text-mid)'};font-weight:700">${escH(label)}</button>`;
-  const label = `<span style="font-size:10px;font-family:var(--font-b);color:var(--text-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:700;align-self:center;margin-right:2px">Filter by type:</span>`;
   if (!typesInUse.length) {
-    host.innerHTML = label
-      + chip('All', null, true)
+    host.innerHTML = _contactsFilterLabel('Filter by type:')
       + '<span style="font-size:10px;color:var(--text-light);font-style:italic;align-self:center">Add vendor types when creating vendors to populate filters here.</span>';
     return;
   }
-  host.innerHTML = label
-    + chip('All', null, _contactsTypeFilter === null)
-    + typesInUse.map(t => chip(t, t, _contactsTypeFilter === t)).join('');
+  const active = _contactsTypeFilter !== null;
+  host.innerHTML = _contactsFilterLabel('Filter by type:')
+    + `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsTypeFilter(this.value)">
+        <option value="">All types</option>
+        ${typesInUse.map(t => `<option value="${escH(t)}" ${_contactsTypeFilter === t ? 'selected' : ''}>${escH(t)}</option>`).join('')}
+      </select>`;
 }
 
 function vendorCardHtml(v, vendorContacts) {
