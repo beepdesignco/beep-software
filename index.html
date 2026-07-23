@@ -15755,7 +15755,10 @@ function getInvoiceFreightFinancials(inv, pid) {
       const amt = Number(a.amount) || 0;
       const markupPct = _faActualMarkupPct(a, pid);
       const marked = amt * (1 + markupPct / 100);
-      if (a.freightCategoryId === primaryCatId) {
+      // Uncategorized ("— Any —") actuals count as primary freight, NOT as
+      // an associated charge — the blank category means "plain freight,
+      // reconcile against the item's total", never tariff/crating.
+      if (!a.freightCategoryId || a.freightCategoryId === primaryCatId) {
         itemPrimaryRaw += amt;
         itemPrimaryMarked += marked;
         primaryRowCount++;
@@ -16313,7 +16316,8 @@ function _bfLinesMissingActuals(inv, kind) {
   const primaryCatId = getPrimaryFreightCategoryId();
   const matchesKind = (a) => {
     const c = a.freightCategoryId;
-    return kind === 'freight' ? c === primaryCatId : (c && c !== primaryCatId);
+    // Uncategorized counts as primary freight (matches the modal + rollup).
+    return kind === 'freight' ? (!c || c === primaryCatId) : (c && c !== primaryCatId);
   };
   const hasMatching = (line) => {
     return (S.freightActuals || []).some(a => {
@@ -16402,7 +16406,8 @@ function _lineFreightActualSums(line, pid, primaryCatId) {
   let sumRaw = 0;
   let count = 0;
   (S.freightActuals || []).forEach(a => {
-    if (a.freightCategoryId !== primaryCatId) return;
+    // Uncategorized counts as primary freight (matches getInvoiceFreightFinancials).
+    if (a.freightCategoryId && a.freightCategoryId !== primaryCatId) return;
     let matchAmt = 0;
     let matched = false;
     if (line.proposalComponentId) {
@@ -16458,6 +16463,38 @@ function openBudgetFreightItemsModal(invoiceId) {
     return it && !isFreightItem(it);
   });
 
+  // Component sub-rows for an item-level line: actuals tagged to a specific
+  // component of this item (a.proposalComponentId set) are excluded from the
+  // parent line's sum by _lineFreightActualSums, so without these sub-rows a
+  // constructed order's component-level freight silently disappears from this
+  // modal whenever the invoice bills the item as a single line.
+  const componentRowsFor = (l) => {
+    if (l.proposalComponentId) return [];
+    const it = _findItemById(l.proposalItemId);
+    if (!it || !(it.components || []).length) return [];
+    const byComp = new Map();
+    (S.freightActuals || []).forEach(a => {
+      if (a.freightCategoryId && a.freightCategoryId !== primaryCatId) return;
+      if (a.proposalItemId !== l.proposalItemId || !a.proposalComponentId) return;
+      const cur = byComp.get(a.proposalComponentId) || { raw: 0, count: 0 };
+      cur.raw += Number(a.amount) || 0;
+      cur.count++;
+      byComp.set(a.proposalComponentId, cur);
+    });
+    return Array.from(byComp.entries()).map(([cid, v]) => {
+      const comp = (it.components || []).find(c => c.id === cid);
+      const compAllocs = (inv.freightAllocations || []).filter(x =>
+        x.proposalItemId === l.proposalItemId && x.proposalComponentId === cid);
+      return {
+        compName: comp?.name || '(component)',
+        collected: compAllocs.reduce((s, x) => s + (Number(x.amount) || 0), 0),
+        hasAlloc: compAllocs.length > 0,
+        actualRaw: v.raw,
+        actualCount: v.count,
+      };
+    }).sort((a, b) => b.actualRaw - a.actualRaw);
+  };
+
   const rows = lines.map(l => {
     // Collected: match an auto/manual allocation row by (itemId, componentId).
     // Allocations from before phase0_40 won't have componentId; for those, a
@@ -16482,14 +16519,15 @@ function openBudgetFreightItemsModal(invoiceId) {
       collected,
       actualRaw: actuals.sumRaw,
       actualCount: actuals.count,
+      compRows: componentRowsFor(l),
     };
   });
 
   rows.sort((a, b) => b.collected - a.collected);
 
   const totals = rows.reduce((s, r) => ({
-    collected: s.collected + r.collected,
-    actualRaw: s.actualRaw + r.actualRaw,
+    collected: s.collected + r.collected + r.compRows.reduce((cs, c) => cs + c.collected, 0),
+    actualRaw: s.actualRaw + r.actualRaw + r.compRows.reduce((cs, c) => cs + c.actualRaw, 0),
   }), { collected: 0, actualRaw: 0 });
   totals.delta = totals.collected - totals.actualRaw;
 
@@ -16500,12 +16538,26 @@ function openBudgetFreightItemsModal(invoiceId) {
     const deltaCell = hasActual
       ? `<span style="color:${_bfRowColor(delta)}">${_bfFmt(delta)}</span>`
       : '<span style="color:var(--text-light)">—</span>';
-    return `<tr style="border-top:1px solid var(--border)">
+    let html = `<tr style="border-top:1px solid var(--border)">
       <td style="padding:6px 8px;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">${r.label}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${fmt(r.collected)}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px;color:var(--text-dark)">${actualCell}</td>
       <td style="padding:6px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:12px">${deltaCell}</td>
     </tr>`;
+    r.compRows.forEach(c => {
+      const cDelta = c.collected - c.actualRaw;
+      const cCollectedCell = c.hasAlloc ? fmt(c.collected) : '<span style="color:var(--text-light)">—</span>';
+      const cDeltaCell = c.hasAlloc
+        ? `<span style="color:${_bfRowColor(cDelta)}">${_bfFmt(cDelta)}</span>`
+        : '<span style="color:var(--text-light)">—</span>';
+      html += `<tr style="border-top:1px dashed rgba(var(--text-rgb),0.10)">
+        <td style="padding:4px 8px 4px 20px;font-family:var(--font-b);font-size:11px;color:var(--text-mid)"><span style="color:var(--text-light)">↳</span> ${escH(c.compName)}</td>
+        <td style="padding:4px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:11px;color:var(--text-mid)">${cCollectedCell}</td>
+        <td style="padding:4px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:11px;color:var(--text-mid)">${fmt(c.actualRaw)}</td>
+        <td style="padding:4px 8px;text-align:right;font-family:var(--font-h);font-weight:700;font-size:11px">${cDeltaCell}</td>
+      </tr>`;
+    });
+    return html;
   }).join('');
   const host = $c('modal-budget-freight-items-body');
   $c('modal-budget-freight-items-title').textContent = `Freight Actuals — ${inv.number || '(no number)'}`;
@@ -16563,7 +16615,8 @@ function openBudgetAssociatedItemsModal(invoiceId) {
     const mostRecent = _itemMostRecentInvoice(itemId);
     if (!mostRecent || mostRecent.id !== inv.id) return;
     _faActualsForItem(itemId).forEach(a => {
-      if (a.freightCategoryId === primaryCatId) return; // skip primary freight
+      // Skip primary freight AND uncategorized (both count as freight, not adjacent).
+      if (!a.freightCategoryId || a.freightCategoryId === primaryCatId) return;
       const catId = a.freightCategoryId || '__nocat__';
       const amt = Number(a.amount) || 0;
       if (amt <= 0) return;
