@@ -1381,6 +1381,7 @@ tr:hover .row-btns { opacity:1; }
         <button class="view-tab" data-pdtab="proposal" onclick="setProjDetailTab('proposal')" style="margin-bottom:-1px">Proposal</button>
         <button class="view-tab" data-pdtab="management" onclick="setProjDetailTab('management')" style="margin-bottom:-1px">Project Mgmt</button>
         <button class="view-tab" data-pdtab="addressbook" onclick="setProjDetailTab('addressbook')" style="margin-bottom:-1px">Address Book</button>
+        <button class="view-tab" data-pdtab="meetings" onclick="setProjDetailTab('meetings')" style="margin-bottom:-1px">Meetings</button>
         <button class="view-tab" data-pdtab="documents" onclick="setProjDetailTab('documents')" style="margin-bottom:-1px">Documents</button>
         <button class="view-tab" data-pdtab="expenses" onclick="setProjDetailTab('expenses')" style="margin-bottom:-1px">Expenses</button>
         <button class="view-tab" data-pdtab="budget" onclick="setProjDetailTab('budget')" style="margin-bottom:-1px">Budget</button>
@@ -2359,8 +2360,13 @@ tr:hover .row-btns { opacity:1; }
       </label>
       <div style="display:flex;align-items:center;gap:6px">
         <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">Custom markup:</span>
-        <input type="number" class="fi" id="ai-adj-markup" style="width:70px;padding:5px 8px;font-size:12px" placeholder="—" min="0" step="1">
+        <input type="number" class="fi" id="ai-adj-markup" style="width:70px;padding:5px 8px;font-size:12px" placeholder="—" min="0" step="1" oninput="if(this.value!==''){document.getElementById('ai-client-price').value=''}">
         <span style="font-family:var(--font-b);font-size:12px;color:var(--text-light)">%</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px" title="Skip markup math — set exactly what the client pays. Per unit for ready-made/open-line items; the full total for constructed items. Clears the custom markup.">
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)">or Client price:</span>
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-light)">$</span>
+        <input type="text" class="fi" id="ai-client-price" style="width:90px;padding:5px 8px;font-size:12px" placeholder="—" oninput="if(this.value!==''){document.getElementById('ai-adj-markup').value=''}">
       </div>
     </div>
 
@@ -3285,6 +3291,40 @@ tr:hover .row-btns { opacity:1; }
 <!-- U-Freight Phase 4 Part 1. Vendor freight bill logged against a
      specific item (or component). Optional toggle creates a linked
      nonbillable expense so the cost lands in P&L. -->
+<div class="overlay" id="modal-meeting">
+  <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-meeting')">✕</button>
+    <div class="modal-title" id="meeting-modal-title">Log Meeting</div>
+    <input type="hidden" id="meeting-id">
+    <input type="hidden" id="meeting-project-id">
+    <div class="frow">
+      <div class="fg" style="flex:1">
+        <label class="fl">Date &amp; Time</label>
+        <input type="datetime-local" class="fi" id="meeting-at">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Title <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+        <input type="text" class="fi" id="meeting-title" placeholder="Design review, site visit…">
+      </div>
+    </div>
+    <div class="fg">
+      <label class="fl">Attendees <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+      <input type="text" class="fi" id="meeting-attendees" placeholder="Baylor, Olivia, client…">
+    </div>
+    <div class="fg">
+      <label class="fl">Notes</label>
+      <textarea class="fi" id="meeting-notes" style="min-height:180px;resize:vertical" placeholder="Meeting notes…"></textarea>
+    </div>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px">
+      <button class="btn btn-ghost" id="meeting-delete-btn" onclick="deleteMeetingFromModal()" style="color:#b94a3a">Delete</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" onclick="closeModal('modal-meeting')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveMeetingFromModal()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="modal-freight-actual">
   <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
     <button class="modal-x" onclick="closeModal('modal-freight-actual')">✕</button>
@@ -3313,7 +3353,7 @@ tr:hover .row-btns { opacity:1; }
 
     <div class="fg">
       <label class="fl">Category <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — blank reconciles against the item's total charged)</span></label>
-      <select class="fi fsel" id="fa-category">
+      <select class="fi fsel" id="fa-category" onchange="onFACategoryChange()">
         <option value="">— Any —</option>
       </select>
     </div>
@@ -7941,6 +7981,7 @@ async function loadFromSupabase() {
     invoiceFreightAllocationsRes,
     tasksRes, taskActivityRes, taskFieldDefsRes, taskDependenciesRes,
     payrollRunsRes,
+    projectMeetingsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -7970,9 +8011,10 @@ async function loadFromSupabase() {
     sb.from('task_field_defs').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('task_dependencies').select('*, tasks!task_dependencies_task_id_fkey(studio_id)'),
     sb.from('payroll_runs').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('project_meetings').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -8058,6 +8100,7 @@ async function loadFromSupabase() {
   S.freightActuals.forEach(fa => { fa.allocations = _faAllocsByActual[fa.id] || []; });
   S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
   S.payrollRuns = (payrollRunsRes.data || []).map(dbPayrollRunToS);
+  S.projectMeetings = (projectMeetingsRes.data || []).map(dbProjectMeetingToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -8328,6 +8371,8 @@ function dbItemTypeToS(t) {
     color: t.color || '',
     sortOrder: t.sort_order || 0,
     systemKey: t.system_key || null,
+    // null = category has no markup opinion → project default applies.
+    defaultMarkupPct: t.default_markup_pct,
     created: t.created_at,
   };
 }
@@ -8342,6 +8387,7 @@ function dbFreightCategoryToS(c) {
     id: c.id,
     name: c.name || '',
     defaultMarkupPct: c.default_markup_pct,        // null preserved as null
+    flatRate: c.flat_rate,                         // null = no flat-rate preset
     isTaxable: !!c.is_taxable,
     sortOrder: c.sort_order || 0,
     isSystem: !!c.is_system,
@@ -8739,6 +8785,7 @@ function dbItemToS(it) {
     taxExempt: !!it.tax_exempt,
     billCostOnly: !!it.bill_cost_only,
     adjustMarkup: it.adjust_markup,
+    clientPriceOverride: it.client_price_override,
     groupComponents: !!it.group_components,
     additionalCharges: it.additional_charges || [],
     costActual: it.cost_actual != null ? String(it.cost_actual) : '',
@@ -8799,6 +8846,7 @@ function dbCompToS(c) {
     taxExempt: !!c.tax_exempt,
     billCostOnly: !!c.bill_cost_only,
     adjustMarkup: c.adjust_markup,
+    clientPriceOverride: c.client_price_override,
     costActual: c.cost_actual != null ? String(c.cost_actual) : '',
     additionalCosts: c.additional_costs || [],
     files: c.files || [],
@@ -8838,6 +8886,7 @@ const _sbShadow = {
   freightActuals: new Map(),
   freightSettlements: new Map(),
   payrollRuns: new Map(),
+  projectMeetings: new Map(),
   estimates: new Map(),
   expenseAllocations: new Map(),
   freightActualAllocations: new Map(),
@@ -8874,6 +8923,7 @@ function captureSbShadow() {
   _sbShadow.freightActuals    = new Map((S.freightActuals    || []).map(r => [r.id, snap(r)]));
   _sbShadow.freightSettlements = new Map((S.freightSettlements || []).map(r => [r.id, snap(r)]));
   _sbShadow.payrollRuns = new Map((S.payrollRuns || []).map(r => [r.id, snap(r)]));
+  _sbShadow.projectMeetings = new Map((S.projectMeetings || []).map(m => [m.id, snap(m)]));
   _sbShadow.expenseAllocations = new Map();
   (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
     _sbShadow.expenseAllocations.set(a.id, { ...snap(a), _expenseId: e.id })));
@@ -8984,6 +9034,7 @@ function itemTypeToDB(t, studioId) {
     color: t.color || null,
     sort_order: t.sortOrder || 0,
     system_key: t.systemKey || null,
+    default_markup_pct: t.defaultMarkupPct == null || t.defaultMarkupPct === '' ? null : Number(t.defaultMarkupPct),
     deleted_at: null,
   };
 }
@@ -8993,6 +9044,7 @@ function freightCategoryToDB(c, studioId) {
     name: c.name || '',
     // null sentinel ("use project default") is preserved; explicit 0 stays 0.
     default_markup_pct: c.defaultMarkupPct == null ? null : Number(c.defaultMarkupPct),
+    flat_rate: c.flatRate == null || c.flatRate === '' ? null : Number(c.flatRate),
     is_taxable: !!c.isTaxable,
     sort_order: c.sortOrder || 0,
     is_system: !!c.isSystem,
@@ -9049,6 +9101,33 @@ function freightSettlementToDB(r, studioId) {
 
 // Payroll runs — an immutable snapshot of a pay period's per-person gross,
 // marked paid. breakdown is a frozen [{userId,name,hours,payRate,gross}] array.
+function dbProjectMeetingToS(r) {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    meetingAt: r.meeting_at || null,
+    title: r.title || '',
+    notes: r.notes || '',
+    attendees: r.attendees || '',
+    createdBy: r.created_by || null,
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+
+function projectMeetingToDB(m, studioId) {
+  return {
+    id: m.id, studio_id: studioId,
+    project_id: m.projectId,
+    meeting_at: m.meetingAt || null,
+    title: m.title || null,
+    notes: m.notes || null,
+    attendees: m.attendees || null,
+    created_by: m.createdBy || null,
+    deleted_at: null,
+  };
+}
+
 function payrollRunToDB(r, studioId) {
   return {
     id: r.id, studio_id: studioId,
@@ -9458,7 +9537,9 @@ function itemToDB(it) {
     lead_time_start_manual: it.leadTimeStartManual || null,
     ordered_at:             it.orderedAt           || null,
     allowance: !!it.allowance, tax_exempt: !!it.taxExempt, bill_cost_only: !!it.billCostOnly,
-    adjust_markup: it.adjustMarkup ?? null, group_components: !!it.groupComponents,
+    adjust_markup: it.adjustMarkup ?? null,
+    client_price_override: it.clientPriceOverride == null || it.clientPriceOverride === '' ? null : _parseMoney(it.clientPriceOverride),
+    group_components: !!it.groupComponents,
     additional_charges: it.additionalCharges || [],
     cost_actual: _parseMoney(it.costActual),
     cost_actual_payment_method: it.costActualPaymentMethod || null,
@@ -9498,6 +9579,7 @@ function componentToDB(c) {
     description: c.description || null, note: c.note || null,
     allowance: !!c.allowance, tax_exempt: !!c.taxExempt, bill_cost_only: !!c.billCostOnly,
     adjust_markup: c.adjustMarkup ?? null,
+    client_price_override: c.clientPriceOverride == null || c.clientPriceOverride === '' ? null : _parseMoney(c.clientPriceOverride),
     cost_actual: _parseMoney(c.costActual),
     additional_costs: c.additionalCosts || [],
     files: c.files || [], links: c.links || [],
@@ -9758,6 +9840,7 @@ async function syncToSupabase() {
     // freight_settlements after invoices so invoice_id FK targets exist.
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     await syncSafe('payroll_runs', new Map((S.payrollRuns||[]).map(r => [r.id, r])), _sbShadow.payrollRuns, r => payrollRunToDB(r, studioId));
+    await syncSafe('project_meetings', new Map((S.projectMeetings||[]).map(m => [m.id, m])), _sbShadow.projectMeetings, m => projectMeetingToDB(m, studioId));
     // Three-phase to satisfy circular FKs:
     //   1. Parent (documents) without current_version_id — gives child a target
     //   2. Children (document_versions) — now their FK to parent resolves
@@ -10153,6 +10236,7 @@ let S = {
   freightActuals: [],
   freightSettlements: [],
   payrollRuns: [],
+  projectMeetings: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -10477,23 +10561,54 @@ function projectMarkup(pid) {
   return (proj && proj.markupPct != null) ? proj.markupPct : 25;
 }
 
+// Optional per-item-category default markup (item_types.default_markup_pct).
+// Returns null when the category has no opinion — resolution then falls
+// through to the project default, so a studio running one flat markup
+// (no category values set) sees ZERO behavior change.
+function itemTypeMarkup(itemTypeId) {
+  if (!itemTypeId) return null;
+  const t = (S.itemTypes || []).find(x => x.id === itemTypeId);
+  const v = t?.defaultMarkupPct;
+  return (v != null && v !== '') ? parseFloat(v) : null;
+}
+
+// Direct client-price override — "just tell me what the client pays"
+// instead of deriving it from a markup %. Wins over every markup tier.
+function _priceOverride(x) {
+  if (!x || x.clientPriceOverride == null || x.clientPriceOverride === '') return null;
+  const v = parse$(x.clientPriceOverride);
+  return v > 0 ? v : null;
+}
+
+// Markup precedence: explicit item override → item's category default →
+// project default → 25. (A clientPriceOverride bypasses markup entirely —
+// handled in the calc functions, not here.)
 function effectiveMarkup(item, pid) {
   if (item.billCostOnly) return 0;
   if (item.adjustMarkup != null && item.adjustMarkup !== '') return parseFloat(item.adjustMarkup);
+  const catMk = itemTypeMarkup(item.itemTypeId);
+  if (catMk != null) return catMk;
   return projectMarkup(pid);
 }
 
 function calcClientPrice(net, item, pid) {
+  const ov = _priceOverride(item);
+  if (ov != null) return ov;
   const n = parse$(net);
   if (n <= 0) return 0;
   return n * (1 + effectiveMarkup(item, pid) / 100);
 }
 
+// Component precedence: comp override → parent-item override → category
+// default (component's own type, else inherited from the parent item) →
+// project default → 25.
 function componentEffectiveMarkup(comp, parentItem, pid) {
   if (comp.billCostOnly) return 0;
   if (comp.adjustMarkup != null && comp.adjustMarkup !== '') return parseFloat(comp.adjustMarkup);
   if (parentItem.adjustMarkup != null && parentItem.adjustMarkup !== '') return parseFloat(parentItem.adjustMarkup);
   if (parentItem.billCostOnly) return 0;
+  const catMk = itemTypeMarkup(comp.itemTypeId || parentItem.itemTypeId);
+  if (catMk != null) return catMk;
   return projectMarkup(pid);
 }
 
@@ -10501,12 +10616,23 @@ function calcConstructedNet(item) {
   return (item.components || []).reduce((s, c) => s + parse$(c.netCost) * (parseFloat(c.qty) || 1), 0);
 }
 
+// Canonical per-component client LINE TOTAL (qty baked in). A component
+// clientPriceOverride is the line total the client pays for that
+// component, replacing the markup math. All component price consumers
+// must route through here — do not re-inline the formula.
+function calcComponentClientTotal(comp, parentItem, pid) {
+  const ov = _priceOverride(comp);
+  if (ov != null) return ov;
+  const net = parse$(comp.netCost) * (parseFloat(comp.qty) || 1);
+  return net * (1 + componentEffectiveMarkup(comp, parentItem, pid) / 100);
+}
+
 function calcConstructedClient(item, pid) {
-  return (item.components || []).reduce((s, c) => {
-    const net = parse$(c.netCost) * (parseFloat(c.qty) || 1);
-    const markup = componentEffectiveMarkup(c, item, pid) / 100;
-    return s + net * (1 + markup);
-  }, 0);
+  // Whole-item override wins over the component sum (it IS the total —
+  // constructed items carry qty inside their components).
+  const ov = _priceOverride(item);
+  if (ov != null) return ov;
+  return (item.components || []).reduce((s, c) => s + calcComponentClientTotal(c, item, pid), 0);
 }
 
 function calcReadyMadeNet(item) {
@@ -11025,6 +11151,7 @@ function renderProjectDetail() {
   if (_projDetailTab === 'proposal')    body.innerHTML = renderPDProposal(proj, pid);
   if (_projDetailTab === 'management')  body.innerHTML = renderPDManagement(proj, pid);
   if (_projDetailTab === 'addressbook') body.innerHTML = renderPDAddressBook(proj, pid);
+  if (_projDetailTab === 'meetings')    body.innerHTML = renderPDMeetings(proj, pid);
   if (_projDetailTab === 'documents')   body.innerHTML = renderPDDocuments(proj, pid);
   if (_projDetailTab === 'expenses')    body.innerHTML = renderPDExpenses(proj, pid);
   if (_projDetailTab === 'budget')      body.innerHTML = renderPDBudget(proj, pid);
@@ -14215,6 +14342,116 @@ function renderABPocAndNotes(pid, section, data) {
     <textarea class="fi" style="resize:vertical;min-height:48px;font-size:12px" placeholder="Internal notes for this section…" onchange="saveABField('${pid}','${section}','notes',this.value.trim())">${escH(data.notes||'')}</textarea>
   </div>`;
   return h;
+}
+
+// ── Project Meetings tab — date/time-stamped meeting log ──
+
+function renderPDMeetings(proj, pid) {
+  const meetings = (S.projectMeetings || [])
+    .filter(m => m.projectId === pid)
+    .sort((a, b) => (b.meetingAt || b.created || '').localeCompare(a.meetingAt || a.created || ''));
+  const fmtWhen = (iso) => {
+    if (!iso) return '(no date)';
+    const d = new Date(iso);
+    if (isNaN(d)) return '(no date)';
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+      + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  };
+  const cards = meetings.map(m => `
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:16px 20px;cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditMeeting('${m.id}')">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:14px;color:var(--mahogany)">${escH(m.title || 'Meeting')}</div>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--pecan);font-weight:700">${fmtWhen(m.meetingAt)}</div>
+      </div>
+      ${m.attendees ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:3px">With: ${escH(m.attendees)}</div>` : ''}
+      ${m.notes ? `<div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);margin-top:8px;white-space:pre-wrap;line-height:1.55;max-height:120px;overflow:hidden">${escH(m.notes)}</div>` : '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin-top:6px">No notes yet.</div>'}
+    </div>`).join('');
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany)">Meeting Notes</div>
+      <button class="btn btn-primary btn-sm" onclick="openNewMeeting('${pid}')">+ Log Meeting</button>
+    </div>
+    ${meetings.length
+      ? `<div style="display:flex;flex-direction:column;gap:10px">${cards}</div>`
+      : '<div class="no-results">No meetings logged yet. Click + Log Meeting to add the first one.</div>'}`;
+}
+
+// datetime-local wants "YYYY-MM-DDTHH:MM" in local time.
+function _isoToLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function openNewMeeting(pid) {
+  $c('meeting-modal-title').textContent = 'Log Meeting';
+  $c('meeting-id').value = '';
+  $c('meeting-project-id').value = pid;
+  $c('meeting-at').value = _isoToLocalInput(new Date().toISOString());
+  $c('meeting-title').value = '';
+  $c('meeting-attendees').value = '';
+  $c('meeting-notes').value = '';
+  $c('meeting-delete-btn').style.display = 'none';
+  $c('modal-meeting').classList.add('open');
+  setTimeout(() => $c('meeting-notes').focus(), 80);
+}
+
+function openEditMeeting(id) {
+  const m = (S.projectMeetings || []).find(x => x.id === id);
+  if (!m) return;
+  $c('meeting-modal-title').textContent = 'Edit Meeting';
+  $c('meeting-id').value = m.id;
+  $c('meeting-project-id').value = m.projectId;
+  $c('meeting-at').value = _isoToLocalInput(m.meetingAt);
+  $c('meeting-title').value = m.title || '';
+  $c('meeting-attendees').value = m.attendees || '';
+  $c('meeting-notes').value = m.notes || '';
+  $c('meeting-delete-btn').style.display = '';
+  $c('modal-meeting').classList.add('open');
+}
+
+function saveMeetingFromModal() {
+  const id = $c('meeting-id').value;
+  const pid = $c('meeting-project-id').value;
+  if (!pid) return;
+  const atRaw = $c('meeting-at').value;
+  const meetingAt = atRaw ? new Date(atRaw).toISOString() : null;
+  const payload = {
+    meetingAt,
+    title: $c('meeting-title').value.trim(),
+    attendees: $c('meeting-attendees').value.trim(),
+    notes: $c('meeting-notes').value,
+  };
+  if (!S.projectMeetings) S.projectMeetings = [];
+  if (id) {
+    const m = S.projectMeetings.find(x => x.id === id);
+    if (m) Object.assign(m, payload);
+  } else {
+    S.projectMeetings.push({
+      id: uid(),
+      projectId: pid,
+      createdBy: AUTH.user?.id || null,
+      created: new Date().toISOString(),
+      ...payload,
+    });
+  }
+  save();
+  closeModal('modal-meeting');
+  renderProjectDetail();
+  toast(id ? 'Meeting updated.' : 'Meeting logged.');
+}
+
+function deleteMeetingFromModal() {
+  const id = $c('meeting-id').value;
+  if (!id) return;
+  if (!confirm('Delete this meeting note?')) return;
+  S.projectMeetings = (S.projectMeetings || []).filter(x => x.id !== id);
+  save();
+  closeModal('modal-meeting');
+  renderProjectDetail();
+  toast('Meeting deleted.');
 }
 
 function renderPDAddressBook(proj, pid) {
@@ -17796,6 +18033,24 @@ function onFAItemChange() {
   populateFAComponentDropdown($c('fa-item').value);
 }
 
+// Flat-rate category preset: picking a category with a flat rate pre-fills
+// the amount (e.g. a $35 receiving fee) so logging is two clicks. Only
+// fills when the amount is empty or still holds another category's preset —
+// never clobbers a hand-typed amount.
+let _faLastFlatRate = null;
+function onFACategoryChange() {
+  const catId = $c('fa-category')?.value || '';
+  const cat = (S.freightCategories || []).find(c => c.id === catId);
+  const amtEl = $c('fa-amount');
+  if (!amtEl) return;
+  const cur = amtEl.value.trim();
+  const flat = cat && cat.flatRate != null && cat.flatRate !== '' ? Number(cat.flatRate) : null;
+  if (flat != null && (cur === '' || (_faLastFlatRate != null && parseFloat(cur) === _faLastFlatRate))) {
+    amtEl.value = flat.toFixed(2);
+  }
+  _faLastFlatRate = flat;
+}
+
 function populateFAItemDropdown(pid) {
   const sel = $c('fa-item');
   if (!sel) return;
@@ -19114,10 +19369,10 @@ function renderItemRow(item, spId, pid) {
       const cNetEach = parse$(c.netCost);
       const cQty = parseInt(c.qty) || 1;
       const cNetTotal = cNetEach * cQty;
-      const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
-      const cClientTotal = cNetTotal * (1 + cMarkup);
+      const cClientTotal = calcComponentClientTotal(c, item, pid);
       const cTypeLabel = COMPONENT_TYPES.find(t => t.id === c.componentType)?.label || (c.componentType === 'other' ? 'Other' : '');
-      const cMarkupNote = c.billCostOnly ? '<span class="markup-tag">cost only</span>' :
+      const cMarkupNote = _priceOverride(c) != null ? '<span class="markup-tag">$ fixed</span>' :
+        c.billCostOnly ? '<span class="markup-tag">cost only</span>' :
         (c.adjustMarkup != null && c.adjustMarkup !== '' ? `<span class="markup-tag">${c.adjustMarkup}%</span>` : '');
       const cUnitLabel = c.qtyUnit ? ' '+c.qtyUnit : '';
       const qtyNote = (cQty !== 1 || c.qtyUnit) ? `<span style="font-size:10px;color:var(--text-mid);margin-left:4px">×${cQty}${cUnitLabel}</span>` : '';
@@ -19427,9 +19682,7 @@ function _calcComponentFreightChargeMarkedUp(charge, comp, item, pid, proj) {
   let base;
   if (charge.valueType === 'percent') {
     // Percent of the component's marked-up line value (one item-unit's worth).
-    const cNet = parse$(comp.netCost) * (parseFloat(comp.qty) || 1);
-    const cMarkup = componentEffectiveMarkup(comp, item, pid) / 100;
-    const cClient = cNet * (1 + cMarkup);
+    const cClient = calcComponentClientTotal(comp, item, pid);
     base = cClient * (num / 100);
   } else {
     base = num;
@@ -19518,9 +19771,7 @@ function calcProposalTotals(prop, pid) {
         let itemNonFreight = 0;
         let itemCompTaxable = 0;
         (item.components||[]).forEach(c => {
-          const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
-          const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
-          const cClient = cNet * (1 + cMarkup);
+          const cClient = calcComponentClientTotal(c, item, pid);
           itemNonFreight += cClient;
           if (!item.taxExempt && !c.taxExempt) itemCompTaxable += cClient;
         });
@@ -19587,9 +19838,7 @@ function calcProposalAllowanceTotal(prop, pid) {
         count++;
         if (item.type === 'constructed') {
           (item.components || []).forEach(c => {
-            const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
-            const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
-            total += cNet * (1 + cMarkup);
+            total += calcComponentClientTotal(c, item, pid);
           });
         } else {
           const qty = parseFloat(item.qty) || 1;
@@ -19599,9 +19848,7 @@ function calcProposalAllowanceTotal(prop, pid) {
         (item.components || []).forEach(c => {
           if (!c.allowance) return;
           count++;
-          const cNet = parse$(c.netCost) * (parseFloat(c.qty) || 1);
-          const cMarkup = componentEffectiveMarkup(c, item, pid) / 100;
-          total += cNet * (1 + cMarkup);
+          total += calcComponentClientTotal(c, item, pid);
         });
       }
     });
@@ -20404,8 +20651,7 @@ function printEstimate(pid, estId) {
         item.components.forEach(c => {
           const cQty = parseFloat(c.qty)||1;
           const cNet = parse$(c.netCost) * cQty;
-          const cMarkup = (typeof componentEffectiveMarkup === 'function' ? componentEffectiveMarkup(c, item, pid) : 25) / 100;
-          const cClient = cNet * (1 + cMarkup);
+          const cClient = (typeof calcComponentClientTotal === 'function') ? calcComponentClientTotal(c, item, pid) : cNet * 1.25;
           const cTypeLabel = (typeof COMPONENT_TYPES !== 'undefined' ? COMPONENT_TYPES.find(t => t.id === c.componentType)?.label : '') || '';
           const cAllow = !!c.allowance;
           itemsHtml += `<tr class="comp-row${cAllow?' allowance':''}">
@@ -21274,8 +21520,10 @@ function renderModalComponents() {
           Bill cost only
         </label>
         <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark)">Markup:</span>
-        <input type="number" class="fi comp-adj" style="width:60px;padding:4px 6px;font-size:11px" value="${c.adjustMarkup != null ? c.adjustMarkup : ''}" placeholder="—" min="0" step="1">
+        <input type="number" class="fi comp-adj" style="width:60px;padding:4px 6px;font-size:11px" value="${c.adjustMarkup != null ? c.adjustMarkup : ''}" placeholder="—" min="0" step="1" oninput="if(this.value!==''){const cp=this.closest('.person-entry')?.querySelector('.comp-client-price'); if(cp) cp.value=''}">
         <span style="font-family:var(--font-b);font-size:11px;color:var(--text-light)">%</span>
+        <span style="font-family:var(--font-b);font-size:11px;color:var(--text-dark)" title="Skip markup math — the line total the client pays for this component (qty included). Clears the markup.">or $</span>
+        <input type="text" class="fi comp-client-price" style="width:80px;padding:4px 6px;font-size:11px" value="${c.clientPriceOverride != null && c.clientPriceOverride !== '' ? c.clientPriceOverride : ''}" placeholder="—" oninput="if(this.value!==''){const adj=this.closest('.person-entry')?.querySelector('.comp-adj'); if(adj) adj.value=''}">
       </div>
       ${c.componentType === 'other' || c.componentType === '' ? `
       <div class="fg" style="margin-top:6px">
@@ -21389,6 +21637,8 @@ function readModalComponentsFromDOM() {
       _modalComponents[i].billCostOnly = el.querySelector('.comp-billcost')?.checked || false;
       const adj = el.querySelector('.comp-adj')?.value;
       _modalComponents[i].adjustMarkup = adj !== '' && adj != null ? parseFloat(adj) : null;
+      const cpo = el.querySelector('.comp-client-price')?.value;
+      _modalComponents[i].clientPriceOverride = cpo !== '' && cpo != null ? parse$(cpo) : null;
       const noteEl = el.querySelector('.comp-note');
       if (noteEl) _modalComponents[i].note = noteEl.value.trim();
     }
@@ -22101,6 +22351,7 @@ function openAddItemModal(pid, spId) {
   $c('ai-taxexempt').checked = false;
   $c('ai-billcost').checked = false;
   $c('ai-adj-markup').value = '';
+  $c('ai-client-price').value = '';
   _modalComponents = [];
   renderModalComponents();
   loadItemFreightIntoModal(null);
@@ -22221,6 +22472,7 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-taxexempt').checked = !!item.taxExempt;
   $c('ai-billcost').checked = !!item.billCostOnly;
   $c('ai-adj-markup').value = item.adjustMarkup != null ? item.adjustMarkup : '';
+  $c('ai-client-price').value = item.clientPriceOverride != null ? item.clientPriceOverride : '';
 
   _modalComponents = (item.components || []).map(c => {
     const copy = { ...c };
@@ -22286,6 +22538,7 @@ function saveItem() {
     taxExempt: $c('ai-taxexempt').checked,
     billCostOnly: $c('ai-billcost').checked,
     adjustMarkup: adjVal !== '' ? parseFloat(adjVal) : null,
+    clientPriceOverride: (() => { const v = $c('ai-client-price')?.value ?? ''; return v !== '' ? parse$(v) : null; })(),
     // Actual cost paid is owned by the PM detail panel, not this proposal
     // modal — preserve whatever value was already stored on the item.
     costActual: existingItem?.costActual || '',
@@ -22447,8 +22700,7 @@ function printProposalAsDocument(pid) {
         item.components.forEach(c => {
           const cQty = parseFloat(c.qty) || 1;
           const cNet = parse$(c.netCost) * cQty;
-          const cMarkup = (typeof componentEffectiveMarkup === 'function' ? componentEffectiveMarkup(c, item, pid) : 25) / 100;
-          const cClient = cNet * (1 + cMarkup);
+          const cClient = (typeof calcComponentClientTotal === 'function') ? calcComponentClientTotal(c, item, pid) : cNet * 1.25;
           const cTypeLabel = (typeof COMPONENT_TYPES !== 'undefined' ? COMPONENT_TYPES.find(t => t.id === c.componentType)?.label : '') || '';
           const cAllow = !!c.allowance;
           itemsHtml += `<tr class="comp-row${cAllow?' allowance':''}">
@@ -25049,6 +25301,12 @@ function renderItemTypesList() {
         onchange="updateItemTypeField('${t.id}','color',this.value)">
       <input type="text" class="fi" value="${escH(t.name)}" data-old="${escH(t.name)}" style="flex:1;font-size:12px;color:${color};font-weight:700" onchange="renameItemType('${t.id}', this.value.trim())">
       ${sysChip}
+      <span style="display:flex;align-items:center;gap:4px" title="Optional default markup for items in this category. Blank = use the project default. Item-level custom markup / client price always wins.">
+        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">Markup</span>
+        <input type="number" class="fi" value="${t.defaultMarkupPct != null && t.defaultMarkupPct !== '' ? t.defaultMarkupPct : ''}" placeholder="—" min="0" step="1" style="width:58px;font-size:11px;padding:4px 6px;text-align:right"
+          onchange="updateItemTypeField('${t.id}','defaultMarkupPct', this.value === '' ? null : parseFloat(this.value))">
+        <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">%</span>
+      </span>
       <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${count} in use</span>
       ${delBtn}
     </div>`;
@@ -25207,6 +25465,12 @@ function renderFreightCategoriesList() {
           style="width:130px;font-size:11px;text-align:right;padding:5px 8px"
           onchange="updateFreightCategoryMarkup('${c.id}', this.value)">
         <span style="font-size:11px;color:var(--text-light)">%</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px" title="Optional flat $ preset — logging a freight actual in this category pre-fills this amount (e.g. a $35 receiving fee). Blank = no preset.">
+        <span style="font-size:11px;color:var(--text-light)">Flat $</span>
+        <input type="number" class="fi" value="${c.flatRate != null && c.flatRate !== '' ? c.flatRate : ''}" placeholder="—" min="0" step="0.01"
+          style="width:70px;font-size:11px;text-align:right;padding:5px 8px"
+          onchange="updateFreightCategoryField('${c.id}','flatRate', this.value === '' ? null : parseFloat(this.value))">
       </div>
       <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-mid);cursor:pointer;user-select:none">
         <input type="checkbox" ${c.isTaxable ? 'checked' : ''}
@@ -28714,6 +28978,8 @@ function _mergeComponentForExport(c, parentItem) {
     allowance: !!c.allowance,
     billCostOnly: !!c.billCostOnly,
     adjustMarkup: c.adjustMarkup,
+    clientPriceOverride: c.clientPriceOverride,
+    itemTypeId: c.itemTypeId,
     type: 'component',
     components: [],
     _origComponent: c,
@@ -28722,16 +28988,21 @@ function _mergeComponentForExport(c, parentItem) {
 }
 
 function _exportItemPrice(item, kind, proj) {
-  const markup = ((proj?.markupPct ?? 25)) / 100;
+  // Canonical markup resolution (item override → category → project) with
+  // clientPriceOverride honored. Was a flat proj.markupPct before.
+  const pid = proj?.id;
   // Component-row exports use the component's own netCost / costActual.
   if (item.type === 'component') {
     const qty = parseFloat(item.qty) || 1;
     const net = parse$(item.netCost) * qty;
     const actual = (parse$(item.costActual) || parse$(item.netCost)) * qty;
+    const orig = item._origComponent || item;
+    const parent = item._parentItem || {};
+    const client = calcComponentClientTotal(orig, parent, pid);
     if (kind === 'priceNet') return net;
     if (kind === 'priceActual') return actual;
-    if (kind === 'priceClient') return item.billCostOnly ? net : net * (1 + markup);
-    if (kind === 'priceAllowance') return item.allowance ? (item.billCostOnly ? net : net * (1 + markup)) : null;
+    if (kind === 'priceClient') return client;
+    if (kind === 'priceAllowance') return item.allowance ? client : null;
     return null;
   }
   if (item.type === 'constructed') {
@@ -28739,19 +29010,23 @@ function _exportItemPrice(item, kind, proj) {
     const actualTotal = (item.components || []).reduce((s, c) => s + (parse$(c.costActual) || parse$(c.netCost)) * (parseFloat(c.qty) || 1), 0);
     const qty = parseFloat(item.qty) || 1;
     const net = total * qty;
+    const markup = effectiveMarkup(item, pid) / 100;
+    const client = _priceOverride(item) != null ? _priceOverride(item) : (item.billCostOnly ? net : net * (1 + markup));
     if (kind === 'priceNet') return net;
     if (kind === 'priceActual') return actualTotal * qty;
-    if (kind === 'priceClient') return item.billCostOnly ? net : net * (1 + markup);
-    if (kind === 'priceAllowance') return item.allowance ? (item.billCostOnly ? net : net * (1 + markup)) : null;
+    if (kind === 'priceClient') return client;
+    if (kind === 'priceAllowance') return item.allowance ? client : null;
     return null;
   }
   const qty = parseFloat(item.qty) || 1;
   const net = parse$(item.netPrice) * qty;
   const actual = (parse$(item.costActual) || parse$(item.netPrice)) * qty;
+  const markup = effectiveMarkup(item, pid) / 100;
+  const client = _priceOverride(item) != null ? _priceOverride(item) * qty : (item.billCostOnly ? net : net * (1 + markup));
   if (kind === 'priceNet') return net;
   if (kind === 'priceActual') return actual;
-  if (kind === 'priceClient') return item.billCostOnly ? net : net * (1 + markup);
-  if (kind === 'priceAllowance') return item.allowance ? (item.billCostOnly ? net : net * (1 + markup)) : null;
+  if (kind === 'priceClient') return client;
+  if (kind === 'priceAllowance') return item.allowance ? client : null;
   return null;
 }
 
@@ -30565,9 +30840,9 @@ let _invSelectedComponents = new Map(); // itemId -> Set<compId>
 let _invExpandedItems = new Set();        // itemIds whose component list is expanded in the picker
 
 function calcComponentClient(comp, item, pid) {
-  const net = parse$(comp.netCost) * (parseFloat(comp.qty)||1);
-  const markup = componentEffectiveMarkup(comp, item, pid) / 100;
-  return net * (1 + markup);
+  // Delegates to the canonical helper so component price overrides and
+  // category markups apply here too (invoice-builder component lines).
+  return calcComponentClientTotal(comp, item, pid);
 }
 
 function getNextInvoiceNumber() {
