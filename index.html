@@ -2239,6 +2239,7 @@ tr:hover .row-btns { opacity:1; }
   <div class="modal" style="width:680px">
     <button class="modal-x" onclick="closeModal('modal-add-item')">✕</button>
     <div class="modal-title" id="ai-title">Add Line Item</div>
+    <div id="ai-sub-banner" style="display:none;background:rgba(122,74,16,0.08);border:1px solid rgba(122,74,16,0.3);border-radius:var(--rs);padding:10px 14px;margin-bottom:12px;font-family:var(--font-b);font-size:12px;color:var(--text-dark);line-height:1.5"></div>
     <input type="hidden" id="ai-pid">
     <input type="hidden" id="ai-spid">
     <input type="hidden" id="ai-id">
@@ -3291,6 +3292,32 @@ tr:hover .row-btns { opacity:1; }
 <!-- U-Freight Phase 4 Part 1. Vendor freight bill logged against a
      specific item (or component). Optional toggle creates a linked
      nonbillable expense so the cost lands in P&L. -->
+<div class="overlay" id="modal-sub-delta">
+  <div class="modal" style="width:520px">
+    <button class="modal-x" onclick="applySubDelta('keep')">✕</button>
+    <div class="modal-title">⇄ Substitution — cost changed</div>
+    <div id="sub-delta-summary" style="background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:14px"></div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);line-height:1.55;margin-bottom:12px">
+      The collected amount is settled. You can leave it (margin absorbs the change), bill the client the difference, or pass savings back — both via a price-adjustment line on a draft invoice so tax stays correct.
+    </div>
+    <div class="frow">
+      <div class="fg" style="flex:1">
+        <label class="fl">Adjustment amount</label>
+        <input type="text" class="fi" id="sub-delta-amount" placeholder="$0.00">
+      </div>
+      <div class="fg" style="flex:1">
+        <label class="fl">Draft invoice</label>
+        <select class="fi fsel" id="sub-delta-invoice"></select>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn btn-secondary" onclick="applySubDelta('keep')">Keep as is</button>
+      <button class="btn btn-secondary" onclick="applySubDelta('reduce')" style="color:#1a6e3a">Reduce client price</button>
+      <button class="btn btn-primary" onclick="applySubDelta('bill')">Bill the difference</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="modal-meeting">
   <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
     <button class="modal-x" onclick="closeModal('modal-meeting')">✕</button>
@@ -10948,7 +10975,7 @@ function _renderItemCostReconStrip(item, pid) {
   return `
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:10px 12px;background:rgba(var(--text-rgb),0.03);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:12px">
       ${cell('Proposal Net', proposalVal, 'var(--text-dark)')}
-      ${cell('Invoiced', invoicedVal, 'var(--text-dark)')}
+      ${cell('Collected', invoicedVal, 'var(--text-dark)')}
       ${cell('Net Actual', actualVal, 'var(--text-dark)', actualSub)}
       ${cell('Margin / Loss', netVal, netColor, netSub)}
     </div>`;
@@ -13538,6 +13565,184 @@ function _renderItemWorkOrdersSection(itemId) {
   </div>`;
 }
 
+// ═══ Item substitution (vendor can't fill after payment) ═══
+// Money facts are settled (invoices, collected amounts, tax); sourcing
+// facts are fluid. Substitution: (1) archives the original sourcing into
+// the item's activity log, (2) anchors the client price at the BILLED
+// amount via clientPriceOverride so cost/vendor changes can't move settled
+// pricing or trip invoice discrepancy warnings, (3) reuses the normal item
+// editor for the swap, (4) on save shows the margin delta with
+// bill / reduce / keep resolutions.
+
+let _subCtx = null;
+let _subDeltaCtx = null;
+
+function _itemExpectedCost(item) {
+  if (!item) return 0;
+  if (item.type === 'constructed') return calcConstructedNet(item);
+  const qty = parseFloat(item.qty) || 1;
+  return getItemNet(item) * qty;
+}
+
+function _itemSourcingSummary(item) {
+  const vendor = item.vendorId ? ((S.vendors || []).find(v => v.id === item.vendorId)?.name || '') : '';
+  const brand = item.brandId ? ((S.brands || []).find(b => b.id === item.brandId)?.name || '') : '';
+  const src = [vendor, brand !== vendor ? brand : ''].filter(Boolean).join(' / ') || 'no vendor';
+  const qty = parseFloat(item.qty) || 1;
+  const qtyNote = item.type !== 'constructed' && qty !== 1 ? ` (×${qty})` : '';
+  return `${item.name || '(unnamed)'} · ${src} · expected cost ${fmt(_itemExpectedCost(item))}${qtyNote}`;
+}
+
+function _appendItemActivity(item, text, kind) {
+  if (!item.activityLog) item.activityLog = [];
+  item.activityLog.unshift({
+    id: uid(),
+    author: AUTH.member?.display_name || AUTH.user?.email || 'Studio',
+    authorUserId: AUTH.user?.id || null,
+    text,
+    kind: kind || null,
+    mentions: [],
+    timestamp: new Date().toISOString(),
+    compId: null,
+  });
+}
+
+function itemHasSubstitution(item) {
+  return (item?.activityLog || []).some(a => a.kind === 'substitution');
+}
+
+function startItemSubstitution(pid, spId, itemId) {
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  if (!item) return;
+  const reason = prompt('Substituting this item. Why? (optional — becomes part of the item history)', '');
+  if (reason === null) return;   // Cancel aborts the whole flow
+  const billed = getItemBilledOnInvoices(itemId);
+  // Anchor the settled price BEFORE sourcing changes. What the client was
+  // billed is a money fact — the override pins it so the proposal/PM views
+  // keep showing the collected-amount-derived price no matter how the new
+  // sourcing shakes out. Skipped when nothing is billed yet (plain edit)
+  // or an explicit override already pins the price.
+  let anchored = false;
+  if (billed > 0.005 && _priceOverride(item) == null) {
+    const qty = parseFloat(item.qty) || 1;
+    item.clientPriceOverride = item.type === 'constructed' ? billed : (qty > 0 ? billed / qty : billed);
+    anchored = true;
+  }
+  _appendItemActivity(item,
+    `⇄ Substitution started${reason ? ' — ' + reason : ''}. Original: ${_itemSourcingSummary(item)}.`
+    + (anchored ? ` Client price anchored at collected ${fmt(billed)}.` : ''),
+    'substitution');
+  _subCtx = { pid, spId, itemId, origCost: _itemExpectedCost(item), billed, reason: reason || '' };
+  save();
+  openEditItemModal(pid, spId, itemId);
+  const banner = $c('ai-sub-banner');
+  if (banner) {
+    banner.style.display = '';
+    banner.innerHTML = `⇄ <strong>Substitution</strong> — ${billed > 0.005
+      ? `collected amount <strong>${fmt(billed)}</strong> stays the settled client price`
+      : 'nothing billed yet, so this is a plain edit'}. Change vendor / cost / product freely — the original sourcing is archived in the activity log.`;
+  }
+}
+
+function openSubDeltaModal(ctx, item, newCost) {
+  _subDeltaCtx = {
+    pid: ctx.pid,
+    itemId: item.id,
+    itemName: item.name || '(unnamed)',
+    type: item.type,
+    reason: ctx.reason,
+    origCost: ctx.origCost,
+    newCost,
+    billed: ctx.billed,
+  };
+  const delta = newCost - ctx.origCost;
+  const marginBefore = ctx.billed - ctx.origCost;
+  const marginAfter = ctx.billed - newCost;
+  $c('sub-delta-summary').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr auto;gap:4px 16px;font-family:var(--font-b);font-size:13px;color:var(--text-dark)">
+      <span style="color:var(--text-mid)">Collected amount</span><strong>${fmt(ctx.billed)}</strong>
+      <span style="color:var(--text-mid)">Original expected cost</span><span>${fmt(ctx.origCost)}</span>
+      <span style="color:var(--text-mid)">New expected cost</span><strong>${fmt(newCost)}</strong>
+      <span style="color:var(--text-mid)">Margin</span><span>was <strong style="color:${marginBefore >= 0 ? '#1a6e3a' : '#b33'}">${fmt(marginBefore)}</strong> → now <strong style="color:${marginAfter >= 0 ? '#1a6e3a' : '#b33'}">${fmt(marginAfter)}</strong></span>
+    </div>`;
+  $c('sub-delta-amount').value = Math.abs(delta).toFixed(2);
+  const drafts = (S.invoices || []).filter(i => i.projectId === ctx.pid && i.status === 'draft');
+  $c('sub-delta-invoice').innerHTML = drafts.length
+    ? drafts.map(d => `<option value="${d.id}">${escH(d.number || '(draft)')}</option>`).join('')
+    : '<option value="">— No draft invoices —</option>';
+  $c('modal-sub-delta').classList.add('open');
+}
+
+function applySubDelta(mode) {
+  const ctx = _subDeltaCtx;
+  if (!ctx) return;
+  if (mode === 'keep') {
+    closeModal('modal-sub-delta');
+    _subDeltaCtx = null;
+    return;
+  }
+  const amt = parse$($c('sub-delta-amount').value);
+  if (!(amt > 0)) { toast('Enter a positive amount.'); return; }
+  const invId = $c('sub-delta-invoice').value;
+  const inv = invId ? (S.invoices || []).find(i => i.id === invId && i.status === 'draft') : null;
+  const item = _findItemById(ctx.itemId);
+  let summary = '';
+
+  if (inv) {
+    // A ± taxable line on a draft invoice — the tax-correct mechanism in
+    // both directions (a negative taxable line shrinks the next invoice's
+    // tax base, i.e. a credit memo).
+    if (!Array.isArray(inv.lineItems)) inv.lineItems = [];
+    inv.lineItems.push({
+      id: uid(),
+      name: `Price adjustment — ${ctx.itemName}`,
+      description: ctx.reason ? `Substitution: ${ctx.reason}` : 'Item substitution price adjustment',
+      qty: 1,
+      price: mode === 'bill' ? amt : -amt,
+      taxable: !(item?.taxExempt),
+      proposalItemId: ctx.itemId,
+      manual: true,
+    });
+    summary = mode === 'bill'
+      ? `Billed +${fmt(amt)} price adjustment on ${inv.number || 'draft'}`
+      : `Reduced client price by ${fmt(amt)} (negative line on ${inv.number || 'draft'})`;
+  } else if (mode === 'reduce') {
+    // No draft to carry a credit memo — fall back to the project credit
+    // pool, with the tax caveat made explicit.
+    if (!confirm(`No draft invoice available. Add ${fmt(amt)} to the project credit pool instead?\n\nNote: pool credit is post-tax — tax already remitted on the original sale isn't adjusted. A negative line on a future invoice is the tax-correct route if one is coming.`)) return;
+    const proj = getProject(ctx.pid);
+    if (!proj.settings) proj.settings = {};
+    if (!Array.isArray(proj.settings.credits)) proj.settings.credits = [];
+    proj.settings.credits.push({
+      id: uid(),
+      source: 'substitution',
+      balance: amt,
+      amount: amt,
+      note: `Substitution savings — ${ctx.itemName}`,
+      created: new Date().toISOString(),
+    });
+    summary = `Credited ${fmt(amt)} to the project credit pool`;
+  } else {
+    toast('Pick a draft invoice — create one first if needed.');
+    return;
+  }
+
+  // Keep the anchor honest: the settled client price moved by ±amt.
+  if (item && _priceOverride(item) != null) {
+    const qty = parseFloat(item.qty) || 1;
+    const signed = mode === 'bill' ? amt : -amt;
+    const perUnit = item.type === 'constructed' ? signed : signed / (qty || 1);
+    item.clientPriceOverride = Math.max(0, _priceOverride(item) + perUnit);
+  }
+  if (item) _appendItemActivity(item, `⇄ ${summary}.`, 'substitution');
+  save();
+  closeModal('modal-sub-delta');
+  _subDeltaCtx = null;
+  renderProjectDetail();
+  toast(summary + '.');
+}
+
 function renderPMItemDetailPanel(pid, spId, itemId) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === itemId);
@@ -13747,12 +13952,14 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         </div>
         <div style="font-size:12px;color:var(--text-mid);font-family:var(--font-b)">${escH(sp.name||'')}${(() => { const d = itemContactDisplay(item); return d ? ' · '+escH(d) : ''; })()}</div>
         ${renderInvoiceRefBadges(itemId, 'lg')}
+        ${itemHasSubstitution(item) ? '<div style="margin-top:4px"><span style="display:inline-block;font-size:10px;font-family:var(--font-b);font-weight:700;color:var(--russet);background:rgba(150,61,39,0.08);border:1px solid rgba(150,61,39,0.25);border-radius:10px;padding:2px 9px" title="This item was substituted — see Notes & Activity for the full history">⇄ Substituted</span></div>' : ''}
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--font-h);font-weight:800;font-size:22px;color:var(--pecan)">${client>0?fmt(client):'—'}</div>
         ${(() => { const q = parseFloat(item.qty)||1; const u = item.qtyUnit||''; return item.type==='constructed' ? (q>1?`<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q} <span style="color:var(--text-light)">(total)</span></div>`:'') : `<div style="font-size:11px;color:var(--text-mid);margin-top:2px;font-family:var(--font-b)">Qty: ${q}${u?' '+escH(u):''}</div>`; })()}
         <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;justify-content:flex-end">
           <button class="btn btn-ghost btn-sm" onclick="openEditItemModal('${pid}','${spId}','${itemId}')">Edit Item</button>
+          <button class="btn btn-ghost btn-sm" onclick="startItemSubstitution('${pid}','${spId}','${itemId}')" title="Vendor can't fill the order? Swap vendor/cost/product with history preserved — the collected amount stays the settled fact.">⇄ Substitute</button>
           <button class="btn btn-ghost btn-sm" onclick="openNewExpenseForItem('${pid}','${itemId}')" title="Open the expense modal pre-filled with this item">+ Add expense</button>
           <button class="btn btn-ghost btn-sm" onclick="openPrintPMItemModal('${pid}','${spId}','${itemId}')" title="Generate a printable PDF of this item's PM page">🖨 Print PM</button>
           ${canDeleteItem(itemId) ? `<button class="btn btn-danger btn-sm" onclick="deleteItemFromPM('${pid}','${spId}','${itemId}')" style="font-size:10px">Delete Item</button>` : ''}
@@ -22409,6 +22616,8 @@ function commitComponentFreightCharges(comp) {
 }
 
 function openAddItemModal(pid, spId) {
+  { const b = $c('ai-sub-banner'); if (b) b.style.display = 'none'; }
+  _subCtx = null;
   $c('ai-title').textContent = 'Add Line Item';
   $c('ai-save-btn').textContent = 'Add Item';
   $c('ai-delete-btn').style.display = 'none';
@@ -22529,6 +22738,10 @@ function openEditItemModal(pid, spId, itemId) {
   const sp = prop?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === itemId);
   if (!item) return;
+  // Plain edits hide the substitution banner (startItemSubstitution
+  // re-shows it after calling this) and drop any stale substitution ctx.
+  { const b = $c('ai-sub-banner'); if (b) b.style.display = 'none'; }
+  if (_subCtx && _subCtx.itemId !== itemId) _subCtx = null;
 
   $c('ai-title').textContent = 'Edit Item';
   $c('ai-save-btn').textContent = 'Save Changes';
@@ -22670,6 +22883,22 @@ function saveItem() {
   closeModal('modal-add-item');
   if (S.currentView === 'project-detail') renderProjectDetail();
   else renderPropBody();
+
+  // Substitution follow-through: log the new sourcing and, when the cost
+  // moved, surface the money picture with bill / reduce / keep options.
+  if (_subCtx && itemId && _subCtx.itemId === itemId) {
+    const ctx = _subCtx;
+    _subCtx = null;
+    const savedItem = sp.items.find(i => i.id === itemId);
+    if (savedItem) {
+      _appendItemActivity(savedItem, `⇄ Substitution saved. Now: ${_itemSourcingSummary(savedItem)}.`, 'substitution');
+      save();
+      const newCost = _itemExpectedCost(savedItem);
+      if (Math.abs(newCost - ctx.origCost) > 0.5) {
+        openSubDeltaModal(ctx, savedItem, newCost);
+      }
+    }
+  }
 }
 
 function deleteItemFromModal() {
