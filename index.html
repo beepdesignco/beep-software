@@ -8586,6 +8586,8 @@ function dbInvoiceToS(inv) {
       _reconType: l.recon_type || null,
       _settlementId: l.settlement_id || null,
       _freightRecon: !!l.recon_type,
+      clientHidden: !!l.client_hidden,
+      _coversLineId: l.covers_line_id || null,
     })),
     payments: (inv.invoice_payments || []).map(p => ({
       id: p.id,
@@ -9366,6 +9368,8 @@ function invLineItemToDB(l) {
     expense_id: l._expenseId || null,
     recon_type: l._reconType || null,
     settlement_id: l._settlementId || null,
+    client_hidden: !!l.clientHidden,
+    covers_line_id: l._coversLineId || null,
     sort_order: l._sortOrder || 0,
   };
 }
@@ -12612,9 +12616,33 @@ function renderActivityNote(note, pid, spId, itemId) {
 // explicit spaceId use it; everything else (manual entries) lands in
 // "Other". Returns an array of { location, lines } preserving original
 // document order — the first space encountered comes first.
+// Client-visible display adjustments for invoices carrying client-hidden
+// credit-covered lines. A hidden pair (line + its covering credit, which
+// includes the line's tax share) nets to zero, so excluding the pair and
+// subtracting its tax keeps subtotal + tax + total arithmetic consistent
+// on client documents. The stored invoice keeps the full records — the
+// sale, the tax (still counted for filing), and the credit burn.
+function invClientHiddenAdjustments(inv) {
+  const hidden = (inv?.lineItems || []).filter(l => l.clientHidden && l._reconType !== 'credit');
+  if (!hidden.length) return { hiddenSubtotal: 0, hiddenTax: 0, hasHidden: false };
+  const rate = (Number(inv.taxRate ?? inv.tax_rate) || 0) / 100;
+  let hiddenSubtotal = 0, hiddenTax = 0;
+  hidden.forEach(l => {
+    const lt = (parseFloat(l.qty) || 1) * (parseFloat(l.price) || 0);
+    hiddenSubtotal += lt;
+    if (l.taxable) hiddenTax += lt * rate;
+  });
+  return {
+    hiddenSubtotal: Math.round(hiddenSubtotal * 100) / 100,
+    hiddenTax: Math.round(hiddenTax * 100) / 100,
+    hasHidden: true,
+  };
+}
+
 function groupInvoiceLineItemsByLocation(inv) {
   if (!inv || !Array.isArray(inv.lineItems)) return [];
-  const lines = inv.lineItems.filter(l => l._reconType !== 'credit');
+  // Client-facing grouping — exclude credit lines AND client-hidden lines.
+  const lines = inv.lineItems.filter(l => l._reconType !== 'credit' && !l.clientHidden);
   const prop = inv.projectId ? S.proposals[inv.projectId] : null;
   const spaceById = {};
   if (prop) (prop.spaces || []).forEach(sp => spaceById[sp.id] = sp);
@@ -30990,13 +31018,30 @@ function removeInvLine(idx) {
   // Credit lines drawn from proj.settings.credits: restore the exact
   // balances via the draw records. (Lines from before draw-tracking have
   // no records and restore nothing — matches old behavior.)
+  const _rmInv = _currentInvoiceId ? (S.invoices || []).find(i => i.id === _currentInvoiceId) : null;
+  const _rmPid = _rmInv ? _rmInv.projectId : ($c('inv-project')?.value || '');
   if (line?._reconType === 'credit' && !line._settlementId) {
-    const inv = _currentInvoiceId ? (S.invoices || []).find(i => i.id === _currentInvoiceId) : null;
-    const pid = inv ? inv.projectId : ($c('inv-project')?.value || '');
-    const restored = _restoreProjectCreditDraws(pid, line.id);
+    const restored = _restoreProjectCreditDraws(_rmPid, line.id);
     if (restored > 0.005) toast(`${fmt(restored)} credit returned to the project pool.`);
+    // Un-hide the covered line — without its covering credit a hidden line
+    // would be invisible revenue the client never sees billed.
+    if (line._coversLineId) {
+      const covered = _invLineItems.find(x => x.id === line._coversLineId);
+      if (covered) covered.clientHidden = false;
+    }
   }
   _invLineItems.splice(idx, 1);
+  // Removing a covered line takes its covering credit line down with it
+  // (and returns the drawn credit to the pool).
+  if (line && line._reconType !== 'credit') {
+    const partners = _invLineItems.filter(x => x._reconType === 'credit' && x._coversLineId === line.id);
+    if (partners.length) {
+      let restoredP = 0;
+      partners.forEach(p => { restoredP += _restoreProjectCreditDraws(_rmPid, p.id); });
+      _invLineItems = _invLineItems.filter(x => !(x._reconType === 'credit' && x._coversLineId === line.id));
+      if (restoredP > 0.005) toast(`${fmt(restoredP)} credit returned to the project pool.`);
+    }
+  }
   recalcInvFreight();
   renderInvoiceBuilder();
 }
@@ -31108,8 +31153,17 @@ function renderInvLineItems() {
         ${!isProposal ? `<label style="display:flex;align-items:center;gap:3px;font-family:var(--font-b);font-size:9px;color:var(--text-mid);cursor:pointer;padding-bottom:${headerPad}px;white-space:nowrap" title="Add this line to Project Management as an open-line item">
           <input type="checkbox" ${l.trackInPM?'checked':''} onchange="toggleInvLineTrack(${i}, this.checked)" style="accent-color:var(--russet);width:11px;height:11px"> Track
         </label>` : ''}
+        ${_lockedByPaid ? '' : `<button onclick="coverInvLineWithCredit(${i})" title="Cover this line with project credit" style="font-size:10px;background:none;border:none;cursor:pointer;color:#1a6e3a;padding:${headerPad}px 2px;font-weight:700">◐</button>`}
         ${_lockedByPaid ? '' : `<button onclick="removeInvLine(${i})" style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-light);padding:${headerPad}px 2px">✕</button>`}
       </div>
+      ${(() => {
+        // Covered-by-credit badge (and hidden state) so the pairing is
+        // visible to the studio even when the client never sees it.
+        const cover = _invLineItems.find(x => x._reconType === 'credit' && x._coversLineId === l.id);
+        if (!cover) return '';
+        const amt = Math.abs((parseFloat(cover.qty)||1) * (parseFloat(cover.price)||0));
+        return `<div style="margin-top:3px;font-family:var(--font-b);font-size:10px;color:#1a6e3a">◐ Covered by ${fmt(amt)} project credit${cover.clientHidden ? ' · <span style="font-style:italic">hidden from client</span>' : ''}</div>`;
+      })()}
       ${descExpanded ? `
       <div style="padding:4px 0 2px;margin-top:4px">
         <textarea class="fi" placeholder="Description (optional, shown to client only if filled)" onchange="_invLineItems[${i}].description=this.value" style="font-size:11px;padding:5px 8px;width:100%;min-height:32px;resize:vertical">${escH(l.description||'')}</textarea>
@@ -31153,7 +31207,7 @@ function _renderInvCreditRow() {
   host.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr auto auto;gap:6px 12px;font-family:var(--font-b);font-size:13px;margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)">
       ${credits.map(c => `
-        <span style="color:#1a6e3a">Credit <span style="font-style:italic;color:var(--text-light);font-size:11px">· ${escH(c.name)}</span></span>
+        <span style="color:#1a6e3a">Credit <span style="font-style:italic;color:var(--text-light);font-size:11px">· ${escH(c.name)}</span>${c.clientHidden ? ' <span style="font-size:9px;color:var(--text-light);border:1px solid var(--border);border-radius:8px;padding:1px 6px;font-style:italic">hidden from client</span>' : ''}</span>
         <span style="text-align:right;color:#1a6e3a;font-weight:700">${fmt((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</span>
         <button onclick="removeInvCreditLineById('${c.id}')" title="Remove this credit (returns to project's available pool)" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:0 2px">✕</button>
       `).join('')}
@@ -31195,6 +31249,82 @@ function applyProjectCreditToInvoice() {
   save();
   recalcInvoice();
   toast(`Applied ${fmt(draw.applied)} project credit.`);
+}
+
+// Per-line credit coverage. Two modes:
+//  - Visible: credit line shows in the client-facing Credit row; partial
+//    amounts allowed; the client sees the line, the credit, and owes any
+//    uncovered remainder (incl. tax).
+//  - Hidden: the line AND its credit vanish from client documents. Must
+//    cover line total + tax share in FULL so the client-visible numbers
+//    still add up (the pair nets to zero). Internal records keep the sale,
+//    the tax (still filed), and the credit burn.
+function coverInvLineWithCredit(idx) {
+  const l = _invLineItems[idx];
+  if (!l || l._reconType === 'credit') return;
+  const inv = _currentInvoiceId ? (S.invoices || []).find(i => i.id === _currentInvoiceId) : null;
+  if (!inv) { toast('Save the invoice as a draft first.'); return; }
+  if (inv.status !== 'draft') { toast('Credit can only be applied to draft invoices.'); return; }
+  if (_invLineItems.some(x => x._reconType === 'credit' && x._coversLineId === l.id)) {
+    toast('This line already has a covering credit — remove it first (✕ on the Credit row).');
+    return;
+  }
+  const pid = inv.projectId;
+  const available = getProjectAvailableCredit(pid);
+  if (available <= 0.005) { toast('No project credit available.'); return; }
+  const lineTotal = (parseFloat(l.qty) || 1) * (parseFloat(l.price) || 0);
+  if (lineTotal <= 0.005) { toast('Line has no amount to cover.'); return; }
+  const proj = S.projects.find(p => p.id === pid);
+  const rate = (proj?.taxRate || 0) / 100;
+  const taxShare = l.taxable ? Math.round(lineTotal * rate * 100) / 100 : 0;
+
+  // Hidden mode is incompatible with a percentage discount (the discount
+  // rescales the tax base, so a "full" coverage amount would drift from
+  // what the client-visible math removes). Offer it only when safe.
+  const discType = $c('inv-disc-type')?.value || '';
+  let hide = false;
+  if (discType !== 'pct') {
+    hide = confirm(`Hide "${l.name || 'this line'}" and its credit from the client-facing invoice?\n\nOK = hide (requires covering ${fmt(lineTotal + taxShare)} — line + tax — in full; internal record only)\nCancel = keep visible (partial coverage allowed)`);
+  }
+
+  let amt;
+  if (hide) {
+    amt = Math.round((lineTotal + taxShare) * 100) / 100;
+    if (amt > available + 0.005) {
+      toast(`Hiding requires full coverage of ${fmt(amt)} but only ${fmt(available)} credit is available.`);
+      return;
+    }
+  } else {
+    const suggested = Math.min(lineTotal + taxShare, available);
+    const raw = prompt(`Cover "${l.name || 'line'}" with how much credit?\nLine total ${fmt(lineTotal)}${taxShare ? ` + ${fmt(taxShare)} tax` : ''}. ${fmt(available)} available.`, suggested.toFixed(2));
+    if (raw === null) return;
+    amt = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+    if (!(amt > 0)) { toast('Enter a positive amount.'); return; }
+    if (amt > available + 0.005) { toast(`Only ${fmt(available)} credit is available.`); return; }
+  }
+
+  const lineId = uid();
+  const draw = _drawProjectCredits(pid, amt, lineId);
+  if (draw.applied <= 0.005) { toast('Nothing applied.'); return; }
+  const noteParts = draw.slices.map(s => s.sourceInvoiceNumber ? `credit from ${s.sourceInvoiceNumber}` : 'project credit');
+  _invLineItems.push({
+    id: lineId,
+    name: `Credit — ${l.name || 'line'}`,
+    description: noteParts.join('; '),
+    qty: 1,
+    price: -draw.applied,
+    taxable: false,
+    _reconType: 'credit',
+    _coversLineId: l.id,
+    clientHidden: hide,
+  });
+  if (hide) l.clientHidden = true;
+  save();
+  recalcInvoice();
+  renderInvLineItems();
+  toast(hide
+    ? `Covered "${l.name || 'line'}" + tax with ${fmt(draw.applied)} credit — hidden from client documents.`
+    : `Applied ${fmt(draw.applied)} credit toward "${l.name || 'line'}".`);
 }
 
 function toggleInvLineDesc(idx) {
@@ -32604,9 +32734,15 @@ ${sec_invoice_meta}
   <table width="100%" cellpadding="0" cellspacing="0">
     ${inv.freight ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Freight</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.freight)}</td></tr>` : ''}
     ${inv.adjacentCharges ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Other associated charges</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.adjacentCharges)}</td></tr>` : ''}
-    ${(inv.lineItems||[]).filter(l => l._reconType === 'credit').map(c => `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Credit · ${esc(c.name||'')}</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</td></tr>`).join('')}
+    ${(inv.lineItems||[]).filter(l => l._reconType === 'credit' && !l.clientHidden).map(c => `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Credit · ${esc(c.name||'')}</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner((parseFloat(c.qty)||1) * (parseFloat(c.price)||0))}</td></tr>`).join('')}
     ${inv.discount ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Discount</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">-${fmtInner(inv.discount)}</td></tr>` : ''}
-    ${inv.tax ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Tax</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(inv.tax)}</td></tr>` : ''}
+    ${(function(){
+      // Hidden credit-covered pairs are excluded above; subtract their tax
+      // share so the visible tax matches the visible taxable lines.
+      const adj = (typeof invClientHiddenAdjustments === 'function') ? invClientHiddenAdjustments(inv) : { hiddenTax: 0 };
+      const visTax = Math.max(0, (Number(inv.tax) || 0) - adj.hiddenTax);
+      return visTax > 0.005 ? `<tr><td style="font-size:12px;color:${textMid};padding:3px 0">Tax</td><td align="right" style="font-size:12px;color:${textDark};padding:3px 0">${fmtInner(visTax)}</td></tr>` : '';
+    })()}
     <tr><td style="font-family:${fontHead};font-size:14px;color:${mahogany};text-transform:uppercase;letter-spacing:.1em;padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">Total</td>
         <td align="right" style="font-family:${fontHead};font-size:18px;color:${mahogany};padding:10px 0 4px;border-top:1px solid ${textDark};font-weight:700">${fmtInner(inv.total)}</td></tr>
   </table>
@@ -34716,11 +34852,14 @@ async function exportInvoicePDF(invId) {
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
   const due = Math.max(0, (inv.total||0) - paid);
   // Items-only subtotal (excludes credit reconciliation lines, which
-  // render as their own Credit rows below).
+  // render as their own Credit rows below, and client-hidden lines —
+  // their pair nets to zero incl. tax, see invClientHiddenAdjustments).
   const itemsSubtotal = (inv.lineItems||[])
-    .filter(l => l._reconType !== 'credit')
+    .filter(l => l._reconType !== 'credit' && !l.clientHidden)
     .reduce((s, l) => s + (parseFloat(l.qty)||1) * (parseFloat(l.price)||0), 0);
-  const creditLines = (inv.lineItems||[]).filter(l => l._reconType === 'credit');
+  const creditLines = (inv.lineItems||[]).filter(l => l._reconType === 'credit' && !l.clientHidden);
+  const hiddenAdj = invClientHiddenAdjustments(inv);
+  const visibleTax = Math.max(0, (Number(inv.tax) || 0) - hiddenAdj.hiddenTax);
 
   const totalsRows = [];
   totalsRows.push(['Subtotal', fmt(itemsSubtotal)]);
@@ -34731,7 +34870,7 @@ async function exportInvoicePDF(invId) {
     const total = (parseFloat(c.qty)||1) * (parseFloat(c.price)||0);
     totalsRows.push(['Credit · ' + (c.name || ''), fmt(total)]);
   });
-  if (inv.tax) totalsRows.push([`Tax${inv.taxRate?' ('+inv.taxRate+'%)':''}`, fmt(inv.tax)]);
+  if (visibleTax > 0.005) totalsRows.push([`Tax${inv.taxRate?' ('+inv.taxRate+'%)':''}`, fmt(visibleTax)]);
   if (inv.ccFee) totalsRows.push([`CC Fee${inv.ccFeePct?' ('+inv.ccFeePct+'%)':''}`, fmt(inv.ccFee)]);
   totalsRows.push(['TOTAL', fmt(inv.total||0)]);
   if (paid > 0) totalsRows.push(['Paid', fmt(paid)]);

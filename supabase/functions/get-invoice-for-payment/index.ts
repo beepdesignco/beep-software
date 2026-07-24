@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
 
     const { data: inv, error } = await sb
       .from('invoices')
-      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order, proposal_item_id), invoice_payments(id, date, amount, method, pending)')
+      .select('id, number, type, status, phase, sent_date, due_date, notes, note_selections, subtotal, freight, freight_taxable, discount, discount_type, discount_value, cc_fee_pct, cc_fee, tax_rate, tax, total, project_id, client_id, studio_id, watermark_mode, invoice_line_items(id, name, description, qty, price, taxable, sort_order, proposal_item_id, recon_type, client_hidden), invoice_payments(id, date, amount, method, pending)')
       .eq('payment_token', token)
       .is('deleted_at', null)
       .single();
@@ -127,6 +127,15 @@ Deno.serve(async (req) => {
     if (extra) presetParts.push(extra);
     const composedNotes = presetParts.join('\n\n');
 
+    // Client-hidden credit-covered lines: the pair (line + covering credit,
+    // which includes the line's tax share) nets to zero, so excluding both
+    // and subtracting the hidden subtotal/tax keeps the displayed numbers
+    // arithmetically consistent. Total is unchanged.
+    const hiddenNonCredit = (inv.invoice_line_items || []).filter((l: any) => l.client_hidden && l.recon_type !== 'credit');
+    const hiddenSubtotal = hiddenNonCredit.reduce((s: number, l: any) => s + (Number(l.qty) || 1) * (Number(l.price) || 0), 0);
+    const hiddenTax = hiddenNonCredit.filter((l: any) => l.taxable)
+      .reduce((s: number, l: any) => s + (Number(l.qty) || 1) * (Number(l.price) || 0), 0) * (Number(inv.tax_rate || 0) / 100);
+
     return json({
       invoice: {
         id: inv.id,
@@ -135,17 +144,18 @@ Deno.serve(async (req) => {
         sent_date: inv.sent_date,
         due_date: inv.due_date,
         notes: composedNotes,
-        subtotal: Number(inv.subtotal || 0),
+        subtotal: Math.max(0, Number(inv.subtotal || 0) - hiddenSubtotal),
         freight: Number(inv.freight || 0),
         discount: Number(inv.discount || 0),
         tax_rate: Number(inv.tax_rate || 0),
-        tax: Number(inv.tax || 0),
+        tax: Math.max(0, Number(inv.tax || 0) - Math.round(hiddenTax * 100) / 100),
         cc_fee_pct: Number(inv.cc_fee_pct || 3.5),
         total: Number(inv.total || 0),
         amount_paid: amountPaid,
         amount_due: amountDue,
         amount_pending: amountPending,
         line_items: (inv.invoice_line_items || [])
+          .filter((l: any) => !l.client_hidden)
           .slice()
           .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
           .map((l: any) => ({
