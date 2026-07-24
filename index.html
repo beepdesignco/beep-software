@@ -7982,6 +7982,7 @@ async function loadFromSupabase() {
     tasksRes, taskActivityRes, taskFieldDefsRes, taskDependenciesRes,
     payrollRunsRes,
     projectMeetingsRes,
+    clientFeesRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -8012,9 +8013,10 @@ async function loadFromSupabase() {
     sb.from('task_dependencies').select('*, tasks!task_dependencies_task_id_fkey(studio_id)'),
     sb.from('payroll_runs').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('project_meetings').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('client_fees').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes, clientFees: clientFeesRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -8101,6 +8103,7 @@ async function loadFromSupabase() {
   S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
   S.payrollRuns = (payrollRunsRes.data || []).map(dbPayrollRunToS);
   S.projectMeetings = (projectMeetingsRes.data || []).map(dbProjectMeetingToS);
+  S.clientFees = (clientFeesRes.data || []).map(dbClientFeeToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
   (vendorBrandsRes.data || []).forEach(vb => {
@@ -8388,6 +8391,7 @@ function dbFreightCategoryToS(c) {
     name: c.name || '',
     defaultMarkupPct: c.default_markup_pct,        // null preserved as null
     flatRate: c.flat_rate,                         // null = no flat-rate preset
+    isFee: !!c.is_fee,                             // revenue-only fee category
     isTaxable: !!c.is_taxable,
     sortOrder: c.sort_order || 0,
     isSystem: !!c.is_system,
@@ -8887,6 +8891,7 @@ const _sbShadow = {
   freightSettlements: new Map(),
   payrollRuns: new Map(),
   projectMeetings: new Map(),
+  clientFees: new Map(),
   estimates: new Map(),
   expenseAllocations: new Map(),
   freightActualAllocations: new Map(),
@@ -8924,6 +8929,7 @@ function captureSbShadow() {
   _sbShadow.freightSettlements = new Map((S.freightSettlements || []).map(r => [r.id, snap(r)]));
   _sbShadow.payrollRuns = new Map((S.payrollRuns || []).map(r => [r.id, snap(r)]));
   _sbShadow.projectMeetings = new Map((S.projectMeetings || []).map(m => [m.id, snap(m)]));
+  _sbShadow.clientFees = new Map((S.clientFees || []).map(f => [f.id, snap(f)]));
   _sbShadow.expenseAllocations = new Map();
   (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
     _sbShadow.expenseAllocations.set(a.id, { ...snap(a), _expenseId: e.id })));
@@ -9045,6 +9051,7 @@ function freightCategoryToDB(c, studioId) {
     // null sentinel ("use project default") is preserved; explicit 0 stays 0.
     default_markup_pct: c.defaultMarkupPct == null ? null : Number(c.defaultMarkupPct),
     flat_rate: c.flatRate == null || c.flatRate === '' ? null : Number(c.flatRate),
+    is_fee: !!c.isFee,
     is_taxable: !!c.isTaxable,
     sort_order: c.sortOrder || 0,
     is_system: !!c.isSystem,
@@ -9112,6 +9119,43 @@ function dbProjectMeetingToS(r) {
     createdBy: r.created_by || null,
     created: r.created_at,
     updated: r.updated_at,
+  };
+}
+
+function dbClientFeeToS(r) {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    proposalItemId: r.proposal_item_id || null,
+    proposalComponentId: r.proposal_component_id || null,
+    freightCategoryId: r.freight_category_id || null,
+    label: r.label || '',
+    amount: r.amount != null ? Number(r.amount) : 0,
+    taxable: !!r.taxable,
+    date: r.date || '',
+    notes: r.notes || '',
+    status: r.status || 'unbilled',
+    invoiceLineItemId: r.invoice_line_item_id || null,
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+
+function clientFeeToDB(f, studioId) {
+  return {
+    id: f.id, studio_id: studioId,
+    project_id: f.projectId,
+    proposal_item_id: f.proposalItemId || null,
+    proposal_component_id: f.proposalComponentId || null,
+    freight_category_id: f.freightCategoryId || null,
+    label: f.label || null,
+    amount: Number(f.amount || 0),
+    taxable: !!f.taxable,
+    date: f.date || null,
+    notes: f.notes || null,
+    status: f.status || 'unbilled',
+    invoice_line_item_id: f.invoiceLineItemId || null,
+    deleted_at: null,
   };
 }
 
@@ -9841,6 +9885,7 @@ async function syncToSupabase() {
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     await syncSafe('payroll_runs', new Map((S.payrollRuns||[]).map(r => [r.id, r])), _sbShadow.payrollRuns, r => payrollRunToDB(r, studioId));
     await syncSafe('project_meetings', new Map((S.projectMeetings||[]).map(m => [m.id, m])), _sbShadow.projectMeetings, m => projectMeetingToDB(m, studioId));
+    await syncSafe('client_fees', new Map((S.clientFees||[]).map(f => [f.id, f])), _sbShadow.clientFees, f => clientFeeToDB(f, studioId));
     // Three-phase to satisfy circular FKs:
     //   1. Parent (documents) without current_version_id — gives child a target
     //   2. Children (document_versions) — now their FK to parent resolves
@@ -10237,6 +10282,7 @@ let S = {
   freightSettlements: [],
   payrollRuns: [],
   projectMeetings: [],
+  clientFees: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -18148,6 +18194,39 @@ async function saveFreightActual() {
   const notes  = $c('fa-notes').value.trim();
   const recordExpense = $c('fa-record-expense').checked;
 
+  // Fee categories are REVENUE ONLY — they book no cost, so they must not
+  // enter freight_actuals (freight reconciliation would read collected-
+  // with-no-cost as a client credit). Redirect to the client_fees queue;
+  // it bills from the invoice builder's "Unbilled Fees" section.
+  const _feeCat = catId ? (S.freightCategories || []).find(c => c.id === catId && c.isFee) : null;
+  if (_feeCat) {
+    if (id) { toast('Fee categories can\'t be applied to an existing freight actual — log the fee as a new entry.'); return; }
+    if (splitOn) { toast('Fees log per item — turn off the split to log a fee.'); return; }
+    if (recordExpense) { toast('Fees are revenue only — uncheck "record as expense".'); return; }
+    const feeItem = _findItemById(itemId);
+    if (!S.clientFees) S.clientFees = [];
+    S.clientFees.push({
+      id: uid(),
+      projectId: pid,
+      proposalItemId: itemId,
+      proposalComponentId: compId,
+      freightCategoryId: catId,
+      label: `${_feeCat.name}${feeItem ? ' — ' + (feeItem.name || 'item') : ''}`,
+      amount,
+      taxable: !!_feeCat.isTaxable,
+      date,
+      notes,
+      status: 'unbilled',
+      invoiceLineItemId: null,
+      created: new Date().toISOString(),
+    });
+    save();
+    closeModal('modal-freight-actual');
+    if (typeof renderProjectDetail === 'function') renderProjectDetail();
+    toast(`${fmt(amount)} ${_feeCat.name} fee logged — bill it from the invoice builder.`);
+    return;
+  }
+
   if (!S.freightActuals) S.freightActuals = [];
   if (!S.expenses) S.expenses = [];
 
@@ -25472,6 +25551,12 @@ function renderFreightCategoriesList() {
           style="width:70px;font-size:11px;text-align:right;padding:5px 8px"
           onchange="updateFreightCategoryField('${c.id}','flatRate', this.value === '' ? null : parseFloat(this.value))">
       </div>
+      <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-mid);cursor:pointer;user-select:none" title="Fee category: logging in this category bills the client REVENUE ONLY — no cost is booked and it stays out of freight cost/reconciliation math. Queues under 'Unbilled Fees' in the invoice builder.">
+        <input type="checkbox" ${c.isFee ? 'checked' : ''}
+          onchange="updateFreightCategoryField('${c.id}','isFee',this.checked)"
+          style="accent-color:var(--russet);width:13px;height:13px">
+        Fee
+      </label>
       <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-mid);cursor:pointer;user-select:none">
         <input type="checkbox" ${c.isTaxable ? 'checked' : ''}
           onchange="updateFreightCategoryField('${c.id}','isTaxable',this.checked)"
@@ -28434,6 +28519,44 @@ function renderExpenseReports() {
 
   html += '</div>';
   body.innerHTML = html;
+}
+
+// Unbilled Fees → invoice line. Pure revenue: line price = fee amount,
+// taxable per the fee's category, attributed to the fee's item so item
+// P&L picks it up as revenue with no cost side.
+function addFeeToInvoice(feeId, checked) {
+  if (!checked) {
+    _invLineItems = _invLineItems.filter(l => l._feeId !== feeId);
+    renderInvLineItems(); recalcInvoice(); renderInvoiceBuilder();
+    return;
+  }
+  const fee = (S.clientFees || []).find(f => f.id === feeId);
+  if (!fee) return;
+  if (_invLineItems.some(l => l._feeId === feeId)) return;
+  _invLineItems.push({
+    id: uid(),
+    name: fee.label || 'Fee',
+    description: fee.notes || '',
+    qty: 1,
+    price: Number(fee.amount) || 0,
+    taxable: !!fee.taxable,
+    proposalItemId: fee.proposalItemId || null,
+    proposalComponentId: fee.proposalComponentId || null,
+    manual: true,
+    _feeId: fee.id,
+  });
+  renderInvLineItems(); recalcInvoice(); renderInvoiceBuilder();
+}
+
+function deleteClientFee(feeId) {
+  const fee = (S.clientFees || []).find(f => f.id === feeId);
+  if (!fee) return;
+  if (!confirm(`Delete this ${fmt(fee.amount)} fee? It was never billed.`)) return;
+  _invLineItems = _invLineItems.filter(l => l._feeId !== feeId);
+  S.clientFees = (S.clientFees || []).filter(f => f.id !== feeId);
+  save();
+  renderInvLineItems(); recalcInvoice(); renderInvoiceBuilder();
+  toast('Fee deleted.');
 }
 
 function addExpenseToInvoice(expId, checked) {
@@ -32174,6 +32297,26 @@ function renderInvoiceBuilder() {
     </div>`;
   }
 
+  // Unbilled Fees — revenue-only charges (receiving fees etc.) logged via
+  // fee-flagged freight categories. Checking one adds a taxable revenue
+  // line attributed to the fee's item; no cost is ever booked.
+  const feeRows = (S.clientFees || []).filter(f => f.projectId === inv.projectId && f.status === 'unbilled');
+  if (feeRows.length) {
+    html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--russet);margin-bottom:10px">Unbilled Fees</div>
+      ${feeRows.map(f => {
+        const alreadyAdded = _invLineItems.some(l => l._feeId === f.id);
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:var(--rs);opacity:${alreadyAdded?'0.4':'1'}" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" ${alreadyAdded?'checked disabled':''} onchange="addFeeToInvoice('${f.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0;cursor:pointer">
+          <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(f.label || 'Fee')}${f.date ? ` <span style="font-size:10px;color:var(--text-light)">· ${escH(f.date)}</span>` : ''}</span>
+          <span style="font-size:9px;font-family:var(--font-b);color:#1a6e3a">Fee</span>
+          <span style="font-size:11px;font-family:var(--font-b);color:var(--pecan);white-space:nowrap">${fmt(f.amount)}</span>
+          <button onclick="deleteClientFee('${f.id}')" title="Delete this fee (was never billed)" style="background:none;border:none;cursor:pointer;color:var(--text-light);font-size:11px;padding:0 2px">✕</button>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
   // Unbilled-time banner (shown when this project has any time entries with status='unbilled')
   const unbilled = unbilledTimeForProject(inv.projectId);
   if (unbilled.length) {
@@ -33597,7 +33740,26 @@ function saveInvoiceFromBuilder(status, opts = {}) {
         e.billedAt = null;
       }
     });
+    // Same revert for client fees: removing a fee line puts the fee back
+    // in the Unbilled Fees queue.
+    (S.clientFees || []).forEach(f => {
+      if (f.invoiceLineItemId && removedSavedLineIds.includes(f.invoiceLineItemId)) {
+        f.status = 'unbilled';
+        f.invoiceLineItemId = null;
+      }
+    });
   }
+
+  // Flip client fees to billed — the durable link (fee.invoiceLineItemId)
+  // is set NOW, at line creation time, not on a downstream event.
+  _invLineItems.forEach(l => {
+    if (!l._feeId) return;
+    const fee = (S.clientFees || []).find(f => f.id === l._feeId);
+    if (fee && fee.status !== 'billed') {
+      fee.status = 'billed';
+      fee.invoiceLineItemId = l.id;
+    }
+  });
 
   // Flip queued time entries to billed now that the invoice is being persisted.
   // _timeEntryIds is local-only metadata on each line; we consume it here to
