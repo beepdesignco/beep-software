@@ -35,6 +35,14 @@ Deno.serve(async (req) => {
     if (invErr) return json({ error: 'Auth check failed: ' + invErr.message }, 403);
     if (!inv) return json({ error: 'Invoice not found or forbidden.' }, 404);
 
+    // The invoice SELECT above only proves view_financials — sending is a
+    // separate permission. Enforce can_send_invoices server-side (the UI
+    // gate alone is bypassable by calling this function directly).
+    const { data: canSend, error: permErr } = await sbUser
+      .rpc('has_permission', { target_studio: inv.studio_id, perm: 'send_invoices' });
+    if (permErr) return json({ error: 'Permission check failed: ' + permErr.message }, 403);
+    if (!canSend) return json({ error: 'You don\'t have permission to send invoices.' }, 403);
+
     // Send via Resend
     const fromAddr = from_email || 'hello@beepdesign.co';
     const fromDisplay = from_name ? `${from_name} <${fromAddr}>` : fromAddr;
