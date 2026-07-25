@@ -4838,15 +4838,30 @@ function _pmDetailHasActiveInput() {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable === true;
 }
 
+let _pmRerenderRetry = null;
+
 function _pmRealtimeRerender(pid, changedItemId) {
   // Data in S is already patched. Re-render whatever the user is viewing —
   // the item LIST or the open item DETAIL (notes/activity, links, tracking,
   // fields) — so another user's change shows without a reload.
   if (S.currentView !== 'project-detail') return;
   if (pid != null && S._detailProjectId !== pid) return;
-  if (_pmDetailHasActiveInput()) return;                 // protect an active edit
   // If viewing a single item's detail, only refresh when THAT item changed.
   if (_pmDetailItem && changedItemId && _pmDetailItem.itemId !== changedItemId) return;
+  if (_pmDetailHasActiveInput()) {
+    // DEFER, don't drop: the old code returned here and the update never
+    // surfaced until a manual refresh (cost actuals / deltas going stale
+    // while a field was focused). Poll until the field is released, then
+    // render once.
+    if (_pmRerenderRetry) return;
+    _pmRerenderRetry = setInterval(() => {
+      if (_pmDetailHasActiveInput()) return;
+      clearInterval(_pmRerenderRetry);
+      _pmRerenderRetry = null;
+      if (S.currentView === 'project-detail' && typeof renderProjectDetail === 'function') renderProjectDetail();
+    }, 1200);
+    return;
+  }
   if (typeof renderProjectDetail === 'function') renderProjectDetail();
 }
 
@@ -10348,6 +10363,13 @@ function saveUIState() {
       expReportTab: typeof _expReportTab   !== 'undefined' ? _expReportTab   : null,
       currentInvoiceId: typeof _currentInvoiceId !== 'undefined' ? _currentInvoiceId : null,
       currentDocId:     typeof _currentDocId     !== 'undefined' ? _currentDocId     : null,
+      // Deep location within a project so refresh restores the exact page,
+      // not just "some project": active tab, budget sub-tab, open PM item.
+      projDetailTab: typeof _projDetailTab !== 'undefined' ? _projDetailTab : null,
+      pdBudgetTab:   typeof _pdBudgetTab   !== 'undefined' ? _pdBudgetTab   : null,
+      pmDetailItem:  typeof _pmDetailItem  !== 'undefined' && _pmDetailItem ? _pmDetailItem : null,
+      workTab:       typeof _workTab       !== 'undefined' ? _workTab       : null,
+      docsTab:       typeof _docsTab       !== 'undefined' ? _docsTab       : null,
     };
     localStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
   } catch(e){}
@@ -10369,6 +10391,14 @@ function restoreUIState() {
     if (s.expReportTab && typeof _expReportTab !== 'undefined') _expReportTab = s.expReportTab;
     if (s.currentInvoiceId && typeof _currentInvoiceId !== 'undefined') _currentInvoiceId = s.currentInvoiceId;
     if (s.currentDocId     && typeof _currentDocId     !== 'undefined') _currentDocId     = s.currentDocId;
+    if (s.projDetailTab && typeof _projDetailTab !== 'undefined') _projDetailTab = s.projDetailTab;
+    if (s.pdBudgetTab   && typeof _pdBudgetTab   !== 'undefined') _pdBudgetTab   = s.pdBudgetTab;
+    if (s.pmDetailItem  && typeof _pmDetailItem  !== 'undefined') _pmDetailItem  = s.pmDetailItem;
+    if (s.workTab       && typeof _workTab       !== 'undefined') _workTab       = s.workTab;
+    if (s.docsTab       && typeof _docsTab       !== 'undefined') _docsTab       = s.docsTab;
+    // Boot diagnostic — if a refresh ever lands somewhere unexpected, this
+    // one line tells us exactly what was saved vs. what got applied.
+    console.log('[BEEP restore]', { view: s.currentView, project: s._detailProjectId, tab: s.projDetailTab, item: s.pmDetailItem ? s.pmDetailItem.itemId : null });
   } catch(e){}
 }
  
@@ -11192,6 +11222,7 @@ function setProjDetailTab(tab) {
   _projDetailTab = tab;
   $a('[data-pdtab]').forEach(b => b.classList.toggle('active', b.dataset.pdtab === tab));
   renderProjectDetail();
+  if (typeof saveUIState === 'function') saveUIState();
 }
 
 function renderProjectDetail() {
@@ -11939,10 +11970,12 @@ function openPMItemDetail(pid, spId, itemId) {
   _pmDetailTask = null;
   _pmDetailItem = {pid, spId, itemId};
   renderProjectDetail();
+  if (typeof saveUIState === 'function') saveUIState();
 }
 
 function closePMItemDetail() {
   _pmDetailItem = null;
+  if (typeof saveUIState === 'function') saveUIState();
   // If we were brought here from Work, jump straight back instead of dropping
   // the user on the items list of the project they may not have wanted to be in.
   if (S._returnView === 'work') {
@@ -15622,6 +15655,7 @@ function getProjectFreightReconState(pid) {
 function setProjBudgetTab(tab) {
   _pdBudgetTab = tab;
   renderProjectDetail();
+  if (typeof saveUIState === 'function') saveUIState();
 }
 
 function renderPDBudget(proj, pid) {
@@ -39095,6 +39129,12 @@ async function init() {
       }
     } else if (S.currentView === 'project-detail') {
       if (S._detailProjectId && (S.projects||[]).some(p => p.id === S._detailProjectId)) {
+        // Restored open-item pointer must still resolve (item may have been
+        // deleted by another user since the last visit).
+        if (typeof _pmDetailItem !== 'undefined' && _pmDetailItem) {
+          const sp = S.proposals[_pmDetailItem.pid]?.spaces?.find(s => s.id === _pmDetailItem.spId);
+          if (!sp || !(sp.items || []).some(i => i.id === _pmDetailItem.itemId)) _pmDetailItem = null;
+        }
         showView('project-detail');
       } else {
         showView('projects');
