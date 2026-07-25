@@ -26558,6 +26558,7 @@ function renderTeamMemberRow(m, isOwner) {
     ['can_view_vendor_credentials',  'view vendor logins'],
     ['can_edit_project_settings',    'edit project/tax settings', true],
     ['can_edit_invoices',            'edit invoices', true],
+    ['can_run_payroll',              'run payroll'],
   ];
   const permPills = perms.map(([k, label, defaultOn]) => {
     const active = m.role === 'owner' || (defaultOn ? m[k] !== false : !!m[k]);
@@ -37867,8 +37868,8 @@ function renderTime() {
   const newBtn = $c('tt-new-entry-btn');
   if (newBtn) newBtn.style.display = canAdjustTimeEntries() ? '' : 'none';
 
-  // Payroll tab: owner-only. Hide the tab and bounce non-owners off it.
-  const isOwnerTT = AUTH.member?.role === 'owner';
+  // Payroll tab: owner or a member granted can_run_payroll (bookkeeper).
+  const isOwnerTT = AUTH.member?.role === 'owner' || !!AUTH.member?.can_run_payroll;
   const payrollTab = $c('tt-tab-payroll');
   if (payrollTab) payrollTab.style.display = isOwnerTT ? '' : 'none';
   if (_currentTimeTab === 'payroll' && !isOwnerTT) _currentTimeTab = 'summary';
