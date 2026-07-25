@@ -119,6 +119,9 @@ function render(d) {
   const si = studio.info || {};
   const isPaid = invoice.amount_due <= 0.01;
   const ccFee = invoice.cc_fee_pct || 3.5;
+  // §6 payment methods config from the edge function. Absent (older cached
+  // response) = everything enabled, matching prior behavior.
+  const pm = d.payment_methods || { ach: true, card: true, wire: true, check: true, custom: [] };
 
   const brandHtml = `
     <div class="brand">
@@ -218,30 +221,50 @@ function render(d) {
       </table>
     </div>` : '';
 
+  const customBtns = (pm.custom || []).map((m, i) =>
+    m.kind === 'link'
+      ? `<button class="method-btn" onclick="window.open('${escH(m.content)}','_blank')">
+          <div class="title">${escH(m.label)}</div>
+          <div class="sub">Opens in a new tab</div>
+          <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
+        </button>`
+      : `<button class="method-btn" onclick="showInfo('custom-${i}')">
+          <div class="title">${escH(m.label)}</div>
+          <div class="sub">Payment instructions</div>
+          <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
+        </button>`).join('');
+  const customInfoBoxes = (pm.custom || []).map((m, i) =>
+    m.kind === 'link' ? '' : `
+      <div id="info-custom-${i}" style="display:none;margin-top:14px">
+        <div class="info-box">${escH(m.content || '')}</div>
+        <div style="font-size:10px;color:var(--text-light);margin-top:6px;font-weight:400">Reference invoice ${escH(invoice.number||'')} with your payment. Marked paid once received.</div>
+      </div>`).join('');
+
   const methodsHtml = isPaid ? '' : `
     <div class="pay-section">
       <div class="lbl">Choose how to pay</div>
       <div class="methods">
-        <button class="method-btn" onclick="pay('ach')">
+        ${pm.ach !== false ? `<button class="method-btn" onclick="pay('ach')">
           <div class="title">ACH Bank Transfer</div>
           <div class="sub">Direct from your bank account</div>
           <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
-        </button>
-        <button class="method-btn" onclick="pay('card')">
+        </button>` : ''}
+        ${pm.card !== false ? `<button class="method-btn" onclick="pay('card')">
           <div class="title">Credit / Debit Card</div>
           <div class="sub">Card processing fee applies</div>
           <div class="fee">+${ccFee}% · ${fmt(invoice.amount_due * (1 + ccFee/100))} total</div>
-        </button>
-        ${si.wireInstructions ? `<button class="method-btn" onclick="showInfo('wire')">
+        </button>` : ''}
+        ${pm.wire !== false && si.wireInstructions ? `<button class="method-btn" onclick="showInfo('wire')">
           <div class="title">Wire Transfer</div>
           <div class="sub">Direct bank wire</div>
           <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
         </button>` : ''}
-        ${si.checkMailingAddress ? `<button class="method-btn" onclick="showInfo('check')">
+        ${pm.check !== false && si.checkMailingAddress ? `<button class="method-btn" onclick="showInfo('check')">
           <div class="title">Mail a Check</div>
           <div class="sub">Pay by mail</div>
           <div class="fee" style="color:#1a6e3a">No fee · ${fmt(invoice.amount_due)}</div>
         </button>` : ''}
+        ${customBtns}
       </div>
       <div id="info-wire" style="display:none;margin-top:14px">
         <div class="info-box">${escH(si.wireInstructions || '')}</div>
@@ -251,6 +274,7 @@ function render(d) {
         <div class="info-box">${escH(si.checkMailingAddress || '')}</div>
         <div style="font-size:10px;color:var(--text-light);margin-top:6px;font-weight:400">Reference invoice ${escH(invoice.number||'')} on your check. Marked paid once received.</div>
       </div>
+      ${customInfoBoxes}
     </div>`;
 
   document.getElementById('root').innerHTML = `
@@ -319,10 +343,11 @@ function render(d) {
 }
 
 function showInfo(which) {
-  const w = document.getElementById('info-wire');
-  const c = document.getElementById('info-check');
-  if (w) w.style.display = which === 'wire'  ? '' : 'none';
-  if (c) c.style.display = which === 'check' ? '' : 'none';
+  // Toggle the matching info box; hide all the others (wire, check, and
+  // any custom-method instruction boxes).
+  document.querySelectorAll('[id^="info-"]').forEach(el => {
+    el.style.display = el.id === 'info-' + which ? '' : 'none';
+  });
 }
 
 async function pay(method) {

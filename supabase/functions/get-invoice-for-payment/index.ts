@@ -136,7 +136,33 @@ Deno.serve(async (req) => {
     const hiddenTax = hiddenNonCredit.filter((l: any) => l.taxable)
       .reduce((s: number, l: any) => s + (Number(l.qty) || 1) * (Number(l.price) || 0), 0) * (Number(inv.tax_rate || 0) / 100);
 
+    // §6 payment methods config — which built-in methods this invoice TYPE
+    // offers, plus custom methods scoped to it. Absent config = all enabled
+    // (matches the admin UI defaults).
+    const pmCfg: any = studioInfo.paymentMethodsConfig || {};
+    const perType: any = (pmCfg.perType || {})[inv.type] || null;
+    const builtinEnabled = (key: string) => {
+      if (!perType) return true;
+      const v = perType[key];
+      return v === undefined ? true : !!v;
+    };
+    const customMethods = (Array.isArray(pmCfg.custom) ? pmCfg.custom : [])
+      .filter((m: any) => !Array.isArray(m.invoiceTypes) || m.invoiceTypes.includes(inv.type))
+      .map((m: any) => ({
+        id: m.id,
+        label: m.label || 'Payment method',
+        kind: m.kind === 'link' ? 'link' : 'info',
+        content: m.content || '',
+      }));
+
     return json({
+      payment_methods: {
+        ach: builtinEnabled('ach'),
+        card: builtinEnabled('card'),
+        wire: builtinEnabled('wire'),
+        check: builtinEnabled('check'),
+        custom: customMethods,
+      },
       invoice: {
         id: inv.id,
         number: inv.number,
