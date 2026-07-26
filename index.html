@@ -1524,6 +1524,7 @@ tr:hover .row-btns { opacity:1; }
         </div>
       </div>
  
+      <div id="otc-host" style="padding:0 30px"></div>
       <div style="padding:0 30px;border-bottom:1px solid var(--border);background:var(--cloud);display:flex;gap:0">
         <button class="view-tab active" data-ttab="summary" onclick="setTimeTab('summary')" style="margin-bottom:-1px">Summary</button>
         <button class="view-tab" data-ttab="log" onclick="setTimeTab('log')" style="margin-bottom:-1px">Full Log</button>
@@ -4781,6 +4782,8 @@ function subscribeTimeRealtime() {
         }
         if (typeof _resumeRunningTimer === 'function') _resumeRunningTimer();
         if (S.currentView === 'time' && typeof renderTime === 'function') renderTime();
+        // Keep the admin "On the clock" widget live on the dashboard too.
+        if (S.currentView === 'dashboard' && typeof renderDashboard === 'function') renderDashboard();
       })
     .subscribe();
 }
@@ -33943,26 +33946,17 @@ async function sendInvoiceEmail() {
   const project = S.projects.find(p => p.id === inv.projectId);
   const studio = getStudio();
 
-  // Inline the logo as base64 so the email is self-contained (no external Supabase domain fetch
-  // that Gmail/etc flag as suspicious per Resend's domain-alignment guidance).
+  // Logo as a long-lived hosted URL. The old base64-inline approach was a
+  // deliverability OWN-GOAL: Gmail refuses to render data: URIs (clients
+  // saw a broken logo) and base64-bloated HTML scores worse with spam
+  // filters. A remote https image is proxied by Gmail and renders fine.
   let logoUrl = null;
   if (studio.logo?.storagePath) {
     try {
-      const signedUrl = await getFileSignedUrl(studio.logo.storagePath);
-      const r = await fetch(signedUrl);
-      if (r.ok) {
-        const blob = await r.blob();
-        if (blob.size < 200 * 1024) { // keep email slim
-          logoUrl = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.readAsDataURL(blob);
-          });
-        } else {
-          console.warn('[send-email] logo too large to inline, skipping to avoid email bloat');
-        }
-      }
-    } catch (e) { console.warn('[send-email] logo inline failed:', e); }
+      const { data, error } = await sb.storage.from('files')
+        .createSignedUrl(studio.logo.storagePath, 60 * 60 * 24 * 365); // 1 year
+      if (!error && data?.signedUrl) logoUrl = data.signedUrl;
+    } catch (e) { console.warn('[send-email] logo url failed:', e); }
   }
 
   const isReceipt = _sendType === 'receipt';
@@ -36726,6 +36720,7 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
       <div style="flex:1;height:1px;background:var(--border)"></div>
       <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic">As of ${escH(today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))} · ignores date filter</div>
     </div>
+    ${typeof renderOnTheClock === 'function' ? renderOnTheClock() : ''}
     <div style="display:grid;grid-template-columns:repeat(${pendingInTransit > 0.005 ? 5 : 4},1fr);gap:14px;margin-bottom:20px">
       <div style="${cardStyle}">
         <div style="${statNum};color:#c47a20">${fmt(outstanding)}</div>
@@ -38058,9 +38053,55 @@ function collectFilteredTimeEntries() {
   return entries.sort((a,b) => (entryDateLabel(b) || '').localeCompare(entryDateLabel(a) || ''));
 }
 
+// ── "On the clock" — live running timers, visible to the owner (and
+// can_run_payroll members). Reads server-backed running entries
+// (ended_at null) which cross-device timer sync keeps current via
+// realtime, so this shows phone AND web timers, everyone's. Elapsed
+// ticks every 30s without a full re-render.
+let _otcTicker = null;
+
+function _otcElapsed(iso) {
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+function _otcTick() {
+  document.querySelectorAll('[data-otc-start]').forEach(el => {
+    el.textContent = _otcElapsed(el.dataset.otcStart);
+  });
+}
+
+function renderOnTheClock() {
+  const isAdmin = AUTH.member?.role === 'owner' || !!AUTH.member?.can_run_payroll;
+  if (!isAdmin) return '';
+  const running = (S.timeEntries || []).filter(e => !e.endedAt && e.startedAt);
+  if (!running.length) return '';
+  if (!_otcTicker) _otcTicker = setInterval(_otcTick, 30000);
+  const rows = running.map(e => {
+    const who = _taskMembers().find(m => m.user_id === e.userId)?.display_name || 'Member';
+    const projName = e.projectId
+      ? ((S.projects || []).find(p => p.id === e.projectId)?.name || 'Project')
+      : 'Internal · business';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+        <span style="width:8px;height:8px;border-radius:50%;background:#1a6e3a;box-shadow:0 0 0 3px rgba(26,110,58,0.18);flex-shrink:0"></span>
+        <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark)"><strong>${escH(who)}</strong> <span style="color:var(--text-mid)">· ${escH(projName)}</span></span>
+        <span style="margin-left:auto;font-family:var(--font-h);font-weight:800;font-size:13px;color:#1a6e3a" data-otc-start="${escH(e.startedAt)}">${_otcElapsed(e.startedAt)}</span>
+      </div>`;
+  }).join('');
+  return `
+    <div style="background:rgba(26,110,58,0.05);border:1px solid rgba(26,110,58,0.28);border-radius:var(--rl);padding:10px 16px;margin:12px 0">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#1a6e3a;margin-bottom:4px">⏱ On the clock — live</div>
+      ${rows}
+    </div>`;
+}
+
 function renderTime() {
   const body = $c('tt-body');
   if (!body) return;
+  const otcHost = $c('otc-host');
+  if (otcHost) otcHost.innerHTML = renderOnTheClock();
   // Hide the "+ Log Time" button when admin has disabled manual entries
   // for this user.
   const newBtn = $c('tt-new-entry-btn');
