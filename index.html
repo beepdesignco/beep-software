@@ -3317,9 +3317,12 @@ tr:hover .row-btns { opacity:1; }
         <label class="fl">Notes <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
         <textarea class="fi" id="ca-notes" style="min-height:64px;resize:vertical" placeholder="PO details, discounts, partial shipments…"></textarea>
       </div>
-      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
-        <button class="btn btn-secondary" onclick="closeModal('modal-cost-actual')">Cancel</button>
-        <button class="btn btn-primary" onclick="saveCostActualEntry()">Save</button>
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px">
+        <button class="btn btn-ghost" id="ca-remove-btn" onclick="removeCostActualEntry()" style="color:#b94a3a;display:none">Remove entry</button>
+        <div style="display:flex;gap:8px;margin-left:auto">
+          <button class="btn btn-secondary" onclick="closeModal('modal-cost-actual')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveCostActualEntry()">Save</button>
+        </div>
       </div>
     </div>
 
@@ -13860,6 +13863,7 @@ function openCostActualModal(pid, spId, itemId, compId) {
   _caCtx = { pid, spId, itemId, compId: compId || null };
   const editing = !!(target.costActual || '').toString().trim();
   $c('ca-title').textContent = editing ? 'Edit Cost Actual' : 'Log Cost Actual';
+  $c('ca-remove-btn').style.display = editing ? '' : 'none';
   $c('ca-target-label').textContent = comp ? `${item.name || 'Item'} · ${comp.name || 'component'}` : (item.name || 'Item');
   $c('ca-amount').value = target.costActual || '';
   const meta = target.costActualMeta || {};
@@ -13936,6 +13940,30 @@ function caApplyStatus() {
 function caSkipStatus() {
   _caCtx = null;
   closeModal('modal-cost-actual');
+}
+
+// Un-log an entry entirely (guarded — this pulls the amount out of every
+// budget/dashboard calculation). Leaves an activity trail of what was
+// removed so the history survives.
+function removeCostActualEntry() {
+  const ctx = _caCtx;
+  if (!ctx) return;
+  const item = _getItem(ctx.pid, ctx.spId, ctx.itemId);
+  if (!item) return;
+  const comp = ctx.compId ? (item.components || []).find(c => c.id === ctx.compId) : null;
+  const target = comp || item;
+  const prev = (target.costActual || '').toString().trim();
+  if (!prev) { closeModal('modal-cost-actual'); return; }
+  if (!confirm(`Remove this cost actual entry (${fmt(parse$(prev))})?\n\nThe amount comes out of all budget and dashboard math. The removal is noted in the item's activity history.`)) return;
+  target.costActual = '';
+  target.costActualMeta = null;
+  if (!comp) item.costActualPaymentMethod = '';
+  _appendItemActivity(item, `Removed cost actual (was ${fmt(parse$(prev))})${comp ? ` on ${comp.name || 'component'}` : ''}`);
+  save();
+  _caCtx = null;
+  closeModal('modal-cost-actual');
+  renderProjectDetail();
+  toast('Cost actual entry removed.');
 }
 
 function renderPMItemDetailPanel(pid, spId, itemId) {
