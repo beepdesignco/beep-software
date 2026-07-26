@@ -3292,6 +3292,51 @@ tr:hover .row-btns { opacity:1; }
 <!-- U-Freight Phase 4 Part 1. Vendor freight bill logged against a
      specific item (or component). Optional toggle creates a linked
      nonbillable expense so the cost lands in P&L. -->
+<div class="overlay" id="modal-cost-actual">
+  <div class="modal" style="width:480px">
+    <button class="modal-x" onclick="closeModal('modal-cost-actual')">✕</button>
+    <div class="modal-title" id="ca-title">Log Cost Actual</div>
+    <div id="ca-target-label" style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin:-6px 0 12px"></div>
+
+    <div id="ca-step-entry">
+      <div class="frow">
+        <div class="fg" style="flex:1">
+          <label class="fl">Actual Cost Paid</label>
+          <input type="text" class="fi" id="ca-amount" placeholder="$0.00">
+        </div>
+        <div class="fg" style="flex:1">
+          <label class="fl">Paid With</label>
+          <select class="fi fsel" id="ca-card"><option value="">— Select —</option></select>
+        </div>
+      </div>
+      <div class="fg">
+        <label class="fl">Ordered By</label>
+        <select class="fi fsel" id="ca-ordered-by"></select>
+      </div>
+      <div class="fg">
+        <label class="fl">Notes <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional)</span></label>
+        <textarea class="fi" id="ca-notes" style="min-height:64px;resize:vertical" placeholder="PO details, discounts, partial shipments…"></textarea>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="btn btn-secondary" onclick="closeModal('modal-cost-actual')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCostActualEntry()">Save</button>
+      </div>
+    </div>
+
+    <div id="ca-step-status" style="display:none">
+      <div style="font-family:var(--font-b);font-size:13px;color:var(--text-dark);margin-bottom:10px">Cost actual saved ✓ &nbsp;Update the status too?</div>
+      <div class="fg">
+        <label class="fl">Status</label>
+        <select class="fi fsel" id="ca-status"></select>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="btn btn-secondary" onclick="caSkipStatus()">Skip</button>
+        <button class="btn btn-primary" onclick="caApplyStatus()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="modal-sub-delta">
   <div class="modal" style="width:520px">
     <button class="modal-x" onclick="applySubDelta('keep')">✕</button>
@@ -8836,6 +8881,7 @@ function dbItemToS(it) {
     additionalCharges: it.additional_charges || [],
     costActual: it.cost_actual != null ? String(it.cost_actual) : '',
     costActualPaymentMethod: it.cost_actual_payment_method || '',
+    costActualMeta: it.cost_actual_meta || null,
     vendorOrderNumber: it.vendor_order_number || '',
     // §1 freight overhaul: snapshot frozen at estimate approval. Never
     // overwritten by later edits; the live freight_charge can drift,
@@ -8894,6 +8940,7 @@ function dbCompToS(c) {
     adjustMarkup: c.adjust_markup,
     clientPriceOverride: c.client_price_override,
     costActual: c.cost_actual != null ? String(c.cost_actual) : '',
+    costActualMeta: c.cost_actual_meta || null,
     additionalCosts: c.additional_costs || [],
     files: c.files || [],
     links: c.links || [],
@@ -9629,6 +9676,7 @@ function itemToDB(it) {
     additional_charges: it.additionalCharges || [],
     cost_actual: _parseMoney(it.costActual),
     cost_actual_payment_method: it.costActualPaymentMethod || null,
+    cost_actual_meta: it.costActualMeta || null,
     vendor_order_number: it.vendorOrderNumber || null,
     freight_approved_snapshot: it.freightApprovedSnapshot || null,
     additional_costs: it.additionalCosts || [],
@@ -9667,6 +9715,7 @@ function componentToDB(c) {
     adjust_markup: c.adjustMarkup ?? null,
     client_price_override: c.clientPriceOverride == null || c.clientPriceOverride === '' ? null : _parseMoney(c.clientPriceOverride),
     cost_actual: _parseMoney(c.costActual),
+    cost_actual_meta: c.costActualMeta || null,
     additional_costs: c.additionalCosts || [],
     files: c.files || [], links: c.links || [],
     tracking_numbers: c.trackingNumbers || [], activity_log: c.activityLog || [],
@@ -11109,18 +11158,11 @@ function renderCostTrackingCard(pid, spId, itemId, item) {
     <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:10px">Cost Tracking</div>
     ${_renderItemCostReconStrip(item, pid)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div>
+      <div style="grid-column:1/-1">
         <label class="fl">Actual Cost Paid</label>
-        <input type="text" class="fi" value="${escH(item.costActual||'')}" placeholder="$0.00" onchange="savePMField('${pid}','${spId}','${itemId}','costActual',this.value.trim())">
+        ${_renderCostActualEntryBlock(item, null, pid, spId, itemId, false)}
       </div>
       ${freightRow}
-      <div>
-        <label class="fl">Paid With</label>
-        <select class="fi fsel" onchange="savePMField('${pid}','${spId}','${itemId}','costActualPaymentMethod',this.value)" ${item.costActual ? '' : 'disabled style="opacity:0.6"'}>
-          <option value="">${item.costActual ? '— Select payment method —' : 'Enter Actual Cost first'}</option>
-          ${(S.paymentCards||[]).map(c => `<option value="${escH(c)}" ${item.costActualPaymentMethod === c ? 'selected' : ''}>${escH(c)}</option>`).join('')}
-        </select>
-      </div>
       <div>
         <label class="fl">Vendor Order #</label>
         <input type="text" class="fi" value="${escH(item.vendorOrderNumber||'')}" placeholder="+ Add vendor order number" onchange="savePMField('${pid}','${spId}','${itemId}','vendorOrderNumber',this.value.trim())">
@@ -13776,6 +13818,126 @@ function applySubDelta(mode) {
   toast(summary + '.');
 }
 
+// ═══ Cost-actual logging modal ═══
+// "Log cost actual" replaces the old always-editable text box. The modal
+// captures amount + card + who ordered (defaults to the logger) + notes,
+// then offers a one-click status update. Writes to the SAME
+// costActual / costActualPaymentMethod fields all dashboard + budget math
+// reads — metadata rides alongside in costActualMeta (additive; historical
+// entries render in view mode with just their amount).
+
+let _caCtx = null;
+
+function _renderCostActualEntryBlock(item, comp, pid, spId, itemId, compact) {
+  const target = comp || item;
+  const logged = !!(target.costActual || '').toString().trim();
+  const openCall = `openCostActualModal('${pid}','${spId}','${itemId}'${comp ? `,'${comp.id}'` : ''})`;
+  if (!logged) {
+    return `<button class="btn btn-secondary btn-sm" onclick="${openCall}" style="font-size:${compact ? '10' : '11'}px">+ Log cost actual</button>`;
+  }
+  const meta = target.costActualMeta || {};
+  const card = comp ? (meta.card || '') : (item.costActualPaymentMethod || meta.card || '');
+  const who = meta.orderedByUserId ? (_taskMembers().find(m => m.user_id === meta.orderedByUserId)?.display_name || '') : '';
+  const when = meta.loggedAt ? new Date(meta.loggedAt).toLocaleDateString() : '';
+  const subParts = [card, who ? 'ordered by ' + who : '', when].filter(Boolean).join(' · ');
+  return `
+    <div style="border:1px solid var(--border);border-radius:var(--rs);padding:${compact ? '8px 10px' : '10px 12px'};background:rgba(var(--text-rgb),0.02)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span style="font-family:var(--font-h);font-weight:800;font-size:${compact ? '13' : '15'}px;color:var(--text-dark)">${fmt(parse$(target.costActual))}</span>
+        <button class="btn btn-ghost btn-sm" onclick="${openCall}" style="font-size:10px;padding:2px 8px">Edit entry</button>
+      </div>
+      ${subParts ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-mid);margin-top:2px">${escH(subParts)}</div>` : ''}
+      ${meta.notes ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:3px;white-space:pre-wrap">${escH(meta.notes)}</div>` : ''}
+    </div>`;
+}
+
+function openCostActualModal(pid, spId, itemId, compId) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const comp = compId ? (item.components || []).find(c => c.id === compId) : null;
+  if (compId && !comp) return;
+  const target = comp || item;
+  _caCtx = { pid, spId, itemId, compId: compId || null };
+  const editing = !!(target.costActual || '').toString().trim();
+  $c('ca-title').textContent = editing ? 'Edit Cost Actual' : 'Log Cost Actual';
+  $c('ca-target-label').textContent = comp ? `${item.name || 'Item'} · ${comp.name || 'component'}` : (item.name || 'Item');
+  $c('ca-amount').value = target.costActual || '';
+  const meta = target.costActualMeta || {};
+  const curCard = comp ? (meta.card || '') : (item.costActualPaymentMethod || meta.card || '');
+  $c('ca-card').innerHTML = '<option value="">— Select —</option>' +
+    (S.paymentCards || []).map(c => `<option value="${escH(c)}" ${curCard === c ? 'selected' : ''}>${escH(c)}</option>`).join('');
+  const orderedBy = meta.orderedByUserId || AUTH.user?.id || '';
+  $c('ca-ordered-by').innerHTML = _taskMembers().map(m =>
+    `<option value="${escH(m.user_id)}" ${m.user_id === orderedBy ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
+  $c('ca-notes').value = meta.notes || '';
+  $c('ca-step-entry').style.display = '';
+  $c('ca-step-status').style.display = 'none';
+  $c('modal-cost-actual').classList.add('open');
+  setTimeout(() => $c('ca-amount').focus(), 80);
+}
+
+function saveCostActualEntry() {
+  const ctx = _caCtx;
+  if (!ctx) return;
+  const item = _getItem(ctx.pid, ctx.spId, ctx.itemId);
+  if (!item) return;
+  const comp = ctx.compId ? (item.components || []).find(c => c.id === ctx.compId) : null;
+  const target = comp || item;
+  const amtRaw = $c('ca-amount').value.trim();
+  if (!amtRaw) { toast('Enter the actual cost paid.'); $c('ca-amount').focus(); return; }
+  const card = $c('ca-card').value || '';
+  const orderedByUserId = $c('ca-ordered-by').value || null;
+  const notes = $c('ca-notes').value.trim();
+  const prevMeta = target.costActualMeta || {};
+  target.costActual = amtRaw;
+  if (!comp) item.costActualPaymentMethod = card;
+  target.costActualMeta = {
+    notes,
+    card,
+    orderedByUserId,
+    loggedAt: prevMeta.loggedAt || new Date().toISOString(),
+    loggedByUserId: prevMeta.loggedByUserId || AUTH.user?.id || null,
+    updatedAt: new Date().toISOString(),
+  };
+  const orderedName = orderedByUserId ? (_taskMembers().find(m => m.user_id === orderedByUserId)?.display_name || '') : '';
+  _appendItemActivity(item, `Logged cost actual ${fmt(parse$(amtRaw))}${comp ? ` on ${comp.name || 'component'}` : ''}${card ? ` · ${card}` : ''}${orderedName ? ` · ordered by ${orderedName}` : ''}${notes ? ` — ${notes}` : ''}`);
+  save();
+  renderProjectDetail();
+  // Step 2 — offer a status update. Component entries update the
+  // component's status, unless statuses are grouped to the item.
+  const grouped = comp && item.groupComponents && !isExcludedFromGrouping(comp);
+  const forComp = !!(comp && !grouped);
+  const list = forComp
+    ? (isShippingComp(comp) ? SHIPPING_STATUSES : STATUSES)
+    : getAllPipelineStatuses();
+  const cur = forComp ? (comp.status || 'proposed') : (item.status || 'proposed');
+  $c('ca-status').innerHTML = list.map(s => `<option value="${s.v}" ${s.v === cur ? 'selected' : ''}>${escH(s.l)}</option>`).join('');
+  _caCtx._statusForComp = forComp;
+  $c('ca-step-entry').style.display = 'none';
+  $c('ca-step-status').style.display = '';
+}
+
+function caApplyStatus() {
+  const ctx = _caCtx;
+  if (!ctx) { closeModal('modal-cost-actual'); return; }
+  const v = $c('ca-status').value;
+  // Route through the existing field savers so status side-effects
+  // (activity, grouped-component sync, re-render) stay consistent.
+  if (ctx._statusForComp && ctx.compId) {
+    saveCompField(ctx.pid, ctx.spId, ctx.itemId, ctx.compId, 'status', v);
+  } else {
+    savePMField(ctx.pid, ctx.spId, ctx.itemId, 'status', v);
+  }
+  _caCtx = null;
+  closeModal('modal-cost-actual');
+  toast('Status updated.');
+}
+
+function caSkipStatus() {
+  _caCtx = null;
+  closeModal('modal-cost-actual');
+}
+
 function renderPMItemDetailPanel(pid, spId, itemId) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === itemId);
@@ -13881,8 +14043,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
               </div>
               <div>
                 <label class="fl">Actual Cost</label>
-                <input type="text" class="fi" value="${escH(c.costActual||'')}" placeholder="$0.00"
-                  onchange="saveCompField('${pid}','${spId}','${itemId}','${c.id}','costActual',this.value.trim())" style="font-size:11px;padding:4px 6px">
+                ${_renderCostActualEntryBlock(item, c, pid, spId, itemId, true)}
               </div>
             </div>
             ${cHasActual ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:baseline">
