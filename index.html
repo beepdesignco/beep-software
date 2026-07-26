@@ -36052,6 +36052,13 @@ function dashRangeToDates(sel) {
   return { from, to };
 }
 
+// Local-date YMD — toISOString() converts to UTC, which shifts month
+// boundaries a day for anyone east of UTC. Always format with local getters.
+function _dashLocalYMD(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function onDashRangeChange() {
   const sel = $c('dash-range').value;
   const fromEl = $c('dash-from');
@@ -36059,12 +36066,12 @@ function onDashRangeChange() {
   if (sel === 'custom') {
     fromEl.style.display = '';
     toEl.style.display = '';
-    if (!fromEl.value) fromEl.value = new Date().toISOString().slice(0,10);
-    if (!toEl.value) toEl.value = new Date().toISOString().slice(0,10);
+    if (!fromEl.value) fromEl.value = _dashLocalYMD(new Date());
+    if (!toEl.value) toEl.value = _dashLocalYMD(new Date());
   } else {
     const { from, to } = dashRangeToDates(sel);
-    fromEl.value = from.toISOString().slice(0,10);
-    toEl.value = to.toISOString().slice(0,10);
+    fromEl.value = _dashLocalYMD(from);
+    toEl.value = _dashLocalYMD(to);
     fromEl.style.display = 'none';
     toEl.style.display = 'none';
   }
@@ -36487,21 +36494,22 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
   });
   const cashOnHand = cashIn - cashOut;
 
-  // Per-project profitability (all-time): revenue collected − expenses paid
-  // − cost actuals on items. Sorted by profit desc.
+  // Per-project profitability (all-time) — driven by the SAME canonical
+  // helper the project Budget → Overview uses (getProjectBaselineProfit),
+  // so the dashboard can never disagree with the project pages. The old
+  // ad-hoc math here double-counted billable expenses, read $0 cost for
+  // constructed items (their cost lives in components), and ignored
+  // freight actuals + tagged expenses.
   const projStats = projsInScope.map(p => {
-    let rev = 0, costs = 0;
-    invs.filter(i => i.projectId === p.id && i.status !== 'cancelled').forEach(inv => {
-      (inv.payments || []).filter(pp => !pp.pending).forEach(pp => { rev += Number(pp.amount || 0); });
-    });
-    exps.filter(e => e.projectId === p.id).forEach(e => { costs += parseFloat(e.cost) || 0; });
-    const prop = S.proposals[p.id];
-    (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
-      const c = parseFloat(it.costActual) || 0;
-      costs += c;
-    }));
-    return { project: p, revenue: rev, costs, profit: rev - costs };
-  }).filter(r => r.revenue > 0 || r.costs > 0);
+    const b = getProjectBaselineProfit(p.id);
+    return {
+      project: p,
+      revenue: b.collected,
+      costs: b.rawActuals + b.adjacentRaw + b.nonBillableExpenses,
+      profit: b.profit,
+      margin: b.margin,
+    };
+  }).filter(r => r.revenue > 0.005 || r.costs > 0.005);
   projStats.sort((a, b) => b.profit - a.profit);
   const topMargin = projStats.slice(0, 5);
 
@@ -36519,6 +36527,7 @@ function _buildDashboardRightNow(clientId, projectId, cardStyle, statNum, statLa
     <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--white);margin-bottom:4px">
       <div style="font-family:var(--font-h);font-weight:900;font-size:14px;color:var(--text-light);width:18px">${i+1}</div>
       <div style="flex:1;min-width:0;font-family:var(--font-b);font-size:12px;color:var(--text-dark);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(r.project.name || '(unnamed)')}</div>
+      ${r.revenue > 0.005 ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">${r.margin.toFixed(0)}%</div>` : ''}
       <div style="font-family:var(--font-h);font-weight:700;font-size:13px;color:${r.profit >= 0 ? '#1a6e3a' : '#b33'}">${fmt(r.profit)}</div>
     </div>`).join('') : '<div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No projects with revenue yet.</div>';
 
@@ -36669,8 +36678,8 @@ function renderDashboard() {
   const toEl = $c('dash-to');
   if (sel !== 'custom' && (!fromEl.value || !toEl.value)) {
     const { from, to } = dashRangeToDates(sel);
-    fromEl.value = from.toISOString().slice(0,10);
-    toEl.value = to.toISOString().slice(0,10);
+    fromEl.value = _dashLocalYMD(from);
+    toEl.value = _dashLocalYMD(to);
   }
 
   const { from, to, clientId, projectId } = dashGetFilters();
@@ -36709,16 +36718,30 @@ function renderDashboard() {
   // For each payment we proportionally split into pre-tax vs tax based on
   // the parent invoice's total composition (since payments don't carry
   // their own tax split). Excludes pending=true ACH and refunds (negative).
+  // Pre-tax fraction of an invoice, clamped to [0,1]. Fully-credited
+  // invoices (total ≤ 0) count as all pre-tax — consistent with the tax
+  // report's treatment (credit was real, already-taxed money).
+  const _preTaxFrac = (inv) => {
+    const total = Number(inv.total || 0);
+    if (total <= 0) return 1;
+    const preTax = (Number(inv.subtotal||0)) + (Number(inv.freight||0)) + (Number(inv.adjacentCharges||0)) - (Number(inv.discount||0));
+    return Math.min(1, Math.max(0, preTax / total));
+  };
+  // Settled collections for receivable math: non-pending POSITIVE payments.
+  // Refunds (negative) are intentionally excluded — a refund must not make
+  // an invoice look "more unpaid" and reopen receivable.
+  const _settledPositive = (inv) => (inv.payments || [])
+    .filter(p => !p.pending && Number(p.amount || 0) > 0)
+    .reduce((s, p) => s + Number(p.amount || 0), 0);
+
   let revPreTaxPaid = 0, revPreTaxUnpaid = 0;
   let revPostTaxPaid = 0, revPostTaxUnpaid = 0;
   (S.invoices || []).forEach(inv => {
-    if (inv.status === 'cancelled') return;
+    if (inv.status === 'cancelled' || inv.status === 'draft') return;
     if (clientId && inv.clientId !== clientId) return;
     if (projectId && inv.projectId !== projectId) return;
     if (clientId && inv.projectId && !clientProjectIds.has(inv.projectId)) return;
-    const total = Number(inv.total || 0);
-    const preTax = (Number(inv.subtotal||0)) + (Number(inv.freight||0)) + (Number(inv.adjacentCharges||0)) - (Number(inv.discount||0));
-    const preTaxFrac = total > 0 ? preTax / total : 0;
+    const preTaxFrac = _preTaxFrac(inv);
     (inv.payments || []).forEach(p => {
       if (p.pending) return;
       if (!p.date) return;
@@ -36732,28 +36755,29 @@ function renderDashboard() {
   });
   // Unpaid invoiced — invoices sent in period that aren't fully paid.
   activeInvoices.forEach(inv => {
-    const paid = (inv.payments||[]).filter(p => !p.pending).reduce((s,p) => s + Number(p.amount||0), 0);
     const total = Number(inv.total || 0);
-    const unpaidAmt = Math.max(0, total - paid);
+    const unpaidAmt = Math.max(0, total - _settledPositive(inv));
     if (unpaidAmt <= 0) return;
-    const preTax = (Number(inv.subtotal||0)) + (Number(inv.freight||0)) + (Number(inv.adjacentCharges||0)) - (Number(inv.discount||0));
-    const preTaxFrac = total > 0 ? preTax / total : 0;
+    const preTaxFrac = _preTaxFrac(inv);
     revPostTaxUnpaid += unpaidAmt;
     revPreTaxUnpaid  += unpaidAmt * preTaxFrac;
   });
 
-  // ── Outstanding & Overdue
+  // ── Outstanding & Overdue (same conventions as the Right Now zone:
+  // settled = non-pending positive payments; overdue = strictly past the
+  // due date, parsed at local noon so due-today is never "overdue").
+  const todayMidTP = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
   let outstandingPreTax = 0, outstandingGross = 0;
   let overduePreTax = 0, overdueGross = 0;
   activeInvoices.forEach(inv => {
     if (inv.status === 'paid') return;
-    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
-    const total = inv.total || 0;
-    const unpaidFrac = total > 0 ? Math.max(0, 1 - paid / total) : 0;
+    const total = Number(inv.total || 0);
+    const unpaidFrac = total > 0 ? Math.max(0, 1 - _settledPositive(inv) / total) : 0;
     const preTax = (inv.subtotal||0) + (inv.freight||0) + (inv.adjacentCharges||0) - (inv.discount||0);
     outstandingPreTax += preTax * unpaidFrac;
     outstandingGross += total * unpaidFrac;
-    const isOverdue = inv.dueDate && new Date(inv.dueDate) < today;
+    const isOverdue = inv.dueDate &&
+      Math.floor((todayMidTP - new Date(inv.dueDate + 'T12:00:00').getTime()) / 86400000) > 0;
     if (isOverdue) {
       overduePreTax += preTax * unpaidFrac;
       overdueGross += total * unpaidFrac;
@@ -36772,17 +36796,18 @@ function renderDashboard() {
   const projectsInScope = (S.projects||[]).filter(p =>
     (!clientId || p.clientId === clientId) && (!projectId || p.id === projectId)
   );
+  // Item cost actuals carry no payment date, so a period-scoped "profit"
+  // that subtracts them from one month of cash is meaningless (the old
+  // version stranded lifetime costs against a slice of revenue — the
+  // number the owner flagged as nonsense). The honest split:
+  //   • cashInPeriod — payments received in the period (cash basis)
+  //   • baseline.*  — PROJECT-LIFETIME collected/costs/profit from the
+  //     same canonical helper the Budget tab uses
   const profitRows = projectsInScope.map(p => {
-    // Invoiced — invoices SENT in period (sent-date filter still applies).
-    const projInvoices = activeInvoices.filter(inv => inv.projectId === p.id);
-    const invoicedTotal = projInvoices.reduce((s,inv) => s + (inv.total||0), 0);
-    // Revenue Paid — cash basis per spec: sum payments whose date falls in
-    // the period across ANY invoice for this project (not just invoices sent
-    // in period). Excludes pending=true ACH and refunds (negative amounts).
-    let revenuePaid = 0;
+    let cashInPeriod = 0;
     (S.invoices || []).forEach(inv => {
       if (inv.projectId !== p.id) return;
-      if (inv.status === 'cancelled') return;
+      if (inv.status === 'cancelled' || inv.status === 'draft') return;
       (inv.payments || []).forEach(pp => {
         if (pp.pending) return;
         if (!pp.date) return;
@@ -36790,55 +36815,28 @@ function renderDashboard() {
         if (d < from || d > to) return;
         const amt = Number(pp.amount || 0);
         if (amt <= 0) return;
-        revenuePaid += amt;
+        cashInPeriod += amt;
       });
     });
+    const b = getProjectBaselineProfit(p.id);
+    const lifetimeCosts = b.rawActuals + b.adjacentRaw + b.nonBillableExpenses;
+    return {
+      project: p,
+      cashInPeriod,
+      collected: b.collected,
+      lifetimeCosts,
+      profit: b.profit,
+      margin: b.margin,
+    };
+  }).filter(r => r.cashInPeriod > 0.005 || r.collected > 0.005 || r.lifetimeCosts > 0.005);
 
-    // Actual cost from PM items (proposal items in proposal spaces)
-    const prop = S.proposals?.[p.id];
-    let actualCost = 0;
-    if (prop) {
-      (prop.spaces||[]).forEach(sp => {
-        (sp.items||[]).forEach(it => {
-          if (it.allowance) return;
-          actualCost += calcItemActualCost(it);
-        });
-      });
-    }
-    const nonBillableExp = (S.expenses||[])
-      .filter(e => e.projectId === p.id && e.expenseType === 'nonbillable' && e.date && (() => { const d = new Date(e.date+'T12:00:00'); return d >= from && d <= to; })())
-      .reduce((s,e) => s + parse$(e.cost), 0);
-
-    const profit = revenuePaid - actualCost - nonBillableExp;
-    return { project: p, revenuePaid, invoicedTotal, actualCost, nonBillableExp, profit };
-  }).filter(r => r.invoicedTotal > 0 || r.actualCost > 0 || r.revenuePaid > 0 || r.nonBillableExp > 0);
-
-  // ── Taxes by state
-  const taxByState = {};
-  activeInvoices.forEach(inv => {
-    const proj = S.projects.find(p => p.id === inv.projectId);
-    const state = proj?.state || proj?.city || 'Unknown';
-    const rate = inv.taxRate || 0;
-    const key = state + (rate ? ' ('+rate+'%)' : '');
-    if (!taxByState[key]) taxByState[key] = { state, rate, taxInvoiced:0, taxCollected:0, nonTaxedSubtotal:0 };
-    const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
-    const total = inv.total || 0;
-    // total <= 0 means the invoice was fully covered by credit lines —
-    // there is nothing left to collect, so its tax counts as collected
-    // (the credit was real money already received). Treating it as 0
-    // would silently drop that tax from the filing numbers.
-    const paidFrac = total > 0 ? Math.min(1, paid / total) : 1;
-    taxByState[key].taxInvoiced += (inv.tax||0);
-    taxByState[key].taxCollected += (inv.tax||0) * paidFrac;
-    // Non-taxed subtotal: sum of non-taxable line items + non-taxable freight
-    const nonTaxed = (inv.lineItems||[]).reduce((s,l) => {
-      if (l.taxable) return s;
-      return s + (parseFloat(l.qty)||1) * (parseFloat(l.price)||0);
-    }, 0)
-      + ((inv.freightTaxable || !inv.freight) ? 0 : inv.freight)
-      + Math.max(0, (inv.adjacentCharges || 0) - (inv.adjacentChargesTaxableAmount || 0));
-    taxByState[key].nonTaxedSubtotal += nonTaxed;
-  });
+  // ── Taxes by state — driven by the SAME cash-basis engine as the Tax
+  // tab (buildSalesTaxReport: payment-date filtered, pending excluded), so
+  // the Overview and the Tax tab can never show two different "tax
+  // collected" numbers again. The old ad-hoc block here was sent-date
+  // scoped and scaled by an all-time paid fraction that included
+  // unsettled ACH.
+  const _dashTaxReport = buildSalesTaxReport(from, to, { clientId, projectId });
 
   // ── Render
   const cardStyle = 'background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border)';
@@ -36849,7 +36847,8 @@ function renderDashboard() {
   const thStyle = 'text-align:left;padding:8px 10px;font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);border-bottom:2px solid var(--border)';
   const tdStyle = 'padding:8px 10px;border-bottom:1px solid var(--border)';
 
-  const totalProfit = profitRows.reduce((s,r) => s + r.profit, 0);
+  const totalProfit = profitRows.reduce((s,r) => s + r.profit, 0);      // lifetime baseline (scoped)
+  const totalCashInPeriod = profitRows.reduce((s,r) => s + r.cashInPeriod, 0);
 
   let html = '<div style="padding:20px 30px 40px">';
 
@@ -36881,8 +36880,8 @@ function renderDashboard() {
     </div>
     <div style="${cardStyle}">
       <div style="${statNum};color:${totalProfit>=0?'#1a6e3a':'#b33'}">${fmt(totalProfit)}</div>
-      <div style="${statLabel}">Net Profit</div>
-      <div style="${statSub}">Revenue paid − actual cost − non-billable</div>
+      <div style="${statLabel}">Baseline Profit — project lifetime</div>
+      <div style="${statSub}">Collected − raw costs − non-billable, all-time for the projects in scope. Item costs carry no date, so profit can't honestly be sliced by period — cash received this period is the period number: <strong>${fmt(totalCashInPeriod)}</strong></div>
     </div>
   </div>`;
 
@@ -36960,35 +36959,40 @@ function renderDashboard() {
 
   html += '</div>';
 
-  // Profit per project
+  // Project profitability — each column states its basis. Cash received is
+  // the only period-scoped column; everything else is project lifetime from
+  // getProjectBaselineProfit (same as Budget → Overview).
   html += `<div style="${cardStyle};margin-bottom:20px">
-    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);margin-bottom:12px">Profit by Project</div>`;
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Project Profitability</div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">Baseline = raw money in − money out (no markup/credit reasoning) · matches each project's Budget page</div>
+    </div>`;
   if (profitRows.length) {
     html += `<table style="${tblStyle}">
       <thead><tr>
         <th style="${thStyle}">Project</th>
-        <th style="${thStyle}" class="amt">Invoiced</th>
-        <th style="${thStyle}" class="amt">Revenue Paid</th>
-        <th style="${thStyle}" class="amt">Actual Cost</th>
-        <th style="${thStyle}" class="amt">Non-Billable Exp</th>
-        <th style="${thStyle}" class="amt">Profit</th>
+        <th style="${thStyle}" class="amt">Cash Received <span style="font-weight:400;text-transform:none">(this period)</span></th>
+        <th style="${thStyle}" class="amt">Collected <span style="font-weight:400;text-transform:none">(lifetime)</span></th>
+        <th style="${thStyle}" class="amt">Costs <span style="font-weight:400;text-transform:none">(lifetime)</span></th>
+        <th style="${thStyle}" class="amt">Baseline Profit</th>
+        <th style="${thStyle}" class="amt">Margin</th>
       </tr></thead>
       <tbody>
         ${profitRows.sort((a,b) => b.profit - a.profit).map(r => `<tr>
           <td style="${tdStyle}">${escH(r.project.name||'—')}</td>
-          <td style="${tdStyle};text-align:right">${fmt(r.invoicedTotal)}</td>
-          <td style="${tdStyle};text-align:right;color:#1a6e3a;font-weight:600">${fmt(r.revenuePaid)}</td>
-          <td style="${tdStyle};text-align:right">${fmt(r.actualCost)}</td>
-          <td style="${tdStyle};text-align:right">${fmt(r.nonBillableExp)}</td>
+          <td style="${tdStyle};text-align:right;color:#1a6e3a;font-weight:600">${r.cashInPeriod > 0.005 ? fmt(r.cashInPeriod) : '—'}</td>
+          <td style="${tdStyle};text-align:right">${fmt(r.collected)}</td>
+          <td style="${tdStyle};text-align:right">${fmt(r.lifetimeCosts)}</td>
           <td style="${tdStyle};text-align:right;font-weight:700;color:${r.profit>=0?'#1a6e3a':'#b33'}">${fmt(r.profit)}</td>
+          <td style="${tdStyle};text-align:right;color:${r.profit>=0?'#1a6e3a':'#b33'}">${r.collected > 0.005 ? r.margin.toFixed(1) + '%' : '—'}</td>
         </tr>`).join('')}
         <tr>
           <td style="${tdStyle};font-weight:700">Total</td>
-          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.invoicedTotal,0))}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(profitRows.reduce((s,r)=>s+r.revenuePaid,0))}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.actualCost,0))}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.nonBillableExp,0))}</td>
+          <td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(totalCashInPeriod)}</td>
+          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.collected,0))}</td>
+          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.lifetimeCosts,0))}</td>
           <td style="${tdStyle};text-align:right;font-weight:800;color:${totalProfit>=0?'#1a6e3a':'#b33'}">${fmt(totalProfit)}</td>
+          <td style="${tdStyle}"></td>
         </tr>
       </tbody>
     </table>`;
@@ -36997,37 +37001,41 @@ function renderDashboard() {
   }
   html += '</div>';
 
-  // Tax by state
+  // Tax by state — cash-basis rows straight from buildSalesTaxReport, the
+  // same engine the Tax tab files from. One source of truth for tax.
   html += `<div style="${cardStyle};margin-bottom:20px">
-    <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany);margin-bottom:12px">Taxes by State</div>`;
-  const taxRows = Object.values(taxByState).filter(t => t.taxInvoiced > 0 || t.nonTaxedSubtotal > 0);
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Taxes by State</div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">Cash basis · payments received in period · matches the Tax tab</div>
+    </div>`;
+  const taxRows = Object.values(_dashTaxReport.stateData || {}).filter(t => t.tax > 0.005 || t.taxable > 0.005 || t.nontaxable > 0.005);
   if (taxRows.length) {
     html += `<table style="${tblStyle}">
       <thead><tr>
         <th style="${thStyle}">State</th>
         <th style="${thStyle}">Rate</th>
-        <th style="${thStyle}" class="amt">Tax Invoiced</th>
+        <th style="${thStyle}" class="amt">Taxable Sold</th>
         <th style="${thStyle}" class="amt">Tax Collected</th>
-        <th style="${thStyle}" class="amt">Non-Taxed Sold</th>
+        <th style="${thStyle}" class="amt">Non-Taxable Sold</th>
       </tr></thead>
       <tbody>
         ${taxRows.map(t => `<tr>
           <td style="${tdStyle}">${escH(t.state)}</td>
-          <td style="${tdStyle}">${t.rate}%</td>
-          <td style="${tdStyle};text-align:right;color:var(--text-mid)">${fmt(t.taxInvoiced)}</td>
-          <td style="${tdStyle};text-align:right;font-weight:600;color:#1a6e3a">${fmt(t.taxCollected)}</td>
-          <td style="${tdStyle};text-align:right">${fmt(t.nonTaxedSubtotal)}</td>
+          <td style="${tdStyle}">${t.canonicalRate != null ? t.canonicalRate + '%' : (t.effectiveRate ? t.effectiveRate.toFixed(2) + '%' : '—')}</td>
+          <td style="${tdStyle};text-align:right">${fmt(t.taxable)}</td>
+          <td style="${tdStyle};text-align:right;font-weight:600;color:#1a6e3a">${fmt(t.tax)}</td>
+          <td style="${tdStyle};text-align:right">${fmt(t.nontaxable)}</td>
         </tr>`).join('')}
         <tr>
           <td colspan="2" style="${tdStyle};font-weight:700">Total</td>
-          <td style="${tdStyle};text-align:right;font-weight:700;color:var(--text-mid)">${fmt(taxRows.reduce((s,t)=>s+t.taxInvoiced,0))}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(taxRows.reduce((s,t)=>s+t.taxCollected,0))}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(taxRows.reduce((s,t)=>s+t.nonTaxedSubtotal,0))}</td>
+          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(_dashTaxReport.totals.taxable)}</td>
+          <td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(_dashTaxReport.totals.tax)}</td>
+          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(_dashTaxReport.totals.nontaxable)}</td>
         </tr>
       </tbody>
     </table>`;
   } else {
-    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic">No tax activity in this range.</div>';
+    html += '<div style="font-size:12px;color:var(--text-light);font-style:italic">No tax collected in this range.</div>';
   }
   html += '</div>';
 
@@ -37121,13 +37129,13 @@ function renderDashboardCharts({ from, to, activeInvoices, expByType, profitRows
 
   // ── Revenue by project (doughnut)
   const projCtx = document.getElementById('dash-chart-proj');
-  const topProjects = profitRows.slice().sort((a,b) => b.revenuePaid - a.revenuePaid).filter(r => r.revenuePaid > 0).slice(0, 8);
+  const topProjects = profitRows.slice().sort((a,b) => b.cashInPeriod - a.cashInPeriod).filter(r => r.cashInPeriod > 0).slice(0, 8);
   if (projCtx && topProjects.length) {
     _dashChartInstances.proj = new Chart(projCtx, {
       type: 'doughnut',
       data: {
         labels: topProjects.map(r => r.project.name || '—'),
-        datasets: [{ data: topProjects.map(r => r.revenuePaid), backgroundColor: topProjects.map((_,i) => palette[i % palette.length]), borderWidth: 1, borderColor: '#fff' }],
+        datasets: [{ data: topProjects.map(r => r.cashInPeriod), backgroundColor: topProjects.map((_,i) => palette[i % palette.length]), borderWidth: 1, borderColor: '#fff' }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -37219,48 +37227,50 @@ function renderReportContent(from, to) {
 
   const paidInvs = invoices.filter(i => i.status === 'paid');
   const sentInvs = invoices.filter(i => i.status === 'sent' || i.status === 'partial');
+  // Cash basis: only settled (non-pending) payments count as received.
   const allPayments = invoices.flatMap(i => (i.payments||[]).filter(p => {
+    if (p.pending || !p.date) return false;
     const pd = new Date(p.date+'T12:00:00');
     return pd >= from && pd <= to;
   }));
 
-  // Revenue = total of all payments received in range
+  // Revenue = settled payments received in range (refunds net naturally)
   const revenue = allPayments.reduce((s,p) => s + (p.amount||0), 0);
 
-  // Outstanding = total of sent/partial invoices
-  const outstanding = sentInvs.reduce((s,i) => {
-    const paid = (i.payments||[]).reduce((s2,p) => s2 + (p.amount||0), 0);
-    return s + (i.total - paid);
-  }, 0);
+  // Receivable math uses settled positive collections only — pending ACH
+  // hasn't cleared, and refunds must not reopen receivable.
+  const _settledPos = (i) => (i.payments||[])
+    .filter(p => !p.pending && Number(p.amount||0) > 0)
+    .reduce((s2,p) => s2 + Number(p.amount||0), 0);
 
-  // Overdue
-  const today = new Date();
-  const overdueInvs = sentInvs.filter(i => i.dueDate && new Date(i.dueDate) < today);
-  const overdue = overdueInvs.reduce((s,i) => {
-    const paid = (i.payments||[]).reduce((s2,p) => s2 + (p.amount||0), 0);
-    return s + (i.total - paid);
-  }, 0);
+  // Outstanding = total of sent/partial invoices
+  const outstanding = sentInvs.reduce((s,i) => s + Math.max(0, (i.total||0) - _settledPos(i)), 0);
+
+  // Overdue — strictly past due (local-noon parse; due today isn't overdue)
+  const _todayMidRC = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+  const overdueInvs = sentInvs.filter(i => i.dueDate &&
+    Math.floor((_todayMidRC - new Date(i.dueDate + 'T12:00:00').getTime()) / 86400000) > 0);
+  const overdue = overdueInvs.reduce((s,i) => s + Math.max(0, (i.total||0) - _settledPos(i)), 0);
 
   // Total invoiced in period — exclude drafts AND cancelled (cancelled
   // invoices are voided, they don't count as revenue/invoiced totals).
   const totalInvoiced = invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').reduce((s,i) => s + i.total, 0);
 
-  // Tax collected by state
+  // Tax collected by state — same cash-basis engine as the Tax tab.
   const taxByState = {};
-  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').forEach(inv => {
-    const proj = S.projects.find(p => p.id === inv.projectId);
-    const state = proj?.state || 'Unknown';
-    const rate = inv.taxRate || 0;
-    const key = state + (rate ? ' ('+rate+'%)' : '');
-    if (inv.tax > 0) {
-      if (!taxByState[key]) taxByState[key] = { state, rate, tax:0, taxPaid:0, subtotal:0 };
-      const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
-      const paidFrac = (inv.total||0) > 0 ? Math.min(1, paid / inv.total) : 0;
-      taxByState[key].tax += inv.tax;
-      taxByState[key].taxPaid += inv.tax * paidFrac;
-      taxByState[key].subtotal += inv.subtotal;
-    }
-  });
+  {
+    const rep = buildSalesTaxReport(from, to, {});
+    Object.values(rep.stateData || {}).forEach(s => {
+      if (s.tax <= 0.005 && s.taxable <= 0.005) return;
+      taxByState[s.state] = {
+        state: s.state,
+        rate: s.canonicalRate != null ? s.canonicalRate : (s.effectiveRate ? Number(s.effectiveRate.toFixed(2)) : 0),
+        tax: s.tax,          // collected in period (cash)
+        taxPaid: s.tax,
+        subtotal: s.taxable, // taxable sold (cash)
+      };
+    });
+  }
 
   // Revenue by project — exclude drafts AND cancelled.
   const revByProject = {};
@@ -37324,15 +37334,14 @@ function renderReportContent(from, to) {
   const taxEntries = Object.values(taxByState);
   if (taxEntries.length) {
     html += `<table style="${tblStyle}">
-      <thead><tr><th style="${thStyle}">State</th><th style="${thStyle}">Rate</th><th style="${thStyle}" class="amt">Taxable</th><th style="${thStyle}" class="amt">Tax Invoiced</th><th style="${thStyle}" class="amt">Tax Collected</th></tr></thead>
+      <thead><tr><th style="${thStyle}">State</th><th style="${thStyle}">Rate</th><th style="${thStyle}" class="amt">Taxable Sold</th><th style="${thStyle}" class="amt">Tax Collected</th></tr></thead>
       <tbody>${taxEntries.map(t => `<tr>
         <td style="${tdStyle}">${escH(t.state)}</td>
         <td style="${tdStyle}">${t.rate}%</td>
         <td style="${tdStyle};text-align:right">${fmt(t.subtotal)}</td>
-        <td style="${tdStyle};text-align:right;color:var(--text-mid)">${fmt(t.tax)}</td>
         <td style="${tdStyle};text-align:right;font-weight:600;color:#1a6e3a">${fmt(t.taxPaid)}</td>
       </tr>`).join('')}
-      <tr><td colspan="3" style="${tdStyle};font-weight:700">Total</td><td style="${tdStyle};text-align:right;color:var(--text-mid)">${fmt(taxEntries.reduce((s,t)=>s+t.tax,0))}</td><td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(taxEntries.reduce((s,t)=>s+t.taxPaid,0))}</td></tr>
+      <tr><td colspan="3" style="${tdStyle};font-weight:700">Total</td><td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(taxEntries.reduce((s,t)=>s+t.taxPaid,0))}</td></tr>
       </tbody></table>`;
   } else {
     html += '<div style="font-size:12px;color:var(--text-light);font-style:italic">No tax data for this period.</div>';
