@@ -1441,6 +1441,7 @@ tr:hover .row-btns { opacity:1; }
       <div class="contacts-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input type="text" class="search-in" id="contact-search" placeholder="Search companies or people…" oninput="renderContacts()" style="flex:1;min-width:200px">
         <div id="contacts-type-filters" style="display:flex;align-items:center;gap:6px"></div>
+        <div id="contacts-offering-filters" style="display:flex;align-items:center;gap:6px"></div>
         <div id="contacts-brand-filters" style="display:flex;align-items:center;gap:6px"></div>
         <div class="view-tabs">
           <button class="view-tab active" data-csort="company" onclick="setContactsSort('company')">By Company</button>
@@ -23391,6 +23392,7 @@ function toggleClientView() {
 let _contactsSort = 'company';      // 'company' | 'person'
 let _contactsTypeFilter = null;     // null = all, else vendor_type string
 let _contactsBrandFilter = null;    // null = all, else brand id
+let _contactsOfferingFilter = null; // null = all, else offering category string — flips to brand-focused results
 
 function setContactsSort(sort) {
   _contactsSort = sort;
@@ -23410,6 +23412,11 @@ function setContactsBrandFilter(brandId) {
   renderContacts();
 }
 
+function setContactsOfferingFilter(cat) {
+  _contactsOfferingFilter = cat || null;
+  renderContacts();
+}
+
 // Back-compat with old code paths that called setContactTab.
 function setContactTab(tab) { renderContacts(); }
 
@@ -23424,11 +23431,19 @@ function renderContacts() {
   // Filter chips: every distinct vendor_type in use, plus an "All" chip.
   const typesInUse = Array.from(new Set(vendors.map(v => v.vendorType).filter(Boolean))).sort();
   renderContactsTypeFilters(typesInUse);
+  renderContactsOfferingFilters();
   renderContactsBrandFilters();
 
   // Matches query?
   const matches = (txt) => !query || String(txt || '').toLowerCase().includes(query);
   const matchesRecord = (parts) => !query || parts.some(matches);
+
+  // Offering filter active → brand-focused results (which brands offer
+  // this category, and which vendors carry each brand).
+  if (_contactsOfferingFilter && _contactsSort !== 'person') {
+    body.innerHTML = renderContactsBrandResults(query, matchesRecord);
+    return;
+  }
 
   if (_contactsSort === 'person') {
     // Flat list of people — every vendor_contact + any legacy S.contacts entries not yet migrated.
@@ -23514,6 +23529,72 @@ function renderContactsBrandFilters() {
       <option value="">All brands</option>
       ${brands.map(b => `<option value="${b.id}" ${_contactsBrandFilter === b.id ? 'selected' : ''}>${escH(b.name)}</option>`).join('')}
     </select>`;
+}
+
+// Offerings filter — brand-first discovery: "who offers lighting?" Lists
+// every offering category in use across brands (plus the studio's
+// configured list). Picking one flips the results to a brand-focused view.
+function renderContactsOfferingFilters() {
+  const host = $c('contacts-offering-filters');
+  if (!host) return;
+  const cats = new Set((S.categories || []).map(c => String(c)));
+  (S.brands || []).forEach(b => (b.categories || []).forEach(c => cats.add(String(c))));
+  const list = [...cats].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  if (!list.length) { host.innerHTML = ''; return; }
+  const active = _contactsOfferingFilter !== null;
+  host.innerHTML =
+    `<select class="fi fsel" style="${_contactsFilterSelStyle};border-color:${active ? 'var(--russet)' : 'var(--border)'};color:${active ? 'var(--russet)' : 'var(--text-mid)'}" onchange="setContactsOfferingFilter(this.value)">
+      <option value="">All offerings</option>
+      ${list.map(c => `<option value="${escH(c)}" ${_contactsOfferingFilter === c ? 'selected' : ''}>${escH(c)}</option>`).join('')}
+    </select>`;
+}
+
+// Brand-focused results for an offering filter: one card per matching
+// BRAND, with the vendor(s) that carry it. Answers "we need lighting —
+// who offers it, and who do we order through?"
+function renderContactsBrandResults(query, matchesRecord) {
+  const offering = _contactsOfferingFilter;
+  const vendorContacts = (S.vendorContacts || []);
+  let brands = (S.brands || []).filter(b => (b.categories || []).some(c => String(c) === offering));
+  if (_contactsBrandFilter) brands = brands.filter(b => b.id === _contactsBrandFilter);
+
+  const vendorsForBrand = (brandId) => {
+    const direct = (S.vendors || []).filter(v => (v.brandIds || []).includes(brandId));
+    const viaContacts = (S.vendors || []).filter(v =>
+      !direct.includes(v) && vendorContacts.some(vc => vc.vendorId === v.id && (vc.brandIds || []).includes(brandId)));
+    let vendors = [...direct, ...viaContacts];
+    if (_contactsTypeFilter) vendors = vendors.filter(v => v.vendorType === _contactsTypeFilter);
+    return vendors.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  };
+
+  const rows = brands.map(b => ({ brand: b, vendors: vendorsForBrand(b.id) }))
+    .filter(r => !query || matchesRecord([r.brand.name, r.brand.notes, ...r.vendors.map(v => v.name)]))
+    .sort((a, b) => (a.brand.name || '').localeCompare(b.brand.name || ''));
+
+  if (!rows.length) {
+    return `<div class="no-results">No brands offer “${escH(offering)}”${query ? ' matching that search' : ''} yet. Tag offerings on brands in Settings → Brands (or the brand editor).</div>`;
+  }
+  return `
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-bottom:12px">${rows.length} brand${rows.length === 1 ? '' : 's'} offering <strong style="color:var(--russet)">${escH(offering)}</strong> — click a vendor to open ordering details.</div>
+    <div class="contacts-grid">
+      ${rows.map(({ brand, vendors }) => `
+        <div class="contact-card" onclick="openBrandEditor('${brand.id}')">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+            <div class="contact-name">${escH(brand.name || '(unnamed)')}</div>
+            <span class="type-badge" style="background:rgba(122,74,16,0.12);color:var(--russet)">Brand</span>
+          </div>
+          ${(brand.categories || []).length ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:6px">
+            ${brand.categories.map(c => `<span style="display:inline-block;font-size:9px;font-family:var(--font-b);background:${String(c) === offering ? 'rgba(150,61,39,0.14)' : 'rgba(122,74,16,0.08)'};color:var(--russet);padding:2px 7px;border-radius:10px;font-weight:700">${escH(c)}</span>`).join('')}
+          </div>` : ''}
+          ${brand.notes ? `<div style="font-size:10px;color:var(--text-light);margin-top:5px;font-style:italic">${escH(brand.notes)}</div>` : ''}
+          <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+            <div style="font-size:9px;font-family:var(--font-h);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);margin-bottom:4px">Order through</div>
+            ${vendors.length
+              ? vendors.map(v => `<div onclick="event.stopPropagation();openVendorEditor('${v.id}')" style="font-family:var(--font-b);font-size:12px;color:var(--russet);font-weight:700;padding:2px 0;cursor:pointer">${escH(v.name || '(unnamed)')}${v.vendorType ? ` <span style="font-weight:400;color:var(--text-light);font-size:10px">· ${escH(v.vendorType)}</span>` : ''}</div>`).join('')
+              : '<div style="font-size:11px;color:var(--text-light);font-style:italic">No vendor linked yet</div>'}
+          </div>
+        </div>`).join('')}
+    </div>`;
 }
 
 function renderContactsTypeFilters(typesInUse) {
