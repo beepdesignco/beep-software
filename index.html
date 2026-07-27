@@ -4559,6 +4559,7 @@ async function afterSignIn() {
   subscribeStudioRealtime();
   subscribePMItemsRealtime();
   subscribeFreightRealtime();
+  subscribeCoreRealtime();
 
   // Phase B: load studio data from Supabase + render the app
   if (USE_SUPABASE_READS && typeof init === 'function') {
@@ -5086,6 +5087,165 @@ function _onFreightActualAllocationRealtime(payload) {
     _sbShadow.freightActuals.set(parent.id, clone(parent));
   _pmRealtimeRerender(parent.projectId, null);
   try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+// ── Core-table live-sync: projects / invoices / payments / clients ──
+// Closes the "load-once" staleness for the remaining high-traffic tables
+// (phase0_59 publication). Same contract as the other handlers: patch S in
+// place, keep _sbShadow aligned so the local writer neither re-pushes nor
+// clobbers, re-render only what's on screen, and never yank an active edit
+// (invoice-builder edits are protected by skipping its re-render).
+
+function _onProjectRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  const idx = (S.projects || []).findIndex(p => p.id === id);
+
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (idx > -1) S.projects.splice(idx, 1);
+    _sbShadow?.projects?.delete(id);
+    if (S.currentView === 'project-detail' && S._detailProjectId === id) showView('projects');
+    else if (S.currentView === 'projects') renderProjects();
+    try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+    return;
+  }
+
+  const mapped = dbProjectToS(row);
+  // Bare realtime row has no project_contacts join — never wipe them.
+  delete mapped.linkedContacts;
+  let rec;
+  if (idx > -1) rec = Object.assign(S.projects[idx], mapped);
+  else { rec = { ...mapped, linkedContacts: [] }; (S.projects = S.projects || []).push(rec); }
+  if (_sbShadow?.projects) _sbShadow.projects.set(id, clone(rec));
+  if (S.currentView === 'projects') renderProjects();
+  else if (S.currentView === 'project-detail' && S._detailProjectId === id) _pmRealtimeRerender(id, null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _onClientRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  const idx = (S.clients || []).findIndex(c => c.id === id);
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (idx > -1) S.clients.splice(idx, 1);
+    _sbShadow?.clients?.delete(id);
+  } else {
+    const mapped = dbClientToS(row);
+    if (idx > -1) Object.assign(S.clients[idx], mapped);
+    else (S.clients = S.clients || []).push(mapped);
+    if (_sbShadow?.clients) _sbShadow.clients.set(id, clone(idx > -1 ? S.clients[idx] : mapped));
+  }
+  if (S.currentView === 'clients' && typeof renderClients === 'function') renderClients();
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+// True while the invoice builder is open on this invoice — its edits work
+// off live inputs, so an inbound re-render would yank them.
+function _invBuilderEditing(invId) {
+  return S.currentView === 'invoice-builder'
+    && typeof _currentInvoiceId !== 'undefined' && _currentInvoiceId === invId;
+}
+
+function _invRealtimeRerender(invId) {
+  if (_invBuilderEditing(invId)) return;                    // protect active edit
+  if (S.currentView === 'invoices' && typeof renderInvoices === 'function') renderInvoices();
+  else if (S.currentView === 'dashboard' && typeof renderDashboard === 'function') renderDashboard();
+  else if (S.currentView === 'project-detail') _pmRealtimeRerender(null, null);
+}
+
+function _onInvoiceRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  const idx = (S.invoices || []).findIndex(i => i.id === id);
+
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (idx > -1) S.invoices.splice(idx, 1);
+    _sbShadow?.invoices?.delete(id);
+    _invRealtimeRerender(id);
+    try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+    return;
+  }
+
+  const mapped = dbInvoiceToS(row);
+  // Bare row carries no children joins — never wipe them.
+  delete mapped.lineItems;
+  delete mapped.payments;
+  delete mapped.views;
+  delete mapped.freightAllocations;
+  let rec;
+  if (idx > -1) rec = Object.assign(S.invoices[idx], mapped);
+  else { rec = { ...mapped, lineItems: [], payments: [], views: [], freightAllocations: [] }; (S.invoices = S.invoices || []).push(rec); }
+  if (_sbShadow?.invoices) _sbShadow.invoices.set(id, clone(rec));
+  _invRealtimeRerender(id);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _dbInvoicePaymentToS(p) {
+  return {
+    id: p.id,
+    date: p.date || '',
+    amount: Number(p.amount || 0),
+    method: p.method || '',
+    notes: p.notes || '',
+    receiptPath: p.receipt_path || '',
+    pending: !!p.pending,
+    stripePaymentIntent: p.stripe_payment_intent || null,
+  };
+}
+
+function _onInvoicePaymentRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const inv = (S.invoices || []).find(i => i.id === row.invoice_id);
+  if (!inv) return;   // parent not loaded — full state arrives on next load
+  if (!Array.isArray(inv.payments)) inv.payments = [];
+  const pid2 = row.id;
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    const ai = inv.payments.findIndex(p => p.id === pid2);
+    if (ai > -1) inv.payments.splice(ai, 1);
+    _sbShadow?.invoicePayments?.delete(pid2);
+  } else {
+    const mapped = _dbInvoicePaymentToS(row);
+    const ai = inv.payments.findIndex(p => p.id === pid2);
+    if (ai > -1) Object.assign(inv.payments[ai], mapped);
+    else inv.payments.push(mapped);
+    if (_sbShadow?.invoicePayments)
+      _sbShadow.invoicePayments.set(pid2, { ...clone(mapped), _invoiceId: inv.id });
+  }
+  // Parent's shadow snapshot nests payments — keep aligned so the local
+  // writer's next diff doesn't see a phantom change.
+  if (_sbShadow?.invoices) _sbShadow.invoices.set(inv.id, clone(inv));
+  _invRealtimeRerender(inv.id);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+let _coreRealtimeChannel = null;
+
+function subscribeCoreRealtime() {
+  if (!AUTH.ready || !AUTH.studio) return;
+  if (_coreRealtimeChannel) { sb.removeChannel(_coreRealtimeChannel); _coreRealtimeChannel = null; }
+  _coreRealtimeChannel = sb
+    .channel('core-' + AUTH.studio.id)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' },         _onProjectRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' },          _onClientRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'invoices' },         _onInvoiceRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'invoice_payments' }, _onInvoicePaymentRealtime)
+    .subscribe();
 }
 
 let _freightRealtimeChannel = null;
