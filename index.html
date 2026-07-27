@@ -1640,6 +1640,8 @@ tr:hover .row-btns { opacity:1; }
       </div>
       <div style="padding:0 30px;border-bottom:1px solid var(--border);display:flex;gap:0">
         <button class="view-tab active" data-dashtab="overview" onclick="setDashTab('overview')" style="margin-bottom:-1px">Overview</button>
+        <button class="view-tab" data-dashtab="pl" onclick="setDashTab('pl')" style="margin-bottom:-1px">P&amp;L</button>
+        <button class="view-tab" data-dashtab="ar" onclick="setDashTab('ar')" style="margin-bottom:-1px">A/R Aging</button>
         <button class="view-tab" data-dashtab="tax" onclick="setDashTab('tax')" style="margin-bottom:-1px">Sales Tax</button>
       </div>
       <div id="dash-filter-row" style="padding:14px 30px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
@@ -15974,6 +15976,70 @@ function getProjectBaselineProfit(pid) {
   };
 }
 
+// ── Projected vs Booked profit ──
+// "Booked" (getProjectBaselineProfit) counts only LOGGED actuals — until
+// data entry catches up, collected money with no cost/freight actual reads
+// as pure profit (Baylor's complaint 2026-07-26). Projected fills each gap
+// with the best on-file estimate, clearly separated so both numbers stay
+// honest:
+//   • billed item/component with no cost actual → proposal expected net
+//   • billed freight with no freight actual → approved freight snapshot $,
+//     else the collected amount itself (net-zero assumption: cost ≈
+//     collected — conservative, never manufactures phantom profit)
+// Also returns a $-weighted "costs logged" completeness so every surface
+// can say how much of the projection is estimate vs fact.
+function getProjectProjectedProfit(pid) {
+  const base = getProjectBaselineProfit(pid);
+  let itemGap = 0;      // expected-but-unlogged goods cost on billed items
+  let freightGap = 0;   // expected-but-unlogged freight cost on billed freight
+  let gapItems = 0;     // count of billed items/components missing actuals
+
+  const prop = S.proposals?.[pid];
+  (prop?.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+    if (it.allowance) return;                                  // placeholders, not real costs
+    const billed = getItemBilledOnInvoices(it.id) > 0.005;
+    if (billed) {
+      if (it.type === 'constructed') {
+        (it.components || []).forEach(c => {
+          if (c.allowance) return;
+          const logged = parse$((c.costActual || '').toString());
+          if (logged > 0.005) return;
+          const expected = parse$(c.netCost) * (parseFloat(c.qty) || 1);
+          if (expected > 0.005) { itemGap += expected; gapItems++; }
+        });
+      } else {
+        const logged = parse$((it.costActual || '').toString());
+        if (logged <= 0.005) {
+          const expected = getItemNet(it) * (parseFloat(it.qty) || 1);
+          if (expected > 0.005) { itemGap += expected; gapItems++; }
+        }
+      }
+    }
+    // Freight: billed (collected) with nothing logged against it.
+    const fCollected = getItemFreightCollected(it.id);
+    if (fCollected > 0.005 && getItemFreightActualSum(it.id) <= 0.005) {
+      const snap = getItemFreightApplied(it);
+      const expected = snap && snap.dollarValue > 0.005 ? snap.dollarValue : fCollected;
+      freightGap += expected;
+      gapItems++;
+    }
+  }));
+
+  const projectedProfit = base.profit - itemGap - freightGap;
+  const loggedCosts = base.rawActuals + base.adjacentRaw + base.nonBillableExpenses;
+  const projectedCosts = loggedCosts + itemGap + freightGap;
+  return {
+    booked: base.profit,
+    bookedMargin: base.margin,
+    projected: projectedProfit,
+    projectedMargin: base.collected > 0.005 ? (projectedProfit / base.collected) * 100 : 0,
+    itemGap, freightGap, gapItems,
+    collected: base.collected,
+    loggedCosts, projectedCosts,
+    costsLoggedPct: projectedCosts > 0.005 ? (loggedCosts / projectedCosts) * 100 : 100,
+  };
+}
+
 // Project invoiced / collected / outstanding for the hero header.
 function getProjectInvoiceTotals(pid) {
   const invs = (S.invoices || []).filter(i => i.projectId === pid && i.status !== 'cancelled' && i.status !== 'draft');
@@ -16005,7 +16071,7 @@ function renderPDBudgetOverview(proj, pid) {
       </div>`;
   }
 
-  return _boHeroCard(totals, overall, baseline)
+  return _boHeroCard(totals, overall, baseline, pid)
        + _boFreightToBillCard(pid)
        + _boSubTabGrid(freight, items, expenses, time, baseline);
 }
@@ -16051,7 +16117,8 @@ function _boFreightToBillCard(pid) {
     </div>`;
 }
 
-function _boHeroCard(totals, overall, baseline) {
+function _boHeroCard(totals, overall, baseline, pid) {
+  const pp = pid ? getProjectProjectedProfit(pid) : null;
   const profitColor = Math.abs(baseline.profit) < 0.005 ? 'var(--text-mid)' : baseline.profit > 0 ? '#1a6e3a' : '#b33';
   const combined = overall.combined;
   const combinedColor = Math.abs(combined) < 0.005 ? 'var(--text-mid)' : combined > 0 ? '#1a6e3a' : '#b33';
@@ -16065,9 +16132,15 @@ function _boHeroCard(totals, overall, baseline) {
       <!-- Primary: Baseline Profit -->
       <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:20px;align-items:flex-end;padding-bottom:16px;border-bottom:2px solid var(--pecan);margin-bottom:14px">
         <div>
-          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Baseline Profit</div>
+          <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-light);margin-bottom:3px">Booked Profit <span style="font-weight:400;text-transform:none;letter-spacing:0">(logged actuals only)</span></div>
           <div style="font-family:var(--font-h);font-weight:900;font-size:34px;color:${profitColor};line-height:1">${_bfFmt(baseline.profit)}</div>
           <div style="font-family:var(--font-b);font-size:11px;color:${profitColor};margin-top:3px;font-style:italic">${marginPct.toFixed(1)}% margin on collected</div>
+          ${pp && pp.costsLoggedPct < 99.5 ? `
+          <div style="margin-top:8px;padding:7px 10px;background:rgba(196,122,32,0.08);border:1px solid rgba(196,122,32,0.28);border-radius:var(--rs)">
+            <div style="font-family:var(--font-h);font-weight:800;font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:#c47a20">Projected Profit — ${pp.costsLoggedPct.toFixed(0)}% of costs logged</div>
+            <div style="font-family:var(--font-h);font-weight:900;font-size:19px;color:${pp.projected >= 0 ? '#1a6e3a' : '#b33'};line-height:1.2">${_bfFmt(pp.projected)} <span style="font-family:var(--font-b);font-size:10px;font-weight:400;color:var(--text-mid);font-style:italic">${pp.projectedMargin.toFixed(1)}% margin</span></div>
+            <div style="font-family:var(--font-b);font-size:9px;color:var(--text-mid);margin-top:2px;line-height:1.4">${pp.gapItems} billed item(s)/freight missing actuals — filled with proposal-expected costs${pp.itemGap > 0.005 ? ` (items ${fmt(pp.itemGap)})` : ''}${pp.freightGap > 0.005 ? ` (freight ${fmt(pp.freightGap)})` : ''}</div>
+          </div>` : ''}
           <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:6px;line-height:1.5">
             Collected ${fmt(baseline.collected)} − Raw actuals ${fmt(baseline.rawActuals + baseline.adjacentRaw)} − Non-billable expenses ${fmt(baseline.nonBillableExpenses)}
           </div>
@@ -36951,6 +37024,8 @@ function renderDashboard() {
 
   // Tax tab routes to its own renderer (cash-basis, payment-date filtered).
   if (_dashTab === 'tax') { renderDashboardTax(from, to, clientId, projectId); return; }
+  if (_dashTab === 'pl')  { renderDashboardPL(from, to, clientId, projectId); return; }
+  if (_dashTab === 'ar')  { renderDashboardAR(clientId, projectId); return; }
 
   // Filter invoices (by sentDate or created)
   const allInvoices = (S.invoices||[]).filter(inv => {
@@ -37083,15 +37158,18 @@ function renderDashboard() {
         cashInPeriod += amt;
       });
     });
-    const b = getProjectBaselineProfit(p.id);
-    const lifetimeCosts = b.rawActuals + b.adjacentRaw + b.nonBillableExpenses;
+    const pp = getProjectProjectedProfit(p.id);
     return {
       project: p,
       cashInPeriod,
-      collected: b.collected,
-      lifetimeCosts,
-      profit: b.profit,
-      margin: b.margin,
+      collected: pp.collected,
+      lifetimeCosts: pp.loggedCosts,
+      profit: pp.booked,
+      margin: pp.bookedMargin,
+      projected: pp.projected,
+      projectedMargin: pp.projectedMargin,
+      costsLoggedPct: pp.costsLoggedPct,
+      gapItems: pp.gapItems,
     };
   }).filter(r => r.cashInPeriod > 0.005 || r.collected > 0.005 || r.lifetimeCosts > 0.005);
 
@@ -37238,25 +37316,27 @@ function renderDashboard() {
         <th style="${thStyle}">Project</th>
         <th style="${thStyle}" class="amt">Cash Received <span style="font-weight:400;text-transform:none">(this period)</span></th>
         <th style="${thStyle}" class="amt">Collected <span style="font-weight:400;text-transform:none">(lifetime)</span></th>
-        <th style="${thStyle}" class="amt">Costs <span style="font-weight:400;text-transform:none">(lifetime)</span></th>
-        <th style="${thStyle}" class="amt">Baseline Profit</th>
-        <th style="${thStyle}" class="amt">Margin</th>
+        <th style="${thStyle}" class="amt">Booked Profit <span style="font-weight:400;text-transform:none">(logged only)</span></th>
+        <th style="${thStyle}" class="amt">Projected Profit <span style="font-weight:400;text-transform:none">(est. fills gaps)</span></th>
+        <th style="${thStyle}" class="amt">Costs Logged</th>
       </tr></thead>
       <tbody>
-        ${profitRows.sort((a,b) => b.profit - a.profit).map(r => `<tr>
+        ${profitRows.sort((a,b) => b.projected - a.projected).map(r => {
+          const complete = r.costsLoggedPct >= 99.5;
+          return `<tr>
           <td style="${tdStyle}">${escH(r.project.name||'—')}</td>
           <td style="${tdStyle};text-align:right;color:#1a6e3a;font-weight:600">${r.cashInPeriod > 0.005 ? fmt(r.cashInPeriod) : '—'}</td>
           <td style="${tdStyle};text-align:right">${fmt(r.collected)}</td>
-          <td style="${tdStyle};text-align:right">${fmt(r.lifetimeCosts)}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700;color:${r.profit>=0?'#1a6e3a':'#b33'}">${fmt(r.profit)}</td>
-          <td style="${tdStyle};text-align:right;color:${r.profit>=0?'#1a6e3a':'#b33'}">${r.collected > 0.005 ? r.margin.toFixed(1) + '%' : '—'}</td>
-        </tr>`).join('')}
+          <td style="${tdStyle};text-align:right;font-weight:600;color:${r.profit>=0?'#1a6e3a':'#b33'}">${fmt(r.profit)}<div style="font-size:10px;font-weight:400;color:var(--text-light)">${r.collected > 0.005 ? r.margin.toFixed(1) + '%' : ''}</div></td>
+          <td style="${tdStyle};text-align:right;font-weight:800;color:${r.projected>=0?'#1a6e3a':'#b33'}">${fmt(r.projected)}<div style="font-size:10px;font-weight:400;color:var(--text-light)">${r.collected > 0.005 ? r.projectedMargin.toFixed(1) + '%' : ''}</div></td>
+          <td style="${tdStyle};text-align:right"><span style="font-size:10px;font-family:var(--font-b);font-weight:700;padding:2px 8px;border-radius:10px;background:${complete ? 'rgba(26,110,58,0.10)' : 'rgba(196,122,32,0.12)'};color:${complete ? '#1a6e3a' : '#c47a20'}" title="${complete ? 'All expected costs have logged actuals — Booked = reality' : r.gapItems + ' billed item(s)/freight missing actuals — Projected uses proposal-expected costs for those'}">${r.costsLoggedPct.toFixed(0)}%</span></td>
+        </tr>`;}).join('')}
         <tr>
           <td style="${tdStyle};font-weight:700">Total</td>
           <td style="${tdStyle};text-align:right;font-weight:700;color:#1a6e3a">${fmt(totalCashInPeriod)}</td>
           <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.collected,0))}</td>
-          <td style="${tdStyle};text-align:right;font-weight:700">${fmt(profitRows.reduce((s,r)=>s+r.lifetimeCosts,0))}</td>
           <td style="${tdStyle};text-align:right;font-weight:800;color:${totalProfit>=0?'#1a6e3a':'#b33'}">${fmt(totalProfit)}</td>
+          <td style="${tdStyle};text-align:right;font-weight:800;color:${profitRows.reduce((s,r)=>s+r.projected,0)>=0?'#1a6e3a':'#b33'}">${fmt(profitRows.reduce((s,r)=>s+r.projected,0))}</td>
           <td style="${tdStyle}"></td>
         </tr>
       </tbody>
@@ -37680,6 +37760,193 @@ function renderReportContent(from, to) {
 // grouped by project state, normalized through S.taxStates when possible.
 // Builds the same numbers your monthly nontaxable calculator computes —
 // directly from the line-item taxable flags, with a drill-down per state.
+// ── P&L statement (cash basis) — accountant-format income statement.
+// Every line states its date basis. Income = settled payments received in
+// period (pre-tax, via the same allocation engine as the tax report).
+// Costs are included when they carry a date in the period: freight actuals
+// (dated), expenses (dated), and cost actuals logged via the modal
+// (meta.loggedAt). Cost actuals from before date-stamping existed can't be
+// period-placed — they're disclosed as a footnote, never silently mixed in.
+function renderDashboardPL(from, to, clientId, projectId) {
+  const body = $c('dashboard-body');
+  if (!body) return;
+  const clientProjectIds = new Set(
+    (S.projects || []).filter(p => (!clientId || p.clientId === clientId) && (!projectId || p.id === projectId)).map(p => p.id)
+  );
+  const inScopeProject = (pid) => pid && clientProjectIds.has(pid);
+  const inRange = (dateStr) => {
+    if (!dateStr) return false;
+    const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
+    return d >= from && d <= to;
+  };
+
+  // ── Income (cash): settled payments in period, split via the tax engine.
+  const rep = buildSalesTaxReport(from, to, { clientId, projectId });
+  const income = { net: rep.totals.net, tax: rep.totals.tax, ccFee: rep.totals.ccFee, gross: rep.totals.gross };
+
+  // ── COGS (dated-in-period): item cost actuals with loggedAt, freight
+  // actuals by their date, billable + pass-through expenses by date.
+  let cogsItems = 0, cogsItemsCount = 0;
+  let undatedItemCosts = 0, undatedItemCount = 0;   // disclosure only
+  Object.keys(S.proposals || {}).forEach(pid => {
+    if (!inScopeProject(pid)) return;
+    (S.proposals[pid].spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+      const collect = (target) => {
+        const amt = parse$((target.costActual || '').toString());
+        if (amt <= 0.005) return;
+        const when = target.costActualMeta?.loggedAt;
+        if (when && inRange(when)) { cogsItems += amt; cogsItemsCount++; }
+        else if (!when) { undatedItemCosts += amt; undatedItemCount++; }
+      };
+      if (it.type === 'constructed') (it.components || []).forEach(collect);
+      else collect(it);
+    }));
+  });
+  let cogsFreight = 0;
+  (S.freightActuals || []).forEach(a => {
+    if (!inScopeProject(a.projectId)) return;
+    if (inRange(a.date)) cogsFreight += parse$(a.amount);
+  });
+  let cogsExpenses = 0;
+  let opexByLabel = {};
+  let opexTotal = 0;
+  (S.expenses || []).forEach(e => {
+    if (!inScopeProject(e.projectId) && e.projectId) return;
+    if (e.projectId == null && (clientId || projectId)) return;   // unattached expenses only in unfiltered view
+    if (!inRange(e.date)) return;
+    const amt = parse$(e.cost);
+    if (e.expenseType === 'nonbillable') {
+      const label = e.name || 'Other';
+      opexByLabel[label] = (opexByLabel[label] || 0) + amt;
+      opexTotal += amt;
+    } else {
+      cogsExpenses += amt;   // billable + pass-through: costs recouped via invoicing
+    }
+  });
+  const cogsTotal = cogsItems + cogsFreight + cogsExpenses;
+  const grossProfit = income.net - cogsTotal;
+  const netIncome = grossProfit - opexTotal;
+
+  const cardStyle = 'background:var(--white);border-radius:var(--rl);padding:18px 22px;border:1px solid var(--border)';
+  const line = (label, amt, opts = {}) => `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;padding:${opts.total ? '10px' : '5px'} 0 ${opts.total ? '4px' : '5px'};${opts.total ? 'border-top:2px solid var(--pecan);margin-top:6px' : ''};${opts.sub ? 'padding-left:18px' : ''}">
+      <span style="font-family:var(--font-b);font-size:${opts.total ? '13px;font-weight:800' : opts.sub ? '12px;color:var(--text-mid)' : '13px;font-weight:600'};color:${opts.total ? 'var(--mahogany)' : ''}">${label}</span>
+      <span style="font-family:var(--font-h);font-weight:${opts.total ? '900' : '700'};font-size:${opts.total ? '15' : '13'}px;color:${opts.color || 'var(--text-dark)'}">${amt < 0 ? '−' + fmt(Math.abs(amt)) : fmt(amt)}</span>
+    </div>`;
+  const opexLines = Object.entries(opexByLabel).sort((a, b) => b[1] - a[1]).slice(0, 12)
+    .map(([label, amt]) => line(escH(label), amt, { sub: true })).join('');
+
+  body.innerHTML = `
+    <div style="padding:20px 30px 40px;max-width:760px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany)">Profit &amp; Loss — Cash Basis</div>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic">${_dashLocalYMD(from)} → ${_dashLocalYMD(to)} · money received/spent in period</div>
+      </div>
+      <div style="${cardStyle}">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin-bottom:6px">Income</div>
+        ${line('Revenue received (pre-tax)', income.net)}
+        ${line('Sales tax collected (liability, not income)', income.tax, { sub: true, color: 'var(--text-light)' })}
+        ${line('CC fees collected (offset below)', income.ccFee, { sub: true, color: 'var(--text-light)' })}
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin:14px 0 6px">Cost of Goods &amp; Freight</div>
+        ${line('Item costs (logged in period)', cogsItems)}
+        ${line('Freight actuals (dated in period)', cogsFreight)}
+        ${line('Billable + pass-through expenses', cogsExpenses)}
+        ${line('Gross Profit', grossProfit, { total: true, color: grossProfit >= 0 ? '#1a6e3a' : '#b33' })}
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid);margin:14px 0 6px">Operating Expenses (non-billable)</div>
+        ${opexLines || '<div style="font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;padding:2px 0 2px 18px">None in period</div>'}
+        ${line('Total operating expenses', opexTotal)}
+        ${line('Net Income', netIncome, { total: true, color: netIncome >= 0 ? '#1a6e3a' : '#b33' })}
+      </div>
+      ${undatedItemCount ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);font-style:italic;margin-top:10px;line-height:1.5">
+        ⚠ ${undatedItemCount} item cost actual${undatedItemCount === 1 ? '' : 's'} totaling ${fmt(undatedItemCosts)} ${undatedItemCount === 1 ? 'was' : 'were'} logged before date-stamping existed and can't be placed in a period — excluded above, disclosed here. New entries via the Log Cost Actual modal are dated automatically. Re-saving an old entry stamps it.
+      </div>` : ''}
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:8px">Income uses the same settled-payment allocation engine as the Sales Tax tab. Pending ACH excluded until it clears.</div>
+    </div>`;
+}
+
+// ── A/R Aging — point-in-time receivables per client, standard buckets.
+// Settled = non-pending positive payments (refunds never reopen A/R);
+// pending ACH is shown as its own "in transit" column, neither paid nor due.
+function renderDashboardAR(clientId, projectId) {
+  const body = $c('dashboard-body');
+  if (!body) return;
+  const todayMid = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+  const byClient = {};
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'paid') return;
+    if (clientId && inv.clientId !== clientId) return;
+    if (projectId && inv.projectId !== projectId) return;
+    const settled = (inv.payments || []).filter(p => !p.pending && Number(p.amount || 0) > 0)
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+    const pending = (inv.payments || []).filter(p => p.pending)
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+    const out = Math.max(0, Number(inv.total || 0) - settled);
+    if (out <= 0.005 && pending <= 0.005) return;
+    const clientName = (S.clients || []).find(c => c.id === inv.clientId)?.name || '(no client)';
+    if (!byClient[clientName]) byClient[clientName] = { current: 0, b30: 0, b60: 0, b90: 0, b90p: 0, pending: 0, total: 0, invoices: [] };
+    const row = byClient[clientName];
+    let bucket = 'current';
+    if (inv.dueDate) {
+      const days = Math.floor((todayMid - new Date(inv.dueDate + 'T12:00:00').getTime()) / 86400000);
+      if (days > 90) bucket = 'b90p';
+      else if (days > 60) bucket = 'b90';
+      else if (days > 30) bucket = 'b60';
+      else if (days > 0) bucket = 'b30';
+    }
+    row[bucket] += out;
+    row.pending += pending;
+    row.total += out;
+    row.invoices.push({ number: inv.number, out, bucket, dueDate: inv.dueDate });
+  });
+
+  const clients = Object.entries(byClient).sort((a, b) => b[1].total - a[1].total);
+  const totals = { current: 0, b30: 0, b60: 0, b90: 0, b90p: 0, pending: 0, total: 0 };
+  clients.forEach(([, r]) => { Object.keys(totals).forEach(k => totals[k] += r[k]); });
+
+  const cardStyle = 'background:var(--white);border-radius:var(--rl);padding:18px 22px;border:1px solid var(--border)';
+  const thS = 'text-align:right;padding:8px 10px;font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);border-bottom:2px solid var(--border)';
+  const tdS = 'padding:8px 10px;border-bottom:1px solid var(--border);text-align:right;font-family:var(--font-b);font-size:12px';
+  const cell = (v, hot) => `<td style="${tdS};${v > 0.005 ? (hot ? 'color:#b33;font-weight:700' : 'font-weight:600') : 'color:var(--text-light)'}">${v > 0.005 ? fmt(v) : '—'}</td>`;
+
+  body.innerHTML = `
+    <div style="padding:20px 30px 40px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="font-family:var(--font-h);font-weight:900;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;color:var(--mahogany)">Accounts Receivable — Aging</div>
+        <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic">As of today · date filter doesn't apply to receivables</div>
+      </div>
+      <div style="${cardStyle}">
+      ${clients.length ? `
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="${thS};text-align:left">Client</th>
+          <th style="${thS}">Current</th>
+          <th style="${thS}">1–30</th>
+          <th style="${thS}">31–60</th>
+          <th style="${thS}">61–90</th>
+          <th style="${thS}">90+</th>
+          <th style="${thS}">In Transit</th>
+          <th style="${thS}">Total Due</th>
+        </tr></thead>
+        <tbody>
+          ${clients.map(([name, r]) => `<tr>
+            <td style="${tdS};text-align:left;font-weight:700;color:var(--text-dark)">${escH(name)}<div style="font-size:10px;color:var(--text-light);font-weight:400">${r.invoices.map(i => escH(i.number || '')).filter(Boolean).join(', ')}</div></td>
+            ${cell(r.current)}${cell(r.b30)}${cell(r.b60, true)}${cell(r.b90, true)}${cell(r.b90p, true)}
+            <td style="${tdS};color:${r.pending > 0.005 ? '#7a6a30' : 'var(--text-light)'}">${r.pending > 0.005 ? fmt(r.pending) : '—'}</td>
+            <td style="${tdS};font-weight:800;color:var(--mahogany)">${fmt(r.total)}</td>
+          </tr>`).join('')}
+          <tr>
+            <td style="${tdS};text-align:left;font-weight:800;color:var(--mahogany)">Total</td>
+            ${cell(totals.current)}${cell(totals.b30)}${cell(totals.b60, true)}${cell(totals.b90, true)}${cell(totals.b90p, true)}
+            <td style="${tdS}">${totals.pending > 0.005 ? fmt(totals.pending) : '—'}</td>
+            <td style="${tdS};font-weight:900;font-size:14px;color:var(--mahogany)">${fmt(totals.total)}</td>
+          </tr>
+        </tbody>
+      </table>` : '<div style="font-family:var(--font-b);font-size:13px;color:var(--text-light);font-style:italic">Nothing outstanding — every sent invoice is settled. 🎉</div>'}
+      </div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:8px">Buckets age from each invoice's due date. "In Transit" = client-submitted ACH awaiting settlement — not yet cash, no longer their debt.</div>
+    </div>`;
+}
+
 function renderDashboardTax(from, to, clientId, projectId) {
   const body = $c('dashboard-body');
   if (!body) return;
