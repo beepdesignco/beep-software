@@ -4646,10 +4646,21 @@ async function loadTeamCache() {
   if (!AUTH.ready || !AUTH.studio) return;
   const { data, error } = await sb
     .from('studio_members')
-    .select('id, user_id, display_name, role, pay_rate, hourly_rate')
+    .select('id, user_id, display_name, role, hourly_rate')
     .eq('studio_id', AUTH.studio.id);
   if (error) { console.error('[team cache]', error); return; }
   _teamCache = data || [];
+  // pay_rate lives in member_rates (owner + can_run_payroll only, phase0_58).
+  // For everyone else RLS returns zero rows and pay_rate stays undefined —
+  // payroll/labor-cost surfaces degrade to "rates hidden" for them.
+  try {
+    const { data: rates } = await sb.from('member_rates')
+      .select('member_id, pay_rate').eq('studio_id', AUTH.studio.id);
+    (rates || []).forEach(r => {
+      const m = _teamCache.find(x => x.id === r.member_id);
+      if (m) m.pay_rate = r.pay_rate;
+    });
+  } catch (_e) { /* non-privileged: rates simply absent */ }
 }
 
 // Canonical member list for the task UI (assignee dropdowns, @mentions, filters,
@@ -26869,7 +26880,17 @@ async function fetchTeamMembers() {
     .select('*')
     .eq('studio_id', AUTH.studio.id);
   if (error) { console.error('[team] fetch failed:', error); return []; }
-  return data || [];
+  const members = data || [];
+  // Merge wages from member_rates (owner + can_run_payroll only, phase0_58).
+  try {
+    const { data: rates } = await sb.from('member_rates')
+      .select('member_id, pay_rate').eq('studio_id', AUTH.studio.id);
+    (rates || []).forEach(r => {
+      const m = members.find(x => x.id === r.member_id);
+      if (m) m.pay_rate = r.pay_rate;
+    });
+  } catch (_e) {}
+  return members;
 }
 
 async function renderTeamList() {
@@ -26953,13 +26974,23 @@ function renderTeamMemberRow(m, isOwner) {
 }
 
 // Owner-only: update a member's pay_rate / hourly_rate. Blank clears to null;
-// otherwise stored as a number.
+// otherwise stored as a number. pay_rate lives in member_rates (phase0_58 —
+// wage data gated to owner + can_run_payroll); hourly_rate stays on
+// studio_members (billable-rate default, not sensitive).
 async function updateMemberRate(memberId, field, rawValue) {
   const v = (rawValue == null || String(rawValue).trim() === '') ? null : (parseFloat(rawValue) || 0);
-  const { error } = await sb.from('studio_members').update({ [field]: v }).eq('id', memberId);
-  if (error) { toast('Update failed: ' + error.message); return; }
+  if (field === 'pay_rate') {
+    const { error } = await sb.from('member_rates')
+      .upsert({ member_id: memberId, studio_id: AUTH.studio.id, pay_rate: v });
+    if (error) { toast('Update failed: ' + error.message); return; }
+  } else {
+    const { error } = await sb.from('studio_members').update({ [field]: v }).eq('id', memberId);
+    if (error) { toast('Update failed: ' + error.message); return; }
+  }
   const m = _teamMembers.find(x => x.id === memberId);
   if (m) m[field] = v;
+  const tc = _teamCache.find(x => x.id === memberId);
+  if (tc) tc[field] = v;
   if (AUTH.member && memberId === AUTH.member.id) AUTH.member[field] = v;
   toast('Saved.');
 }
