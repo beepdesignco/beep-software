@@ -38452,6 +38452,38 @@ function renderDashboardTax(from, to, clientId, projectId) {
   window._taxReportSnapshot = { states, totals, from, to };
 
   body.innerHTML = html + '</div>';
+  body.insertAdjacentHTML('beforeend', _renderTaxConsistencyCheck());
+}
+
+// Audit defect #4 — the report back-solves the taxable base from stored
+// tax/rate, trusting they're mutually consistent. This diagnostic makes
+// that trust checkable: recompute each issued invoice's tax from its own
+// stored lines/flags and surface any invoice whose stored tax disagrees.
+// Diagnostic surface only — it never silently corrects anything.
+function _renderTaxConsistencyCheck() {
+  const mismatches = [];
+  (S.invoices || []).forEach(inv => {
+    if (inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'refunded') return;
+    try {
+      const copy = JSON.parse(JSON.stringify(inv));
+      recalcStoredInvoiceTotals(copy);
+      const delta = (Number(inv.tax) || 0) - (Number(copy.tax) || 0);
+      if (Math.abs(delta) > 0.02) {
+        mismatches.push({ number: inv.number, stored: Number(inv.tax) || 0, recomputed: Number(copy.tax) || 0, delta });
+      }
+    } catch (_e) { /* diagnostic must never break the report */ }
+  });
+  const style = 'padding:0 30px 30px';
+  if (!mismatches.length) {
+    return `<div style="${style}"><div style="font-family:var(--font-b);font-size:11px;color:#1a6e3a">✓ Tax consistency check: every issued invoice's stored tax matches a recompute from its own lines and flags.</div></div>`;
+  }
+  return `<div style="${style}">
+    <div style="background:rgba(179,51,51,0.06);border:1px solid rgba(179,51,51,0.3);border-radius:var(--rl);padding:14px 18px">
+      <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#b33;margin-bottom:8px">⚠ Tax consistency check — ${mismatches.length} invoice${mismatches.length === 1 ? '' : 's'} where stored tax ≠ recomputed</div>
+      <div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-bottom:8px">Usually means the rate or line flags changed after issue without a recompute. The report files the STORED figure — review each before filing.</div>
+      ${mismatches.map(m => `<div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);padding:3px 0">${escH(m.number || '(no number)')} — stored ${fmt(m.stored)} vs recomputed ${fmt(m.recomputed)} <strong style="color:#b33">(Δ ${fmt(Math.abs(m.delta))})</strong></div>`).join('')}
+    </div>
+  </div>`;
 }
 
 // §7 Phase 7B — allocate a state's ALREADY-COLLECTED tax across its
