@@ -444,3 +444,184 @@ across refresh. Plus the standalone client pay page.
 Auth overlay (sign-in / set-password) sits above everything until a session
 exists. Modals (~40 of them — item editor, cost actual, freight actual, meeting,
 task, substitution delta, credit application, …) are overlay divs, not routes.
+
+---
+
+## 11. Multi-tenancy readiness
+
+**Yes — the tenant concept exists and is enforced end-to-end.** The tenant is
+the **studio** (`studios` table). This was a deliberate design decision when the
+app migrated from localStorage to Supabase ("team model now, SaaS-ready
+schema").
+
+**Tenant keys:** every top-level table carries `studio_id → studios` with an
+RLS policy on it. Child tables without their own `studio_id` are scoped through
+their parent via `security definer` lookup functions:
+`invoice_line_items`/`invoice_payments` (via `studio_of_invoice`),
+`proposal_items` (via `studio_of_space`), `proposal_components` (via
+`studio_of_item`), `project_contacts` (via `studio_of_project`),
+`document_versions` (via documents), `task_comments`/`task_dependencies` (via
+tasks), `submittal_signers` (via submittals), `vendor_brands` (via vendors).
+No table is un-scoped.
+
+**Isolation mechanisms, all active today:**
+- **Row-Level Security on all 49 tables** — every policy resolves through
+  `is_studio_member(studio_id)` / `is_studio_owner` / `has_permission`, which
+  check the caller's JWT against `studio_members`. A user in studio A cannot
+  read or write studio B's rows even with direct PostgREST calls.
+- **Storage isolation** — object paths are prefixed `{studio_id}/…` and
+  `storage.objects` policies parse the prefix (`storage_studio_id(name)`) and
+  require membership. Cross-tenant file access is blocked at the bucket level.
+- **Realtime** — `postgres_changes` respects RLS, so subscriptions only deliver
+  the caller's studio's rows.
+- The client app itself queries `.eq('studio_id', AUTH.studio.id)` everywhere
+  (belt), but RLS is the enforcement (suspenders).
+
+**What a second design firm would need — the honest migration list, in order of
+invasiveness:**
+
+1. *(None — data isolation)* Already done. Creating a second `studios` row with
+   its own members yields fully isolated data, files, and realtime today.
+2. *(Small)* **Self-serve onboarding** — there is no "create a studio" signup
+   flow (the existing `auth.signUp` path is for inviting members into the
+   current studio). Needs: signup → create studio → seed defaults (system item
+   types, freight categories, statuses) → owner membership. The RLS insert
+   policies for this already exist (`studios` self-owner insert).
+3. *(Small)* **De-hardcode the §13 list** — invoice number prefix, sender
+   email, currency/locale assumptions, etc.
+4. *(Medium)* **Per-tenant Stripe** — the blocker. Edge functions read a single
+   `STRIPE_SECRET_KEY` project secret; all payments land in Beep's Stripe
+   account. Other firms need **Stripe Connect** (each studio onboards its own
+   connected account; checkout sessions created on their account) — touches
+   `create-checkout-session`, `stripe-webhook`, `stripe-refund`, plus a
+   settings UI for onboarding.
+5. *(Medium)* **Per-tenant email identity** — `send-email` sends from
+   `hello@beepdesign.co` on Beep's Resend domain. Other firms need either
+   per-studio verified domains in Resend (best deliverability, onboarding
+   friction) or a shared `*.beephq.com` sender with per-studio reply-to.
+6. *(Medium)* **App-subscription billing** — doesn't exist; see §14.
+7. *(Low, operational)* Single shared frontend/edge deployment serves all
+   tenants fine (the app is static; tenancy is data-side). Mobile app works
+   as-is (same auth). Support tooling, per-studio backups/export, and a terms
+   of service are business work, not architecture.
+
+**Verdict:** the hard part of multi-tenancy (schema, RLS, storage, realtime
+isolation) is built and battle-tested by daily two-user use. The remaining work
+is onboarding, payments/email identity per tenant, and billing — additive
+features, not a migration of existing data or a restructuring of the schema.
+
+---
+
+## 12. Users and permissions
+
+**Auth:** Supabase Auth, email + password. A session JWT identifies the user;
+`studio_members` maps `user_id → studio` with a role and flags. On sign-in the
+app loads the member row (+ studio) and boots. Invite/reset links route through
+Supabase's recovery flow into an in-app set-password screen. There are no
+API keys in the client beyond the public anon key; everything the client can do
+is bounded by RLS.
+
+**Roles:** two — `owner` and `member`. The owner bypasses every permission
+check (both in the JS helpers and in the SQL `has_permission` function's
+short-circuit). Members are governed by ten per-member boolean flags on
+`studio_members` (defaults in parentheses):
+
+| Flag | Gates |
+|---|---|
+| `can_view_financials` (true) | Dashboard, invoices/payments **SELECT**, expense visibility, project P&L |
+| `can_edit_invoices` (true) | invoice + line-item **writes** (view-only invoice access when off) |
+| `can_send_invoices` (false) | emailing invoices/receipts/reminders — enforced inside the send-email edge function, not just UI |
+| `can_record_payments` (false) | invoice_payments writes |
+| `can_manage_expenses` (false*) | expense writes (*backfilled true for existing financial viewers) |
+| `can_run_payroll` (false) | Payroll tab, `payroll_runs`, wage visibility (`member_rates`) |
+| `can_adjust_time_entries` (true) | editing/deleting own past unbilled time (running-timer stop/cancel always allowed) |
+| `can_view_vendor_credentials` (false) | decrypting vendor portal logins (RPC-enforced, access-logged) |
+| `can_edit_project_settings` (true) | project settings / tax settings screens |
+| `can_manage_members` (false) | team management |
+
+**Not everything is flag-gated:** proposals, items, PM work, tasks, time
+logging, contacts, documents, meetings, and freight logging are open to every
+accepted member — deliberate for a working studio.
+
+**Enforcement depth:** every flag above is enforced in the **database or
+server**, not just the UI — RLS policies, `security definer` RPCs, and
+triggers (`protect_studio_member_privileged` stops members editing their own
+rates/role/flags; `protect_studio_sensitive_settings` stops non-owners altering
+tax config inside the shared settings blob). This was hardened in two audit
+rounds (2026-07-25/27); the UI-only gaps found then are closed.
+
+**Answer to "does every logged-in user see everything?":** No. A member without
+`can_view_financials` sees no dashboard, no invoices, no payment data. Wages
+are invisible to everyone but owner/payroll-holders — including via direct API
+calls. But operationally, all members share the full project/PM/task workspace.
+
+---
+
+## 13. Hardcoded assumptions (de-hardcoding list for SaaS)
+
+Things that are **configuration already** (fine for other firms): studio
+name/logo/letterhead (`studio_info`), default project markup (per-project,
+25% fallback), per-category markups, freight categories + markups/flat
+rates/fee flags, item types, pipeline statuses + colors + custom statuses,
+vendor types, brand offering categories, qty units, payment cards, tax states +
+jurisdictions + filing frequencies, invoice note presets, payment methods per
+invoice type, wire/check instructions, reminder cadence, watermark, themes.
+
+Things **baked into code** that another firm would trip over:
+
+| Assumption | Where | Notes |
+|---|---|---|
+| Invoice number format `BE-###` | `getNextInvoiceNumber()` regex + prefix | Needs per-studio prefix + next-number config |
+| Sender email `hello@beepdesign.co` + name fallback `'Beep Design'` | invoice send flow, edge functions | Per-studio sender identity (see §11) |
+| Pay-page URL `location.origin + /pay/?t=` | send flow | Fine while single-domain; per-tenant domains would need config |
+| Default studio object (`name: 'Beep Design'`, address fields) | `getStudio()` fallback literal | Cosmetic; seed at onboarding instead |
+| CC fee default **3.5%** | invoice builder default + pay-page fallback (`cc_fee_pct \|\| 3.5`) | Should live in studio settings |
+| Invoice **types** (Phased / Monthly Charges / Standalone / Design Fee) | `PM_INVOICE_TYPES` constant | Terminology + workflow assumption; other firms may phase differently |
+| Base pipeline statuses & shipping statuses (`proposed/approved/ordered/…`) | `STATUSES`, `SHIPPING_STATUSES` constants | Custom statuses can be *added*, but the base set + automation hooks (e.g. paid→ordered transitions) assume these keys |
+| Component types (base/fabric/shipping/other…) | `COMPONENT_TYPES` constant | Workroom-style constructed-item model |
+| Built-in item types ("Undefined", "Non-Material Item/Service") | `BUILTIN_ITEM_TYPES` seed + `system_key` logic | Seeded per studio, but names/semantics fixed |
+| Primary freight category = the system category named **"Freight"** | `getPrimaryFreightCategoryId()` | Renaming it would break primary-vs-adjacent math |
+| Task statuses/priorities/category seeds | `TASK_STATUSES`, `TASK_PRIORITIES`, `TASK_CATEGORY_SEED` | Colors configurable; sets fixed |
+| Document templates (schedule types, work order) | `DOC_TEMPLATES` constant + hardcoded layouts | Doc/PDF layouts (proposal, invoice, estimate, work order, PM print) are code, not templates |
+| Email HTML/text layouts | `buildInvoiceEmailHtml/Text` | Branding pulls from studio_info, but structure is code |
+| **US sales-tax model** | tax engine throughout | Origin/destination state + jurisdiction components, tax-exempt flags, resale numbers — no VAT/GST concept |
+| **USD currency + en-US formatting** | `fmt()`, date rendering | No currency or locale abstraction |
+| Markup fallback literal **25** | `projectMarkup()` + a few inline copies | Per-project value overrides it, but the fallback is code |
+| Payroll model (hourly wage × all clocked hours) | payroll engine | No salary, overtime, or multi-rate tiers |
+| Time billing (single billable rate per member, per-entry override) | time → invoice flow | No client-specific rate cards |
+| localStorage keys `beep_hq_v1`, `beep_ui_v1`, `beep_work_dismissed` | throughout | Harmless, but shared-browser multi-studio use would collide |
+| iOS bundle `co.beepdesign.hq`, TestFlight distribution | mobile repo | Per-tenant mobile = one shared app with studio login (works today) |
+
+Nothing on this list is architecturally deep — they're constants and literals,
+not schema. The two that hide real product decisions are the **US-tax/USD
+assumption** and the **document layouts** (firms care what their proposals look
+like).
+
+---
+
+## 14. Subscription billing (the app itself)
+
+**None exists.** There is no subscription, plan, seat, trial, or entitlement
+concept anywhere in the schema or code. The only billing infrastructure in the
+system is **client invoicing** (Beep billing its design clients through its own
+Stripe account) — completely separate from the question of design firms paying
+for BEEP HQ.
+
+What exists that a subscription layer could build on: the `studios` tenant
+boundary (the natural billing unit), `studio_members` (the natural seat count),
+working Stripe integration patterns (checkout session + webhook edge functions
+to copy from), and `app_config` (a place for plan definitions).
+
+What building it would take: a `subscriptions` table (studio_id, Stripe
+customer/subscription ids, plan, seat count, status, period end), Stripe
+Billing (products/prices, checkout for the studio itself, a customer-portal
+link for card management), webhook handling for subscription lifecycle events,
+and an entitlement gate — the simplest honest version being a boot-time check
+that shows a "subscription lapsed" wall plus an RLS-side guard (e.g.
+`has_active_subscription(studio_id)` folded into `is_studio_member`) so a
+lapsed tenant is read-only or locked at the database, not just the UI. Seat
+enforcement = compare `studio_members` count against the plan on invite.
+
+This is standard SaaS plumbing with clean anchor points — but it is genuinely
+absent today, and it is the last of the four SaaS gaps (onboarding, per-tenant
+Stripe, per-tenant email, billing) listed in §11.
