@@ -34262,9 +34262,31 @@ function applyEmailTemplate() {
   }
 }
 
+// Work-list 2.8 step 3 — zero-rate guard. In a state where the studio is
+// registered and collecting, a $0-tax invoice caused by a missing or
+// unconfigured rate is never correct. Hard-warn (explicit confirm) rather
+// than hard-block, so a deliberately non-taxable edge case can proceed.
+// This is the check that would have caught Georgia before it mattered.
+function _invoiceTaxRateWarning(inv) {
+  const proj = getProject(inv.projectId);
+  if (!proj) return null;
+  const state = (proj.state || '').trim();
+  if (!state) return 'This project has NO STATE set — tax computes $0 and the payment won\'t appear in any state\'s tax report.\n\nSet the project state (Project Settings) before issuing.';
+  const cfg = (S.taxStates || []).find(s => (s.name || '').toLowerCase() === state.toLowerCase());
+  if (!cfg) return `Project state "${state}" has NO ENTRY in Settings → Sales Tax states — its rate is unmanaged and tax may be wrong or $0.\n\nConfigure the state before issuing.`;
+  if ((Number(proj.taxRate) || 0) === 0 && (Number(cfg.taxRate) || 0) > 0) {
+    return `This project's tax rate is 0% but ${cfg.name} is configured at ${cfg.taxRate}% — the invoice would charge NO TAX in a state where you're registered.`;
+  }
+  return null;
+}
+
 async function sendInvoiceEmail() {
   const inv = (S.invoices||[]).find(i => i.id === _sendInvId);
   if (!inv) { toast('Invoice not found.'); return; }
+  {
+    const taxWarn = _invoiceTaxRateWarning(inv);
+    if (taxWarn && !confirm('⚠ TAX WARNING\n\n' + taxWarn + '\n\nIssue this invoice anyway?')) return;
+  }
   const rawTo = $c('send-inv-to').value.trim();
   if (!rawTo) { showSendInvErr('Enter recipient email.'); return; }
   // Split on comma or semicolon, trim, drop empties. Each address must look like x@y.z.
@@ -34352,6 +34374,10 @@ async function sendInvoiceEmail() {
 async function copyLinkAndMarkSent() {
   const inv = (S.invoices||[]).find(i => i.id === _sendInvId);
   if (!inv) return;
+  if (_sendMarkSentOnSuccess) {
+    const taxWarn = _invoiceTaxRateWarning(inv);
+    if (taxWarn && !confirm('⚠ TAX WARNING\n\n' + taxWarn + '\n\nIssue this invoice anyway?')) return;
+  }
   // Ensure payment_token exists
   if (!inv.paymentToken) {
     try {
