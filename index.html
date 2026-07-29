@@ -9912,9 +9912,9 @@ function componentToDB(c) {
 const _syncDropWarned = new Set();
 
 async function _syncTable(table, current, shadow, toRow, opts = {}) {
-  const { softDelete = true } = opts;
+  const { softDelete = true, sortUpsert = null } = opts;
   const toUpsert = [];
-  const toUpsertIds = [];
+  let toUpsertIds = [];
   // Snapshot every item AT DIFF TIME. `current` holds LIVE references — if a
   // concurrent handler mutates an item while we await the upsert below (e.g.
   // file #2 of a multi-upload pushing into a jsonb files array), cloning the
@@ -9933,13 +9933,52 @@ async function _syncTable(table, current, shadow, toRow, opts = {}) {
   for (const id of shadow.keys()) {
     if (!current.has(id)) toRemove.push(id);
   }
+  if (sortUpsert && toUpsert.length > 1) {
+    // Caller-supplied batch ordering for tables where row order inside one
+    // upsert statement matters (e.g. vendor_contacts must clear the old
+    // primary before setting the new one, or uq_vendor_contacts_primary
+    // rejects the whole statement). Keep ids aligned with rows.
+    const paired = toUpsert.map((row, i) => [row, toUpsertIds[i]]);
+    paired.sort((a, b) => sortUpsert(a[0], b[0]));
+    for (let i = 0; i < paired.length; i++) { toUpsert[i] = paired[i][0]; toUpsertIds[i] = paired[i][1]; }
+  }
   if (toUpsert.length) {
     // .select('id') so we can verify rows actually landed. An RLS policy that
     // silently filters (0 rows affected, no error) must NOT advance the
     // shadow, or the row is marked reconciled and the write is lost forever
     // (the studios_update lesson). Dropped ids stay out of the shadow so the
     // next sync retries them — and we warn loudly once per table.
-    const { data, error } = await sb.from(table).upsert(toUpsert).select('id');
+    let { data, error } = await sb.from(table).upsert(toUpsert).select('id');
+    if (error && toUpsert.length > 1) {
+      // One rejected row (unique-name conflict, FK, …) must not sink the
+      // whole batch — that silently blocks EVERY change to this table for
+      // the rest of the session (the Crypton/Pindler brands outage).
+      // Quarantine: retry row-by-row; failures stay out of the shadow so
+      // they retry next sync, and the real error surfaces once per table.
+      const ok = [];
+      const quarantined = new Set();
+      for (let i = 0; i < toUpsert.length; i++) {
+        const one = await sb.from(table).upsert(toUpsert[i]).select('id');
+        if (one.error) {
+          quarantined.add(toUpsertIds[i]);
+          snaps.delete(toUpsertIds[i]);
+          console.error(`[sync] ${table} row ${toUpsertIds[i]} rejected:`, one.error.message);
+          if (!_syncDropWarned.has(table + ':rowfail')) {
+            _syncDropWarned.add(table + ':rowfail');
+            const friendly = one.error.code === '23505'
+              ? 'that name already exists — refresh to load the latest list, then link the existing entry'
+              : one.error.message;
+            toast(`A ${table.replace(/_/g, ' ').replace(/s$/, '')} change was rejected by the server: ${friendly}`);
+          }
+        } else {
+          (one.data || []).forEach(r => ok.push(r));
+        }
+      }
+      data = ok; error = null;
+      // Quarantined ids already reported + removed from snaps; keep them out
+      // of the RLS-drop check below so they aren't double-flagged.
+      toUpsertIds = toUpsertIds.filter(id => !quarantined.has(id));
+    }
     if (error) throw new Error(`${table} upsert: ${error.message}`);
     const returned = new Set((data || []).map(r => r.id));
     const dropped = toUpsertIds.filter(id => !returned.has(String(id)) && !returned.has(id));
@@ -10079,7 +10118,11 @@ async function syncToSupabase() {
     await syncSafe('contacts',  current.contacts, _sbShadow.contacts, c => contactToDB(c, studioId));
     // Vendors before vendor_contacts so FK targets exist before children
     await syncSafe('vendors',         current.vendors,        _sbShadow.vendors,        v => vendorToDB(v, studioId));
-    await syncSafe('vendor_contacts', current.vendorContacts, _sbShadow.vendorContacts, c => vendorContactToDB(c));
+    // sortUpsert: rows clearing primary_contact go first, so flipping the
+    // primary between two existing contacts can't transiently violate
+    // uq_vendor_contacts_primary inside the single upsert statement.
+    await syncSafe('vendor_contacts', current.vendorContacts, _sbShadow.vendorContacts, c => vendorContactToDB(c),
+      { sortUpsert: (a, b) => (a.primary_contact === b.primary_contact) ? 0 : (a.primary_contact ? 1 : -1) });
     // Brands before vendor_brands so FK targets exist before links
     await syncSafe('brands', new Map((S.brands||[]).map(b => [b.id, b])), _sbShadow.brands, b => brandToDB(b, studioId));
     await syncSafe('item_types', new Map((S.itemTypes||[]).map(t => [t.id, t])), _sbShadow.itemTypes, t => itemTypeToDB(t, studioId));
@@ -10103,17 +10146,24 @@ async function syncToSupabase() {
       }));
       const added = [...currentVBs].filter(k => !_sbShadow.vendorBrands.has(k));
       const removed = [..._sbShadow.vendorBrands].filter(k => !currentVBs.has(k));
+      // Advance the shadow PER PAIR, only on success. Advancing it wholesale
+      // meant a failed insert (brand row not synced yet → FK 409, vendor not
+      // visible yet → RLS 403) was marked reconciled and the link was lost
+      // forever, even after the brand/vendor row eventually landed.
+      const vbShadow = new Set(_sbShadow.vendorBrands);
       for (const key of added) {
         const [vendorId, brandId] = key.split(':');
         const { error } = await sb.from('vendor_brands').insert({ vendor_id: vendorId, brand_id: brandId });
-        if (error && !/duplicate/i.test(error.message)) console.warn('[sync vendor_brands insert]', error.message);
+        if (!error || /duplicate/i.test(error.message)) vbShadow.add(key);
+        else console.warn('[sync vendor_brands insert] (will retry)', error.message);
       }
       for (const key of removed) {
         const [vendorId, brandId] = key.split(':');
         const { error } = await sb.from('vendor_brands').delete().eq('vendor_id', vendorId).eq('brand_id', brandId);
-        if (error) console.warn('[sync vendor_brands delete]', error.message);
+        if (error) { console.warn('[sync vendor_brands delete] (will retry)', error.message); continue; }
+        vbShadow.delete(key);
       }
-      _sbShadow.vendorBrands = currentVBs;
+      _sbShadow.vendorBrands = vbShadow;
       if (added.length || removed.length) _syncOps++;
     } catch (e) {
       console.error('[sync vendor_brands] failed:', e.message);
@@ -24775,29 +24825,22 @@ function saveBrand() {
   if (!name) { toast('Brand name is required.'); return; }
   const dupe = (S.brands || []).find(b => b.id !== id && (b.name || '').toLowerCase() === name.toLowerCase());
 
-  // Editing an existing brand → still block dupe renames (forces a real
-  // disambiguating name). Creating a new brand → ask: link the existing
-  // entry, or save as a duplicate. Duplicates are intentionally allowed
-  // because a contact may legitimately rep the same brand under a separate
-  // record.
+  // Editing an existing brand → block dupe renames (forces a real
+  // disambiguating name). Creating a new brand whose name already exists →
+  // ALWAYS link the existing entry. The DB enforces one live brand per name
+  // per studio (uq_brands_studio_name_ci, case-insensitive); the old "save as
+  // a duplicate" option 409'd at sync time and — because brands sync as one
+  // batch — silently blocked every other brand write for the whole session.
   if (dupe) {
     if (id) { toast('A brand named "' + name + '" already exists.'); return; }
-    const wantDupe = confirm(
-      `A brand named "${name}" already exists.\n\n` +
-      `OK = save as a duplicate (new brand entry).\n` +
-      `Cancel = link the existing brand instead.`
-    );
-    if (!wantDupe) {
-      closeModal('modal-brand');
-      const cb0 = _brandSaveCallback; _brandSaveCallback = null;
-      cb0?.(dupe.id);
-      toast(`Linked existing brand "${dupe.name}".`);
-      if ($c('vn-brands-picker')) renderBrandPicker('vn-brands-picker', $c('vn-brands-picker')._selected || [], $c('vn-brands-picker')._onChange);
-      if ($c('vnc-brands-picker')) renderBrandPicker('vnc-brands-picker', $c('vnc-brands-picker')._selected || [], $c('vnc-brands-picker')._onChange);
-      renderContacts();
-      return;
-    }
-    // else fall through and save as a duplicate
+    closeModal('modal-brand');
+    const cb0 = _brandSaveCallback; _brandSaveCallback = null;
+    cb0?.(dupe.id);
+    toast(`Linked existing brand "${dupe.name}".`);
+    if ($c('vn-brands-picker')) renderBrandPicker('vn-brands-picker', $c('vn-brands-picker')._selected || [], $c('vn-brands-picker')._onChange, __bpCurrentOpts($c('vn-brands-picker')));
+    if ($c('vnc-brands-picker')) renderBrandPicker('vnc-brands-picker', $c('vnc-brands-picker')._selected || [], $c('vnc-brands-picker')._onChange, __bpCurrentOpts($c('vnc-brands-picker')));
+    renderContacts();
+    return;
   }
   const fields = {
     name,
@@ -25025,7 +25068,10 @@ function openVendorEditor(id, callback, prefillName) {
   $c('vn-delete-btn').style.display = v ? '' : 'none';
   populateVendorTypeDatalist();
   // Brands-carried picker — lives on vendor.brandIds in-memory, synced via vendor_brands M2M
-  if (!v) { /* new vendor: create shell so the picker has something to mutate */ }
+  // _pendingBrandIds MUST be cleared on every open: it's an expando on the
+  // reused DOM host, and a stale value from a previous new-vendor save would
+  // silently attach that vendor's brands to this one (the Crypton/Pindler bug).
+  if ($c('vn-brands-picker')) $c('vn-brands-picker')._pendingBrandIds = null;
   renderBrandPicker('vn-brands-picker', v?.brandIds || [], (newIds) => {
     // Persist onto the vendor object as user edits. Save is deferred until Save Vendor.
     if (v) v.brandIds = newIds.slice();
@@ -25321,6 +25367,10 @@ function openVendorContactEditor(vendorId, contactId, callback) {
   // vn-brands-picker host (covers both saved-vendor and new-vendor draft
   // flows uniformly).
   const parentBrandIds = $c('vn-brands-picker')?._selected || [];
+  // Same stale-expando hazard as the vendor-level picker: clear on every open
+  // so a previous contact's picks can't leak into this one (or clobber an
+  // existing contact's brands on save).
+  if ($c('vnc-brands-picker')) $c('vnc-brands-picker')._pendingBrandIds = null;
   renderBrandPicker('vnc-brands-picker', c?.brandIds || [], (newIds) => {
     if (c) c.brandIds = newIds.slice();
     else $c('vnc-brands-picker')._pendingBrandIds = newIds.slice();
