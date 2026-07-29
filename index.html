@@ -5240,6 +5240,135 @@ function _onInvoicePaymentRealtime(payload) {
   try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
 }
 
+// ── Contacts / address-book live-sync (vendors, reps, brands, links) ──
+// These tables were load-once: another user's contact work only appeared
+// after a manual refresh. Patch S in place, keep _sbShadow aligned (so the
+// local writer's next diff doesn't re-push or clobber), and re-render the
+// Contacts view — plus the vendor modal's contact list when it's open on the
+// affected vendor and no sub-editor has active inputs.
+
+function _contactsRealtimeRerender(vendorId) {
+  if (S.currentView === 'contacts' && typeof renderContacts === 'function') renderContacts();
+  const vnOpen  = $c('modal-vendor')?.classList.contains('open');
+  const vncOpen = $c('modal-vendor-contact')?.classList.contains('open');
+  if (vendorId && vnOpen && !vncOpen && $c('vn-id')?.value === vendorId
+      && typeof renderVendorContactsInModal === 'function') {
+    renderVendorContactsInModal(vendorId);
+  }
+}
+
+// Refresh a brand picker's pill list in place — but never while its popover
+// is open (the user may be mid-search; a rebuild would yank the input).
+function _bpRealtimeRefresh(hostId) {
+  const host = $c(hostId);
+  if (!host || typeof renderBrandPicker !== 'function') return;
+  const pop = $c(hostId + '-popover');
+  if (pop && pop.style.display !== 'none') return;
+  renderBrandPicker(hostId, host._selected || [], host._onChange, __bpCurrentOpts(host));
+}
+
+function _onVendorRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  const idx = (S.vendors || []).findIndex(v => v.id === id);
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (idx > -1) S.vendors.splice(idx, 1);
+    _sbShadow?.vendors?.delete(id);
+    // Purge the M2M shadow pairs too, so this session's next sync doesn't
+    // issue deletes for links the deleting session already handled.
+    if (_sbShadow?.vendorBrands) {
+      [..._sbShadow.vendorBrands].forEach(k => { if (k.startsWith(id + ':')) _sbShadow.vendorBrands.delete(k); });
+    }
+  } else {
+    const mapped = dbVendorToS(row);
+    let rec;
+    if (idx > -1) rec = Object.assign(S.vendors[idx], mapped);
+    else { rec = { ...mapped, brandIds: [] }; (S.vendors = S.vendors || []).push(rec); }
+    // Bare row carries no vendor_brands join — brandIds arrive via their own events.
+    if (_sbShadow?.vendors) _sbShadow.vendors.set(id, clone(rec));
+  }
+  _contactsRealtimeRerender(null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _onVendorContactRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  const idx = (S.vendorContacts || []).findIndex(c => c.id === id);
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (idx > -1) S.vendorContacts.splice(idx, 1);
+    _sbShadow?.vendorContacts?.delete(id);
+  } else {
+    const mapped = dbVendorContactToS(row);
+    let rec;
+    if (idx > -1) rec = Object.assign(S.vendorContacts[idx], mapped);
+    else { rec = mapped; (S.vendorContacts = S.vendorContacts || []).push(rec); }
+    // Post-sync shadow entries carry _studioId (see current.vendorContacts) —
+    // match that shape so the next local diff is clean.
+    if (_sbShadow?.vendorContacts) _sbShadow.vendorContacts.set(id, { ...clone(rec), _studioId: AUTH.studio?.id });
+  }
+  _contactsRealtimeRerender(row.vendor_id || null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _onBrandRealtime(payload) {
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.id) return;
+  const id = row.id;
+  const idx = (S.brands || []).findIndex(b => b.id === id);
+  const isDelete = evt === 'DELETE' || (payload.new && payload.new.deleted_at);
+  if (isDelete) {
+    if (idx > -1) S.brands.splice(idx, 1);
+    _sbShadow?.brands?.delete(id);
+  } else {
+    const mapped = dbBrandToS(row);
+    let rec;
+    if (idx > -1) rec = Object.assign(S.brands[idx], mapped);
+    else { rec = mapped; (S.brands = S.brands || []).push(rec); }
+    if (_sbShadow?.brands) _sbShadow.brands.set(id, clone(rec));
+  }
+  // A brand created on another machine becomes pickable immediately.
+  _bpRealtimeRefresh('vn-brands-picker');
+  _bpRealtimeRefresh('vnc-brands-picker');
+  _contactsRealtimeRerender(null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
+function _onVendorBrandRealtime(payload) {
+  const evt = payload.eventType || payload.event;
+  const row = (payload.new && Object.keys(payload.new).length) ? payload.new : payload.old;
+  if (!row || !row.vendor_id || !row.brand_id) return;
+  const key = row.vendor_id + ':' + row.brand_id;
+  const v = (S.vendors || []).find(x => x.id === row.vendor_id);
+  if (evt === 'DELETE') {
+    if (v && Array.isArray(v.brandIds)) v.brandIds = v.brandIds.filter(b => b !== row.brand_id);
+    _sbShadow?.vendorBrands?.delete(key);
+  } else {
+    if (v) {
+      v.brandIds = v.brandIds || [];
+      if (!v.brandIds.includes(row.brand_id)) v.brandIds.push(row.brand_id);
+    }
+    _sbShadow?.vendorBrands?.add(key);
+  }
+  // The vendors-table shadow nests brandIds. Realign ONLY that field — a
+  // whole-object realign here could mark a not-yet-synced local edit (50ms
+  // debounce window) as already persisted and silently drop it.
+  const sv = v && _sbShadow?.vendors?.get(v.id);
+  if (sv) sv.brandIds = (v.brandIds || []).slice();
+  _contactsRealtimeRerender(null);
+  try { localStorage.setItem('beep_hq_v1', JSON.stringify(S)); } catch (_e) {}
+}
+
 let _coreRealtimeChannel = null;
 
 function subscribeCoreRealtime() {
@@ -5251,6 +5380,10 @@ function subscribeCoreRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' },          _onClientRealtime)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'invoices' },         _onInvoiceRealtime)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'invoice_payments' }, _onInvoicePaymentRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors' },          _onVendorRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_contacts' },  _onVendorContactRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' },           _onBrandRealtime)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_brands' },    _onVendorBrandRealtime)
     .subscribe();
 }
 
