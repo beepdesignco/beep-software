@@ -19899,6 +19899,11 @@ function openProjectSettings(pid) {
   // §7: render the jurisdiction picker from the SAVED selection (or all-checked
   // for legacy). Does NOT recompute the rate — ps-taxrate keeps p.taxRate.
   _renderProjectJurisdictions(p.state || '', p.settings?.jurisdictions);
+  // 2.8 step 4: non-blocking drift warning — when the saved rate no longer
+  // equals the sum of the stored jurisdiction rates (state components were
+  // edited, or the rate was hand-typed), say so instead of silently charging
+  // a rate whose derivation nobody can reconstruct.
+  _renderJurisdictionDriftWarning(p);
   $c('modal-proj-settings').classList.add('open');
   // View-only for members without edit permission (covers project + tax settings).
   _setModalReadOnly('modal-proj-settings', !canEditProjectSettings(),
@@ -19928,8 +19933,13 @@ function saveProjectSettings() {
   const jWrap = $c('ps-jurisdictions-wrap');
   if (jWrap && jWrap.style.display !== 'none') {
     if (!p.settings) p.settings = {};
+    // 2.8 step 4: store {name, rate} per selected jurisdiction — the rate
+    // each component contributed at save time — so a stored tax_rate's
+    // derivation is auditable and drift is detectable. (Legacy entries were
+    // name-only strings; readers handle both shapes.)
     p.settings.jurisdictions = [...document.querySelectorAll('#ps-jurisdictions .ps-juris-cb')]
-      .filter(cb => cb.checked).map(cb => cb.dataset.name);
+      .filter(cb => cb.checked)
+      .map(cb => ({ name: cb.dataset.name, rate: Number(cb.dataset.rate) || 0 }));
   }
   save();
 
@@ -21731,6 +21741,7 @@ function printEstimate(pid, estId) {
     <table class="totals">
       <tr><td>Proposal Subtotal</td><td class="amt">${fmt(est.proposalTotals.subtotal)}</td></tr>
       ${est.proposalTotals.freight>0 ? '<tr><td>Freight</td><td class="amt">'+fmt(est.proposalTotals.freight)+'</td></tr>' : ''}
+      ${(est.proposalTotals.adjacentCharges||0)>0 ? '<tr><td>Other Associated Charges</td><td class="amt">'+fmt(est.proposalTotals.adjacentCharges)+'</td></tr>' : ''}
       <tr><td>Tax${proj?.taxRate?' ('+proj.taxRate+'%)':''}</td><td class="amt">${fmt(est.proposalTotals.tax)}</td></tr>
       <tr class="proposal-total-row"><td>Proposal Total</td><td class="amt">${fmt(est.proposalTotals.total)}</td></tr>
       ${est.estimationLines.length ? '<tr class="est-section-hd"><td colspan="2">Estimation Lines</td></tr>' : ''}
@@ -21819,6 +21830,7 @@ function renderEstimatesSection(pid) {
         <table style="width:100%;font-size:12px;font-family:var(--font-b);border-collapse:collapse;margin-top:12px">
           <tr><td style="padding:4px 0;color:var(--text-mid)">Proposal Subtotal</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.subtotal)}</td></tr>
           ${est.proposalTotals.freight>0?`<tr><td style="padding:4px 0;color:var(--text-mid)">Freight</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.freight)}</td></tr>`:''}
+          ${(est.proposalTotals.adjacentCharges||0)>0?`<tr><td style="padding:4px 0;color:var(--text-mid)">Other Associated Charges</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.adjacentCharges)}</td></tr>`:''}
           <tr><td style="padding:4px 0;color:var(--text-mid)">Tax</td><td style="text-align:right;padding:4px 0">${fmt(est.proposalTotals.tax)}</td></tr>
           <tr style="font-weight:600"><td style="padding:6px 0;border-top:1px solid var(--border)">Proposal Total</td><td style="text-align:right;padding:6px 0;border-top:1px solid var(--border)">${fmt(est.proposalTotals.total)}</td></tr>
         </table>
@@ -26693,11 +26705,30 @@ function saveTaxState() {
 // re-compute any open draft invoices on those projects. The user is asked
 // once; if they decline, only the tax state row is updated. Issued invoices
 // (sent / partial / paid / cancelled) keep their snapshotted rate.
+// 2.8 step 4: a project's cascaded rate re-sums ITS OWN jurisdiction
+// selection against the state's (possibly edited) components — projects
+// that only apply some jurisdictions must not be flattened to the full
+// state rate. Projects without a jurisdiction selection get the state rate
+// as before. Stored {name, rate} entries are refreshed to the new rates.
+function _projectRateFromState(p, newFields) {
+  const stored = p.settings?.jurisdictions;
+  const comps = Array.isArray(newFields.rateComponents) ? newFields.rateComponents : [];
+  if (!Array.isArray(stored) || !stored.length || comps.length < 2) {
+    return { rate: Number(newFields.taxRate) || 0, jurisdictions: null };
+  }
+  const names = new Set(stored.map(j => typeof j === 'string' ? j : j?.name).filter(Boolean));
+  const selected = comps.filter(c => names.has(c.name));
+  if (!selected.length) return { rate: Number(newFields.taxRate) || 0, jurisdictions: null };
+  const rate = Math.round(selected.reduce((s, c) => s + (Number(c.rate) || 0), 0) * 1000) / 1000;
+  return { rate, jurisdictions: selected.map(c => ({ name: c.name, rate: Number(c.rate) || 0 })) };
+}
+
 function cascadeTaxStateToProjects(stateName, newFields) {
   const projs = projectsUsingTaxState(stateName);
   if (!projs.length) return;
+  const resolved = new Map(projs.map(p => [p.id, _projectRateFromState(p, newFields)]));
   const changed = projs.filter(p =>
-    Number(p.taxRate)   !== Number(newFields.taxRate) ||
+    Number(p.taxRate)   !== resolved.get(p.id).rate ||
     !!p.taxFreight      !== !!newFields.taxFreight    ||
     !!p.timeTaxable     !== !!newFields.timeTaxable
   );
@@ -26708,10 +26739,12 @@ function cascadeTaxStateToProjects(stateName, newFields) {
   const msg = changed.length + ' project' + (changed.length!==1?'s':'') +
     ' on "' + stateName + '" will be updated to match the new settings' +
     (draftCount ? ' (and ' + draftCount + ' open draft invoice' + (draftCount!==1?'s':'') + ' recomputed)' : '') +
-    '. Continue?';
+    '. Projects with a jurisdiction selection re-sum their own components. Continue?';
   if (!confirm(msg)) return;
   changed.forEach(p => {
-    p.taxRate     = Number(newFields.taxRate) || 0;
+    const r = resolved.get(p.id);
+    p.taxRate     = r.rate;
+    if (r.jurisdictions) { if (!p.settings) p.settings = {}; p.settings.jurisdictions = r.jurisdictions; }
     p.taxFreight  = !!newFields.taxFreight;
     p.timeTaxable = !!newFields.timeTaxable;
   });
@@ -26720,8 +26753,9 @@ function cascadeTaxStateToProjects(stateName, newFields) {
   // Only the invoice-level rate + freightTaxable snapshot move.
   (S.invoices||[]).forEach(inv => {
     if (inv.status !== 'draft') return;
-    if (!changed.some(p => p.id === inv.projectId)) return;
-    inv.taxRate        = Number(newFields.taxRate) || 0;
+    const proj = changed.find(p => p.id === inv.projectId);
+    if (!proj) return;
+    inv.taxRate        = resolved.get(proj.id).rate;
     inv.freightTaxable = !!newFields.taxFreight;
     if (typeof recalcStoredInvoiceTotals === 'function') recalcStoredInvoiceTotals(inv);
   });
@@ -26790,7 +26824,11 @@ function _renderProjectJurisdictions(stateName, selected) {
   const comps = (ts && Array.isArray(ts.rateComponents)) ? ts.rateComponents.filter(c => (c.name||'').trim()) : [];
   if (comps.length < 2) { wrap.style.display = 'none'; host.innerHTML = ''; return; }
   wrap.style.display = '';
-  const sel = Array.isArray(selected) ? new Set(selected) : null;   // null → all checked
+  // Selected entries may be legacy name-strings or {name, rate} objects
+  // (2.8 step 4) — normalize to a name set either way.
+  const sel = Array.isArray(selected)
+    ? new Set(selected.map(j => typeof j === 'string' ? j : j?.name).filter(Boolean))
+    : null;   // null → all checked
   host.innerHTML = comps.map(c => {
     const checked = sel ? sel.has(c.name) : true;
     return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-dark)">
@@ -26808,6 +26846,40 @@ function _recalcProjectTaxFromJurisdictions() {
   document.querySelectorAll('#ps-jurisdictions .ps-juris-cb').forEach(cb => { if (cb.checked) sum += Number(cb.dataset.rate) || 0; });
   const rateEl = $c('ps-taxrate');
   if (rateEl) rateEl.value = Math.round(sum * 1000) / 1000;
+  const warnEl = $c('ps-juris-drift-warn');
+  if (warnEl) warnEl.style.display = 'none';   // toggling re-derives → drift resolved
+}
+
+// 2.8 step 4 — non-blocking drift warning inside the project-settings modal.
+// Compares the saved rate to the sum of the STORED jurisdiction rates
+// ({name, rate} entries; legacy name-only entries can't be summed and are
+// reported as unauditable instead).
+function _renderJurisdictionDriftWarning(p) {
+  let host = $c('ps-juris-drift-warn');
+  if (!host) {
+    const wrap = $c('ps-jurisdictions-wrap');
+    if (!wrap) return;
+    host = document.createElement('div');
+    host.id = 'ps-juris-drift-warn';
+    wrap.appendChild(host);
+  }
+  host.style.display = 'none';
+  host.innerHTML = '';
+  const stored = p.settings?.jurisdictions;
+  if (!Array.isArray(stored) || !stored.length) return;
+  const objs = stored.filter(j => j && typeof j === 'object' && j.rate != null);
+  const warnStyle = 'margin-top:8px;padding:8px 12px;background:rgba(196,122,32,0.08);border:1px solid rgba(196,122,32,0.3);border-radius:var(--rs);font-family:var(--font-b);font-size:11px;color:#8a5a10;line-height:1.5';
+  if (objs.length !== stored.length) {
+    host.innerHTML = `<div style="${warnStyle}">⚠ This project's jurisdiction selection predates rate tracking — the saved ${Number(p.taxRate) || 0}% can't be reconciled against its components. Re-toggle a jurisdiction (or re-check the boxes) to re-derive and store an auditable breakdown.</div>`;
+    host.style.display = '';
+    return;
+  }
+  const sum = Math.round(objs.reduce((s, j) => s + (Number(j.rate) || 0), 0) * 1000) / 1000;
+  const rate = Number(p.taxRate) || 0;
+  if (Math.abs(sum - rate) > 0.0005) {
+    host.innerHTML = `<div style="${warnStyle}">⚠ Saved tax rate <strong>${rate}%</strong> ≠ sum of stored jurisdictions <strong>${sum}%</strong> — the rate was hand-edited or the state's components changed since. Re-toggle a jurisdiction to re-derive, or verify the hand-set rate is intended.</div>`;
+    host.style.display = '';
+  }
 }
 
 function deleteTaxState(id) {
@@ -32735,7 +32807,10 @@ function recalcInvoice() {
   else if (discType === 'flat') discount = discVal;
 
   // Tax
-  const tax = (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate;
+  // Clamped to match the save path (audit defect #5) — a taxable credit
+  // exceeding taxable sales must not subtract negative tax from the
+  // displayed grand total while the Tax row shows $0.
+  const tax = Math.max(0, (taxableAmt - (discType === 'pct' ? taxableAmt * (discVal/100) : Math.min(discount, taxableAmt))) * taxRate);
   // Credits added at the end (they're negative).
   const afterDiscount = subtotal + freight + adjacent - discount + creditTotal;
 

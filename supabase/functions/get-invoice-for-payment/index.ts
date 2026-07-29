@@ -175,7 +175,7 @@ Deno.serve(async (req) => {
         discount: Number(inv.discount || 0),
         tax_rate: Number(inv.tax_rate || 0),
         tax: Math.max(0, Number(inv.tax || 0) - Math.round(hiddenTax * 100) / 100),
-        cc_fee_pct: Number(inv.cc_fee_pct || 3.5),
+        cc_fee_pct: Number(inv.cc_fee_pct ?? 3.5),   // 0 is an explicit "no fee", not a fallback trigger
         total: Number(inv.total || 0),
         amount_paid: amountPaid,
         amount_due: amountDue,

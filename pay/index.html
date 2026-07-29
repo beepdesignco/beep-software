@@ -118,7 +118,7 @@ function render(d) {
   const { invoice, studio, project, client } = d;
   const si = studio.info || {};
   const isPaid = invoice.amount_due <= 0.01;
-  const ccFee = invoice.cc_fee_pct || 3.5;
+  const ccFee = invoice.cc_fee_pct ?? 3.5;   // 0 = explicitly no card fee
   // §6 payment methods config from the edge function. Absent (older cached
   // response) = everything enabled, matching prior behavior.
   const pm = d.payment_methods || { ach: true, card: true, wire: true, check: true, custom: [] };
