@@ -87,8 +87,12 @@ Deno.serve(async (req) => {
       // will see the row on next sync once we resolve the insert issue.
     }
 
-    // Flip the invoice to cancelled server-side so the web app sees it.
-    await sb.from('invoices').update({ status: 'cancelled' }).eq('id', inv.id);
+    // Flip the invoice to REFUNDED server-side (work-list 2.8 step 2):
+    // collected-then-returned is a different accounting event from
+    // cancelled (voided-never-collected). Refunded invoices stay IN the
+    // cash-basis tax report so the original sale keeps its filed period
+    // and the negative refund posts in the refund period.
+    await sb.from('invoices').update({ status: 'refunded' }).eq('id', inv.id);
 
     return json({ ok: true, refund_id: refund.id, amount: Math.abs(refundAmount) });
   } catch (e) {

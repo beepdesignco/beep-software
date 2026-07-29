@@ -1558,6 +1558,7 @@ tr:hover .row-btns { opacity:1; }
             <option value="paid">Paid</option>
             <option value="overdue">Overdue</option>
             <option value="cancelled">Cancelled</option>
+            <option value="refunded">Refunded</option>
           </select>
           <select class="fi" id="inv-filter-type" onchange="renderInvoices()" style="font-size:12px;padding:6px 10px">
             <option value="">All Types</option>
@@ -11565,7 +11566,7 @@ function _backfillFreightAllocations() {
     `${a.itemId ?? a.proposalItemId ?? ''}|${a.componentId ?? a.proposalComponentId ?? ''}|${Number(a.amount || 0).toFixed(2)}`;
   const sig = rows => rows.map(allocKey).sort().join('~');
   S.invoices.forEach(inv => {
-    if (inv.status === 'draft' || inv.status === 'cancelled') return;
+    if (inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'refunded') return;
     const freightTotal = Number(inv.freight) || 0;
     if (freightTotal <= 0) return;
     // Fixpoint check: only re-allocate when a fresh computation would actually
@@ -11596,7 +11597,7 @@ function _backfillOverpaymentCredits() {
   let created = 0;
   S.invoices.forEach(inv => {
     if (!inv.projectId) return;
-    if (inv.status === 'draft' || inv.status === 'cancelled') return;
+    if (inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'refunded') return;
     const settled = (inv.payments || [])
       .filter(p => !p.pending && Number(p.amount || 0) > 0)
       .reduce((s, p) => s + Number(p.amount || 0), 0);
@@ -13128,12 +13129,12 @@ function groupInvoiceLineItemsByLocation(inv) {
 
 function getItemInvoiceRefs(itemId) {
   // Check both directions: invoice lineItems → proposalItemId, AND item._invoiceIds
-  const fromLineItems = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
+  const fromLineItems = (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && inv.status !== 'refunded' && (inv.lineItems||[]).some(l => l.proposalItemId === itemId));
   if (fromLineItems.length) return fromLineItems;
   // Fallback: check if item has _invoiceIds tagged
   const item = findProposalItemById(itemId);
   if (item?._invoiceIds?.length) {
-    return (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && item._invoiceIds.includes(inv.id));
+    return (S.invoices||[]).filter(inv => inv.status !== 'cancelled' && inv.status !== 'refunded' && item._invoiceIds.includes(inv.id));
   }
   return [];
 }
@@ -15524,7 +15525,7 @@ function getItemFreightCollected(itemId) {
   if (!itemId) return 0;
   let total = 0;
   (S.invoices || []).forEach(inv => {
-    if (inv.status === 'cancelled') return;
+    if (inv.status === 'cancelled' || inv.status === 'refunded') return;
     (inv.freightAllocations || []).forEach(a => {
       if (a.proposalItemId === itemId) total += Number(a.amount) || 0;
     });
@@ -15721,7 +15722,7 @@ function _computeFreightAllocs(inv) {
 }
 
 function allocateInvoiceFreight(inv) {
-  if (!inv || inv.status === 'cancelled') return;
+  if (!inv || inv.status === 'cancelled' || inv.status === 'refunded') return;
   if (!Array.isArray(inv.freightAllocations)) inv.freightAllocations = [];
 
   inv.freightAllocations = inv.freightAllocations.filter(a => a.allocationSource !== 'auto_proportional');
@@ -15984,7 +15985,7 @@ function _computeFreightSummaryFromItems(items, pid) {
   const activeSettlements = (S.freightSettlements || []).filter(s => {
     if (s.projectId !== pid) return false;
     const inv = (S.invoices || []).find(i => i.id === s.invoiceId);
-    return inv && inv.status !== 'cancelled';
+    return inv && inv.status !== 'cancelled' && inv.status !== 'refunded';
   });
   let appliedCredits = 0, billedOverages = 0, billedDeferred = 0;
   activeSettlements.forEach(s => {
@@ -16213,7 +16214,7 @@ function getProjectProjectedProfit(pid) {
 
 // Project invoiced / collected / outstanding for the hero header.
 function getProjectInvoiceTotals(pid) {
-  const invs = (S.invoices || []).filter(i => i.projectId === pid && i.status !== 'cancelled' && i.status !== 'draft');
+  const invs = (S.invoices || []).filter(i => i.projectId === pid && i.status !== 'cancelled' && i.status !== 'refunded' && i.status !== 'draft');
   let invoiced = 0, collected = 0, outstanding = 0;
   invs.forEach(i => {
     const t = Number(i.total) || 0;
@@ -16693,7 +16694,7 @@ function toggleBudgetFreightInvoice(invoiceId) {
 function _itemMostRecentInvoice(itemId) {
   let mostRecent = null;
   (S.invoices || []).forEach(inv => {
-    if (inv.status === 'cancelled' || inv.status === 'draft') return;
+    if (inv.status === 'cancelled' || inv.status === 'refunded' || inv.status === 'draft') return;
     const hasAlloc = (inv.freightAllocations || []).some(a => a.proposalItemId === itemId);
     const hasLine  = (inv.lineItems || []).some(l => l.proposalItemId === itemId);
     if (!hasAlloc && !hasLine) return;
@@ -16707,7 +16708,7 @@ function _itemMostRecentInvoice(itemId) {
 // All financials for one invoice's freight + adjacent picture. Returns null
 // for draft/cancelled invoices (those don't contribute).
 function getInvoiceFreightFinancials(inv, pid) {
-  if (!inv || inv.status === 'cancelled' || inv.status === 'draft') return null;
+  if (!inv || inv.status === 'cancelled' || inv.status === 'refunded' || inv.status === 'draft') return null;
 
   const allocs = inv.freightAllocations || [];
   const collectedTotal = allocs.reduce((s, a) => s + (Number(a.amount) || 0), 0);
@@ -16890,7 +16891,7 @@ function getProjectFreightToBill(pid) {
     // Was this item ever billed? If not, it's a pure deferred case.
     // Otherwise it's an overage/under-recovery.
     const wasEverBilled = (S.invoices || []).some(inv =>
-      inv.status !== 'cancelled' && inv.status !== 'draft' &&
+      inv.status !== 'cancelled' && inv.status !== 'refunded' && inv.status !== 'draft' &&
       (inv.freightAllocations || []).some(a => a.proposalItemId === itemId)
     );
     // Proposal-side state check for the label.
@@ -17792,7 +17793,7 @@ function _lineItemActual(line, parentItem, pid) {
 }
 
 function getInvoiceItemsFinancials(inv, pid) {
-  if (!inv || inv.status === 'cancelled' || inv.status === 'draft') return null;
+  if (!inv || inv.status === 'cancelled' || inv.status === 'refunded' || inv.status === 'draft') return null;
   const lines = (inv.lineItems || []).filter(l => {
     if (!l.proposalItemId) return false;
     const it = _findItemById(l.proposalItemId);
@@ -18398,7 +18399,7 @@ function _faChipFromRecon(item, pid) {
   const recon = getItemFreightReconciliation(item.id, item, pid);
   const hasActuals = _faActualsForItem(item.id).length > 0;
   const hasCollected = (S.invoices || []).some(inv =>
-    inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
+    inv.status !== 'cancelled' && inv.status !== 'refunded' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
   );
   if (!hasActuals && !hasCollected) return '';
   const SPOT_ON = 0.5;
@@ -18509,7 +18510,7 @@ function _renderFreightReconStrip(item, pid) {
   // Distinguish "no actuals/collected" from "value happens to be $0".
   const hasActuals = _faActualsForItem(item.id).length > 0;
   const hasCollectedRows = (S.invoices || []).some(inv =>
-    inv.status !== 'cancelled' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
+    inv.status !== 'cancelled' && inv.status !== 'refunded' && (inv.freightAllocations || []).some(a => a.proposalItemId === item.id)
   );
   const cell = (label, value, color, sub) => `
     <div style="flex:1;min-width:0">
@@ -19080,7 +19081,7 @@ function _faBuildDeferredBillables(pid) {
   const activeSettlements = (S.freightSettlements || []).filter(s => {
     if (s.projectId !== pid || s.type !== 'deferred_billed') return false;
     const inv = (S.invoices || []).find(i => i.id === s.invoiceId);
-    return inv && inv.status !== 'cancelled';
+    return inv && inv.status !== 'cancelled' && inv.status !== 'refunded';
   });
   const totalAlreadyBilled = activeSettlements.reduce((sum, s) => sum + (s.amount || 0), 0);
 
@@ -22752,7 +22753,7 @@ function getItemBilledOnInvoices(itemId) {
     }));
   });
   (S.invoices || []).forEach(inv => {
-    if (inv.status === 'cancelled') return;
+    if (inv.status === 'cancelled' || inv.status === 'refunded') return;
     (inv.lineItems || []).forEach(l => {
       const matchesItem = l.proposalItemId === itemId && !l.proposalComponentId;
       const matchesComp = l.proposalComponentId && compIds.has(l.proposalComponentId);
@@ -28456,7 +28457,7 @@ function clearExpenseFilters() {
 function getExpenseInvoices(expId) {
   const out = [];
   (S.invoices||[]).forEach(inv => {
-    if (inv.status === 'cancelled') return;
+    if (inv.status === 'cancelled' || inv.status === 'refunded') return;
     (inv.lineItems||[]).forEach(line => {
       if (line._expenseId === expId) out.push({ inv, line });
     });
@@ -28886,7 +28887,7 @@ async function saveExpense() {
         if (it._expenseId !== expense.id) return true;
         // Keep the item if it's referenced by an invoice line (already committed).
         const onInvoice = (S.invoices || []).some(inv =>
-          inv.status !== 'cancelled' && (inv.lineItems || []).some(l => l.proposalItemId === it.id || l._expenseId === expense.id)
+          inv.status !== 'cancelled' && inv.status !== 'refunded' && (inv.lineItems || []).some(l => l.proposalItemId === it.id || l._expenseId === expense.id)
         );
         return onInvoice;
       });
@@ -28987,7 +28988,7 @@ function deleteExpense(expId) {
       sp.items = (sp.items || []).filter(it => {
         if (it._expenseId !== expId) return true;
         const onInvoice = (S.invoices || []).some(inv =>
-          inv.status !== 'cancelled' && (inv.lineItems || []).some(l => l.proposalItemId === it.id || l._expenseId === expId)
+          inv.status !== 'cancelled' && inv.status !== 'refunded' && (inv.lineItems || []).some(l => l.proposalItemId === it.id || l._expenseId === expId)
         );
         return onInvoice;
       });
@@ -29138,7 +29139,7 @@ function renderExpenseReports() {
   };
 
   const periodExp = (S.expenses||[]).filter(e => inPeriod(e.date));
-  const activeInvoices = (S.invoices||[]).filter(i => i.status !== 'cancelled' && i.status !== 'draft');
+  const activeInvoices = (S.invoices||[]).filter(i => i.status !== 'cancelled' && i.status !== 'refunded' && i.status !== 'draft');
   const periodInvoices = activeInvoices.filter(i => {
     const d = i.sentDate || (i.created ? i.created.slice(0,10) : '');
     return inPeriod(d);
@@ -31970,7 +31971,7 @@ function getItemFreightClient(item, pid) {
 function _invPriorLinesForItem(itemId) {
   return (S.invoices || []).flatMap(prevInv => {
     if (prevInv.id === _currentInvoiceId) return [];
-    if (prevInv.status === 'draft' || prevInv.status === 'cancelled') return [];
+    if (prevInv.status === 'draft' || prevInv.status === 'cancelled' || prevInv.status === 'refunded') return [];
     return (prevInv.lineItems || []).filter(l => l.proposalItemId === itemId);
   });
 }
@@ -32548,7 +32549,7 @@ function toggleInvLineTrack(idx, checked) {
   if (storedLine) storedLine.trackInPM = checked;
 
   const prop = S.proposals[inv.projectId];
-  if (prop && inv.status !== 'draft' && inv.status !== 'cancelled') {
+  if (prop && inv.status !== 'draft' && inv.status !== 'cancelled' && inv.status !== 'refunded') {
     if (checked) {
       // Add to PM if not already there
       if (l._expenseId) {
@@ -32600,7 +32601,7 @@ function toggleInvLineTrack(idx, checked) {
 // of every view timestamp. Bot/email-prefetch views are filtered upstream
 // at the get-invoice-for-payment edge function.
 function renderInvViewedPill(inv) {
-  if (!inv || inv.status === 'draft' || inv.status === 'cancelled') return '';
+  if (!inv || inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'refunded') return '';
   const views = inv.views || [];
   const count = views.length;
   if (count === 0) {
@@ -32912,7 +32913,7 @@ function renderInvoiceBuilder() {
   // independent; multiple may show. Hidden when nothing's outstanding.
   // Suppressed entirely on paid invoices (reconciliation belongs on the
   // next invoice, not on one that's already settled).
-  if (inv.projectId && inv.status !== 'paid' && inv.status !== 'cancelled') {
+  if (inv.projectId && inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'refunded') {
     const recon = getProjectFreightReconState(inv.projectId);
     const lines = [];
     if (recon.projectNetCredit > 0.5) {
@@ -32968,7 +32969,7 @@ function renderInvoiceBuilder() {
     const invoiceableStatuses = ['billable','approved','proposed'];
     const priorLinesForItem = (itemId) => (S.invoices || []).flatMap(prevInv => {
       if (prevInv.id === inv.id) return [];
-      if (prevInv.status === 'draft' || prevInv.status === 'cancelled') return [];
+      if (prevInv.status === 'draft' || prevInv.status === 'cancelled' || prevInv.status === 'refunded') return [];
       return (prevInv.lineItems || []).filter(l => l.proposalItemId === itemId);
     });
     const eligibleItems = [];
@@ -33342,7 +33343,7 @@ function renderInvoiceBuilder() {
       // (Payment recording lives in the "+ Record" button inside the Payments
       // section and is gated separately by can_record_payments.)
       actions.innerHTML = pdfBtn + previewBtn + linkBtn;
-    } else if (inv.status === 'cancelled') {
+    } else if (inv.status === 'cancelled' || inv.status === 'refunded') {
       actions.innerHTML = pdfBtn + '<button class="btn btn-danger btn-sm" onclick="deleteCurrentInvoice()">Delete Invoice</button>';
     } else if (inv.status === 'draft') {
       actions.innerHTML = `
@@ -34655,7 +34656,7 @@ function saveInvoiceFromBuilder(status, opts = {}) {
   // in sync. Drafts skip — allocations only matter once the invoice is
   // live to the client. processInvoiceSentAutomations also calls this on
   // the draft→sent transition; both paths are idempotent.
-  if (inv.status !== 'draft' && inv.status !== 'cancelled') {
+  if (inv.status !== 'draft' && inv.status !== 'cancelled' && inv.status !== 'refunded') {
     allocateInvoiceFreight(inv);
   }
 
@@ -35153,7 +35154,7 @@ async function confirmCancelPaidInvoice() {
         if (!r.ok) throw new Error(json.error || 'Stripe refund failed.');
         // Edge function inserts the negative payment row server-side; sync
         // picks it up. Set status here so UI flips immediately.
-        inv.status = 'cancelled';
+        inv.status = 'refunded';   // collected-then-returned — stays IN tax reports (2.8 step 2)
       } else {
         // Manual refund: insert a negative payment row with the chosen method.
         const method = $c('cpi-refund-method').value;
@@ -35167,7 +35168,7 @@ async function confirmCancelPaidInvoice() {
           method: 'Refund — ' + refundMethod,
           notes: 'Refund of ' + fmt(totalPaid) + ' for cancelled invoice ' + inv.number,
         });
-        inv.status = 'cancelled';
+        inv.status = 'refunded';   // collected-then-returned — stays IN tax reports (2.8 step 2)
       }
     } else if (_cpiSelectedOption === 'credit') {
       // Hold as project credit. For Stripe-paid: no refund issued. For manual:
@@ -35364,7 +35365,7 @@ function revertFromPaid(inv) {
 }
 
 function applyPaymentStatus(inv) {
-  if (inv.status === 'cancelled' || inv.status === 'draft') return;
+  if (inv.status === 'cancelled' || inv.status === 'refunded' || inv.status === 'draft') return;
   const prevStatus = inv.status;
   // Pending=true (in-flight ACH) doesn't count toward status — invoice
   // stays at 'sent' until the funds actually clear. Webhook flips
@@ -35994,7 +35995,7 @@ async function exportInvoicePDF(invId) {
   cursorY += 16;
 
   // ── Meta row as a single bordered table row with vertical separators
-  const statusLabel = inv.status === 'paid' ? 'PAID' : inv.status === 'partial' ? 'PARTIAL' : inv.status === 'cancelled' ? 'CANCELLED' : inv.status === 'draft' ? 'DRAFT' : 'SENT';
+  const statusLabel = inv.status === 'paid' ? 'PAID' : inv.status === 'partial' ? 'PARTIAL' : inv.status === 'cancelled' ? 'CANCELLED' : inv.status === 'refunded' ? 'REFUNDED' : inv.status === 'draft' ? 'DRAFT' : 'SENT';
   const metaParts = [
     ['PAGE',    '1 / 1'],
     ['ISSUED',  inv.sentDate || '—'],
@@ -36329,8 +36330,8 @@ function renderInvCard(inv) {
   const paid = (inv.payments||[]).reduce((s,p) => s + (p.amount||0), 0);
   const due = inv.total - paid;
   const isOverdue = inv.status === 'sent' && inv.dueDate && new Date(inv.dueDate) < new Date();
-  const statusLabel = inv.status === 'cancelled' ? 'Cancelled' : inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
-  const statusColor = inv.status === 'cancelled' ? '#8a8a8a' : inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
+  const statusLabel = inv.status === 'cancelled' ? 'Cancelled' : inv.status === 'refunded' ? 'Refunded' : inv.status === 'paid' ? 'Paid' : inv.status === 'partial' ? 'Partial' : isOverdue ? 'Overdue' : inv.status === 'sent' ? 'Sent' : 'Draft';
+  const statusColor = inv.status === 'cancelled' ? '#8a8a8a' : inv.status === 'refunded' ? '#a05252' : inv.status === 'paid' ? '#1a6e3a' : inv.status === 'partial' ? '#c47a20' : isOverdue ? '#b33' : inv.status === 'sent' ? '#2d5a8a' : '#8a8a8a';
   const typeLabels = { phased:'Phased', monthly:'Monthly', standalone:'Standalone', design_fee:'Design Fee' };
   return `
   <div style="background:var(--white);border-radius:var(--rl);padding:16px 20px;border:1px solid var(--border);cursor:pointer;transition:var(--t)" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openEditInvoice('${inv.id}')">
@@ -36407,6 +36408,7 @@ function renderInvoices() {
     invoices = invoices.filter(i => {
       if (fStatus === 'overdue') return (i.status === 'sent' || i.status === 'partial') && i.dueDate && new Date(i.dueDate) < new Date();
       if (fStatus === 'cancelled') return i.status === 'cancelled';
+      if (fStatus === 'refunded') return i.status === 'refunded';
       return i.status === fStatus;
     });
   }
@@ -36418,8 +36420,8 @@ function renderInvoices() {
 
   // Separate active from cancelled — the filters above already applied to
   // both, so this just decides which section each surviving invoice lands in.
-  const active = invoices.filter(i => i.status !== 'cancelled').sort((a,b) => (b.created||'').localeCompare(a.created||''));
-  const cancelled = invoices.filter(i => i.status === 'cancelled').sort((a,b) => (b.created||'').localeCompare(a.created||''));
+  const active = invoices.filter(i => i.status !== 'cancelled' && i.status !== 'refunded').sort((a,b) => (b.created||'').localeCompare(a.created||''));
+  const cancelled = invoices.filter(i => (i.status === 'cancelled' || i.status === 'refunded')).sort((a,b) => (b.created||'').localeCompare(a.created||''));
 
   if (!active.length && !cancelled.length) {
     body.innerHTML = '<div class="no-results">No invoices yet. Create your first one.</div>';
@@ -36455,7 +36457,7 @@ function renderInvoices() {
     html += `
     <details style="margin-top:24px">
       <summary style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-light);cursor:pointer;user-select:none;padding:8px 0;border-top:1px solid var(--border)">
-        Cancelled Invoices (${cancelled.length})
+        Cancelled &amp; Refunded Invoices (${cancelled.length})
       </summary>
       <div style="padding-top:8px">
         <div id="inv-delete-bar" style="display:${_invDeleteSelection.size?'':'none'};margin-bottom:10px">
@@ -37864,7 +37866,7 @@ function renderReportContent(from, to) {
 
   // Total invoiced in period — exclude drafts AND cancelled (cancelled
   // invoices are voided, they don't count as revenue/invoiced totals).
-  const totalInvoiced = invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').reduce((s,i) => s + i.total, 0);
+  const totalInvoiced = invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled' && i.status!=='refunded').reduce((s,i) => s + i.total, 0);
 
   // Tax collected by state — same cash-basis engine as the Tax tab.
   const taxByState = {};
@@ -37884,7 +37886,7 @@ function renderReportContent(from, to) {
 
   // Revenue by project — exclude drafts AND cancelled.
   const revByProject = {};
-  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').forEach(inv => {
+  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled' && i.status!=='refunded').forEach(inv => {
     const proj = S.projects.find(p => p.id === inv.projectId);
     const name = proj?.name || 'Unlinked';
     if (!revByProject[name]) revByProject[name] = { total:0, paid:0, outstanding:0 };
@@ -37896,7 +37898,7 @@ function renderReportContent(from, to) {
 
   // Revenue by client — exclude drafts AND cancelled.
   const revByClient = {};
-  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled').forEach(inv => {
+  invoices.filter(i=>i.status!=='draft' && i.status!=='cancelled' && i.status!=='refunded').forEach(inv => {
     const client = (S.clients||[]).find(c => c.id === inv.clientId);
     const name = client?.name || 'No Client';
     if (!revByClient[name]) revByClient[name] = { total:0, paid:0, outstanding:0 };
@@ -38138,7 +38140,7 @@ function renderDashboardAR(clientId, projectId) {
   const todayMid = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
   const byClient = {};
   (S.invoices || []).forEach(inv => {
-    if (inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'paid') return;
+    if (inv.status === 'draft' || inv.status === 'cancelled' || inv.status === 'refunded' || inv.status === 'paid') return;
     if (clientId && inv.clientId !== clientId) return;
     if (projectId && inv.projectId !== projectId) return;
     const settled = (inv.payments || []).filter(p => !p.pending && Number(p.amount || 0) > 0)
