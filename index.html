@@ -14037,7 +14037,7 @@ function _itemSourcingSummary(item) {
   return `${item.name || '(unnamed)'} · ${src} · expected cost ${fmt(_itemExpectedCost(item))}${qtyNote}`;
 }
 
-function _appendItemActivity(item, text, kind) {
+function _appendItemActivity(item, text, kind, compId) {
   if (!item.activityLog) item.activityLog = [];
   item.activityLog.unshift({
     id: uid(),
@@ -14047,12 +14047,24 @@ function _appendItemActivity(item, text, kind) {
     kind: kind || null,
     mentions: [],
     timestamp: new Date().toISOString(),
-    compId: null,
+    compId: compId || null,
   });
 }
 
 function itemHasSubstitution(item) {
   return (item?.activityLog || []).some(a => a.kind === 'substitution');
+}
+
+function componentHasSubstitution(item, compId) {
+  return (item?.activityLog || []).some(a => a.kind === 'substitution' && a.compId === compId);
+}
+
+function _componentSourcingSummary(c) {
+  const vendor = c.vendorId ? ((S.vendors || []).find(v => v.id === c.vendorId)?.name || '') : '';
+  const brand = c.brandId ? ((S.brands || []).find(b => b.id === c.brandId)?.name || '') : '';
+  const src = [vendor, brand !== vendor ? brand : ''].filter(Boolean).join(' / ') || 'no vendor';
+  const qty = parseFloat(c.qty) || 1;
+  return `${c.name || '(unnamed component)'} · ${src} · expected cost ${fmt(parse$(c.netCost) * qty)}${qty !== 1 ? ` (×${qty})` : ''}`;
 }
 
 function startItemSubstitution(pid, spId, itemId) {
@@ -14089,11 +14101,45 @@ function startItemSubstitution(pid, spId, itemId) {
   }
 }
 
+// Component-level substitution on a constructed order. Same money rules as
+// item-level — the client price is anchored for the WHOLE item (that's the
+// billed fact) and the cost delta compares whole-item expected cost — but
+// the archive, banner, and any adjustment line speak in terms of the one
+// component being swapped.
+function startComponentSubstitution(pid, spId, itemId, compId) {
+  const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
+  const item = sp?.items?.find(i => i.id === itemId);
+  const comp = item?.components?.find(c => c.id === compId);
+  if (!item || !comp) return;
+  const reason = prompt(`Substituting component "${comp.name || '(unnamed)'}". Why? (optional — becomes part of the item history)`, '');
+  if (reason === null) return;   // Cancel aborts the whole flow
+  const billed = getItemBilledOnInvoices(itemId);
+  let anchored = false;
+  if (billed > 0.005 && _priceOverride(item) == null) {
+    item.clientPriceOverride = billed;   // constructed: whole-item price
+    anchored = true;
+  }
+  _appendItemActivity(item,
+    `⇄ Component substitution started${reason ? ' — ' + reason : ''}. Original: ${_componentSourcingSummary(comp)}.`
+    + (anchored ? ` Client price anchored at collected ${fmt(billed)}.` : ''),
+    'substitution', compId);
+  _subCtx = { pid, spId, itemId, compId, compName: comp.name || '(unnamed component)', origCost: _itemExpectedCost(item), billed, reason: reason || '' };
+  save();
+  openEditItemModal(pid, spId, itemId);
+  const banner = $c('ai-sub-banner');
+  if (banner) {
+    banner.style.display = '';
+    banner.innerHTML = `⇄ <strong>Component substitution</strong> — swapping <strong>${escH(comp.name || '(unnamed)')}</strong>. ${billed > 0.005
+      ? `Collected amount <strong>${fmt(billed)}</strong> stays the settled client price for the whole item`
+      : 'Nothing billed yet, so this is a plain edit'}. Change the component's vendor / cost / product freely — the original sourcing is archived in the activity log.`;
+  }
+}
+
 function openSubDeltaModal(ctx, item, newCost) {
   _subDeltaCtx = {
     pid: ctx.pid,
     itemId: item.id,
-    itemName: item.name || '(unnamed)',
+    itemName: ctx.compName ? `${item.name || '(unnamed)'} · ${ctx.compName}` : (item.name || '(unnamed)'),
     type: item.type,
     reason: ctx.reason,
     origCost: ctx.origCost,
@@ -14375,8 +14421,12 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
             ${(parseFloat(c.qty)||1)>1||c.qtyUnit?`<span style="font-size:10px;color:var(--text-mid);font-family:var(--font-b);margin-left:4px">×${parseFloat(c.qty)||1}${c.qtyUnit?' '+escH(c.qtyUnit):''}</span>`:''}
             ${cTypeLabel ? `<span class="comp-type-label" style="margin-left:4px">${cTypeLabel}</span>` : ''}
             ${(() => { const d = itemContactDisplay(c); return d ? `<span style="font-size:10px;color:var(--text-light);margin-left:4px">· ${escH(d)}</span>` : ''; })()}
+            ${componentHasSubstitution(item, c.id) ? '<span style="font-size:9px;font-family:var(--font-b);font-weight:700;color:var(--russet);background:rgba(150,61,39,0.08);border:1px solid rgba(150,61,39,0.25);border-radius:10px;padding:1px 7px;margin-left:4px" title="This component was substituted — see Notes & Activity for the full history">⇄ Substituted</span>' : ''}
           </div>
-          <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${cNet>0?fmt(cNet):'—'}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${!cIsShip ? `<button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 9px" onclick="startComponentSubstitution('${pid}','${spId}','${itemId}','${c.id}')" title="Vendor can't fill this component? Swap its vendor/cost/product with history preserved — the item's collected amount stays the settled fact.">⇄ Substitute</button>` : ''}
+            <span style="font-family:var(--font-h);font-weight:700;font-size:14px;color:var(--pecan)">${cNet>0?fmt(cNet):'—'}</span>
+          </div>
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
@@ -23717,7 +23767,16 @@ function saveItem() {
     _subCtx = null;
     const savedItem = sp.items.find(i => i.id === itemId);
     if (savedItem) {
-      _appendItemActivity(savedItem, `⇄ Substitution saved. Now: ${_itemSourcingSummary(savedItem)}.`, 'substitution');
+      if (ctx.compId) {
+        const savedComp = (savedItem.components || []).find(c => c.id === ctx.compId);
+        _appendItemActivity(savedItem,
+          savedComp
+            ? `⇄ Component substitution saved. Now: ${_componentSourcingSummary(savedComp)}.`
+            : `⇄ Component substitution saved — original component removed. Item now: ${_itemSourcingSummary(savedItem)}.`,
+          'substitution', ctx.compId);
+      } else {
+        _appendItemActivity(savedItem, `⇄ Substitution saved. Now: ${_itemSourcingSummary(savedItem)}.`, 'substitution');
+      }
       save();
       const newCost = _itemExpectedCost(savedItem);
       if (Math.abs(newCost - ctx.origCost) > 0.5) {
