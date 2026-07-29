@@ -36830,6 +36830,43 @@ function getUnfiledPeriodsForState(state) {
   return all.filter(p => !filings.some(f => f.stateId === state.id && f.periodKey === p.periodKey));
 }
 
+// Resolve a filing periodKey (YYYY-MM | YYYY-Qn | YYYY-Hn | YYYY) into the
+// [from, to] date range it covers, for computing collected tax at filing time.
+function _filingPeriodRange(periodKey) {
+  let m;
+  if ((m = /^(\d{4})-(\d{2})$/.exec(periodKey))) {
+    const y = +m[1], mo = +m[2] - 1;
+    return { from: new Date(y, mo, 1), to: new Date(y, mo + 1, 0) };
+  }
+  if ((m = /^(\d{4})-Q([1-4])$/.exec(periodKey))) {
+    const y = +m[1], q = +m[2] - 1;
+    return { from: new Date(y, q * 3, 1), to: new Date(y, q * 3 + 3, 0) };
+  }
+  if ((m = /^(\d{4})-H([12])$/.exec(periodKey))) {
+    const y = +m[1], h = +m[2] - 1;
+    return { from: new Date(y, h * 6, 1), to: new Date(y, h * 6 + 6, 0) };
+  }
+  if ((m = /^(\d{4})$/.exec(periodKey))) {
+    const y = +m[1];
+    return { from: new Date(y, 0, 1), to: new Date(y, 11, 31) };
+  }
+  return null;
+}
+
+// The system's own answer for "how much tax did we collect for this state in
+// this period" — same cash-basis engine the reports file from.
+function _computedTaxForFiling(stateName, periodKey) {
+  const range = _filingPeriodRange(periodKey);
+  if (!range) return null;
+  const rep = buildSalesTaxReport(range.from, range.to, {});
+  const s = rep.stateData?.[stateName];
+  return {
+    tax: s ? s.tax : 0,
+    taxable: s ? s.taxable : 0,
+    nontaxable: s ? s.nontaxable : 0,
+  };
+}
+
 function markFilingFiled(stateId, periodKey, periodLabel) {
   const state = (S.taxStates || []).find(s => s.id === stateId);
   if (!state) return;
@@ -36837,6 +36874,18 @@ function markFilingFiled(stateId, periodKey, periodLabel) {
   const dateStr = prompt('Filed date for ' + state.name + ' · ' + periodLabel + ' (YYYY-MM-DD):', todayISO);
   if (dateStr == null) return;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) { toast('Invalid date — expected YYYY-MM-DD.'); return; }
+  // Snapshot the system's computed collected tax for the period NOW, and ask
+  // what was actually filed — the tracker's job is catching drift between the
+  // books and the return, which a date-only record can never do.
+  const computed = _computedTaxForFiling(state.name, periodKey);
+  const computedStr = computed ? computed.tax.toFixed(2) : '';
+  const amtRaw = prompt(
+    'Tax amount filed with ' + state.name + ' for ' + periodLabel +
+    ' ($):\n\nSystem-computed collected tax for this period: $' + (computedStr || 'unknown'),
+    computedStr);
+  if (amtRaw == null) return;
+  const filedAmount = parseFloat(String(amtRaw).replace(/[^0-9.\-]/g, ''));
+  if (isNaN(filedAmount)) { toast('Invalid amount.'); return; }
   S.taxFilings = S.taxFilings || [];
   S.taxFilings.push({
     id: uid(),
@@ -36846,9 +36895,19 @@ function markFilingFiled(stateId, periodKey, periodLabel) {
     periodLabel,
     filedDate: dateStr.trim(),
     filedBy: AUTH.member?.display_name || AUTH.user?.email?.split('@')[0] || 'You',
+    filedAmount,
+    computedTax: computed ? Math.round(computed.tax * 100) / 100 : null,
+    computedTaxable: computed ? Math.round(computed.taxable * 100) / 100 : null,
+    computedAt: new Date().toISOString(),
   });
+  const delta = computed != null ? filedAmount - computed.tax : null;
   save();
   if (typeof renderDashboard === 'function') renderDashboard();
+  if (delta != null && Math.abs(delta) > 0.01) {
+    toast(`Filed ${fmt(filedAmount)} vs computed ${fmt(computed.tax)} — ${fmt(Math.abs(delta))} ${delta > 0 ? 'over' : 'under'}. Flagged in Filing History.`);
+  } else {
+    toast('Filing recorded — matches computed collected tax.');
+  }
 }
 
 function unmarkFilingFiled(filingId) {
@@ -36931,15 +36990,30 @@ function renderUpcomingFilings() {
         Filing History (${filings.length})
       </summary>
       <div style="margin-top:8px;font-family:var(--font-b);font-size:11px">
-        ${filings.map(f => `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;gap:10px">
+        ${filings.map(f => {
+          // Filed-vs-computed reconciliation badge. Pre-snapshot records
+          // (date-only) show as unreconciled rather than pretending.
+          let recon = '<span style="font-size:9px;color:var(--text-light);font-style:italic">no amount recorded</span>';
+          if (f.filedAmount != null) {
+            if (f.computedTax != null) {
+              const delta = f.filedAmount - f.computedTax;
+              recon = Math.abs(delta) <= 0.01
+                ? `<span style="font-size:9px;font-family:var(--font-h);font-weight:700;color:#1a6e3a">✓ ${fmt(f.filedAmount)} matches computed</span>`
+                : `<span style="font-size:9px;font-family:var(--font-h);font-weight:700;color:#c47a20" title="Filed ${fmt(f.filedAmount)} vs computed ${fmt(f.computedTax)}">⚠ ${fmt(Math.abs(delta))} ${delta > 0 ? 'over' : 'under'} computed</span>`;
+            } else {
+              recon = `<span style="font-size:9px;color:var(--text-mid)">filed ${fmt(f.filedAmount)}</span>`;
+            }
+          }
+          return `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;gap:10px;flex-wrap:wrap">
             <div>
               <strong style="color:var(--mahogany);font-family:var(--font-h);font-weight:700;letter-spacing:0.04em;text-transform:uppercase">${escH(f.stateName)}</strong>
               <span style="color:var(--text-mid)"> · ${escH(f.periodLabel)}</span>
             </div>
+            ${recon}
             <div style="color:var(--text-mid);font-size:10px">filed ${escH(f.filedDate)} by ${escH(f.filedBy || '—')}</div>
             <button class="btn btn-ghost btn-sm" onclick="unmarkFilingFiled('${f.id}')" style="font-size:10px;padding:2px 8px;color:#b33">Unmark</button>
-          </div>`).join('')}
+          </div>`;}).join('')}
       </div>
     </details>`;
   }
