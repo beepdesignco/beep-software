@@ -22330,45 +22330,81 @@ function renderModalComponents() {
 // Sub-contacts and available brands are scoped to the component's chosen
 // vendor — when vendor changes, both downstream pickers re-render and any
 // no-longer-valid selection is cleared.
+// §3.5.1: identical cascade on components — brand-first, carriers-only
+// vendor list, matrix-driven contact auto-fill that never overwrites a
+// manual pick. State lives on the component object `c`; `c._contactAuto`
+// (transient) tracks whether the current contact was auto-filled.
 function initComponentPickers(c) {
   const vHost = `cmp-vendor-${c.id}`;
   const ctHost = `cmp-contact-${c.id}`;
   const brHost = `cmp-brand-${c.id}`;
-
-  const allowedBrandIdsFor = (vendorId) => {
-    if (!vendorId) return [];
-    const v = (S.vendors || []).find(x => x.id === vendorId);
-    return v?.brandIds || [];
-  };
-
-  const mountBrand = () => {
-    renderItemBrandPicker(brHost, c.brandId || null, (newBrandId) => {
-      c.brandId = newBrandId || null;
-      __icpRefreshBrand(ctHost, c.brandId);
-    }, { restrictTo: allowedBrandIdsFor(c.vendorId), allowCreate: false });
-  };
+  if (c._contactAuto === undefined) c._contactAuto = !c.vendorContactId;
 
   const mountContact = () => {
     renderItemContactPicker(ctHost, c.vendorId || null, c.vendorContactId || null, c.brandId || null, (newContactId) => {
       c.vendorContactId = newContactId || null;
+      c._contactAuto = false;   // picker change = manual
     });
   };
 
-  const mountVendor = () => {
-    renderItemVendorPicker(vHost, c.vendorId || null, (newVendorId) => {
-      c.vendorId = newVendorId || null;
-      // Drop now-invalid downstream selections
-      const allowed = allowedBrandIdsFor(c.vendorId);
-      if (c.brandId && !allowed.includes(c.brandId)) c.brandId = null;
-      if (c.vendorContactId) {
-        const stillValid = (S.vendorContacts || [])
-          .some(x => x.id === c.vendorContactId && x.vendorId === c.vendorId);
-        if (!stillValid) c.vendorContactId = null;
-      }
-      mountContact();
-      mountBrand();
+  const applyContactResolution = () => {
+    const curValid = c.vendorContactId && c.vendorId &&
+      (S.vendorContacts || []).some(x => x.id === c.vendorContactId && x.vendorId === c.vendorId);
+    if (c.vendorContactId && !c._contactAuto && curValid) { mountContact(); return; }
+    const resolved = _resolveContactForVendorBrand(c.vendorId || null, c.brandId || null);
+    c.vendorContactId = resolved;
+    c._contactAuto = resolved != null;
+    mountContact();
+  };
+
+  const mountBrand = (restrictTo) => {
+    let r = restrictTo !== undefined ? restrictTo
+      : (c.vendorId && !c.brandId ? _vendorBrandIdSet(c.vendorId) : null);
+    if (Array.isArray(r) && !r.length) r = null;   // never dead-end the picker
+    renderItemBrandPicker(brHost, c.brandId || null, onBrandChange, { restrictTo: r, allowCreate: false });
+  };
+
+  const mountVendor = (restrictTo, restrictLabel) => {
+    renderItemVendorPicker(vHost, c.vendorId || null, onVendorChange, {
+      restrictTo: restrictTo !== undefined ? restrictTo
+        : (c.brandId ? _carriersForBrand(c.brandId) : null),
+      restrictLabel: restrictLabel !== undefined ? restrictLabel
+        : (c.brandId ? _brandName(c.brandId) : ''),
     });
   };
+
+  function onBrandChange(newBrandId) {
+    c.brandId = newBrandId || null;
+    if (newBrandId) {
+      const carriers = _carriersForBrand(newBrandId);
+      if (!carriers.length) {
+        toast(`${_brandName(newBrandId)} isn't linked to any vendor yet — pick its vendor and the link will be saved.`);
+        c._pendingBrandLink = newBrandId;
+        mountVendor(null, '');
+      } else {
+        c._pendingBrandLink = null;
+        if (c.vendorId && !carriers.includes(c.vendorId)) c.vendorId = null;
+        mountVendor(carriers, _brandName(newBrandId));
+        if (!c.vendorId && carriers.length === 1) { onVendorChange(carriers[0]); renderItemVendorPicker(vHost, c.vendorId, onVendorChange, { restrictTo: carriers, restrictLabel: _brandName(newBrandId) }); return; }
+      }
+    } else {
+      c._pendingBrandLink = null;
+      mountVendor(null, '');
+    }
+    __icpRefreshBrand(ctHost, c.brandId);
+    applyContactResolution();
+  }
+
+  function onVendorChange(newVendorId) {
+    c.vendorId = newVendorId || null;
+    if (c._pendingBrandLink && newVendorId) {
+      _commitPendingBrandLink(newVendorId, c._pendingBrandLink);
+      c._pendingBrandLink = null;
+    }
+    if (!c.brandId) mountBrand(newVendorId ? _vendorBrandIdSet(newVendorId) : null);
+    else if (!newVendorId) { mountBrand(null); mountVendor(_carriersForBrand(c.brandId), _brandName(c.brandId)); }
+    applyContactResolution();
+  }
 
   mountVendor();
   mountContact();
@@ -23146,58 +23182,173 @@ function openAddItemModal(pid, spId) {
 // (item populated → fields seeded). Brand changes refresh the contact
 // picker's "Suggested" sub-header; vendor changes reset the contact picker
 // since the prior selection is no longer valid for the new vendor.
+// ═══ §3.5.1 sourcing cascade — brand-first allowed, carriers-only ═══
+// Baylor's decisions (2026-07-29): brand is pickable with no vendor; once a
+// brand is chosen the vendor list shows ONLY its carriers; a brand with
+// zero carriers prompts to tag a vendor (the pick creates the
+// vendor_brands link). Contact auto-resolution follows the 7-row matrix,
+// and auto-fill NEVER overwrites a contact the user chose manually.
+
+// Vendors that carry a brand: direct vendor_brands links + rep-level tags.
+function _carriersForBrand(brandId) {
+  if (!brandId) return [];
+  const direct = (S.vendors || []).filter(v => (v.brandIds || []).includes(brandId)).map(v => v.id);
+  const viaReps = (S.vendorContacts || []).filter(vc => (vc.brandIds || []).includes(brandId)).map(vc => vc.vendorId);
+  return [...new Set([...direct, ...viaReps])];
+}
+
+// All brand ids a vendor is associated with (direct + via reps) — the
+// vendor-first restriction for the brand picker.
+function _vendorBrandIdSet(vendorId) {
+  if (!vendorId) return [];
+  const v = (S.vendors || []).find(x => x.id === vendorId);
+  const ids = new Set(v?.brandIds || []);
+  (S.vendorContacts || []).forEach(vc => { if (vc.vendorId === vendorId) (vc.brandIds || []).forEach(b => ids.add(b)); });
+  return [...ids];
+}
+
+// Contact resolution matrix (§3.5.1, implemented exactly):
+//   1 brand-tagged, no primary            → auto that contact
+//   1 brand-tagged, primary is same       → auto
+//   1 brand-tagged, primary is different  → prompt (null)
+//   2+ brand-tagged                       → prompt (null)
+//   0 brand-tagged, primary exists        → auto the primary
+//   0 brand-tagged, no primary            → prompt (null)
+//   vendor has no contacts                → blank (null), no warning
+function _resolveContactForVendorBrand(vendorId, brandId) {
+  if (!vendorId) return null;
+  const contacts = (S.vendorContacts || []).filter(c => c.vendorId === vendorId);
+  if (!contacts.length) return null;
+  const primary = contacts.find(c => c.primary);
+  const tagged = brandId ? contacts.filter(c => (c.brandIds || []).includes(brandId)) : [];
+  if (tagged.length === 1) {
+    if (!primary || primary.id === tagged[0].id) return tagged[0].id;
+    return null;
+  }
+  if (tagged.length >= 2) return null;
+  return primary ? primary.id : null;
+}
+
+function _brandName(brandId) {
+  return (S.brands || []).find(b => b.id === brandId)?.name || 'this brand';
+}
+
+// Create the vendor_brands link when a pending brand tag resolves to a
+// vendor pick (the "brand had no carriers" flow).
+function _commitPendingBrandLink(vendorId, brandId) {
+  if (!vendorId || !brandId) return;
+  const v = (S.vendors || []).find(x => x.id === vendorId);
+  if (!v) return;
+  if (!Array.isArray(v.brandIds)) v.brandIds = [];
+  if (!v.brandIds.includes(brandId)) {
+    v.brandIds.push(brandId);
+    save();
+    toast(`Linked ${_brandName(brandId)} to ${v.name} in your address book.`);
+  }
+}
+
 function initItemPickers(item) {
   const initialVendorId  = item?.vendorId        || null;
   const initialContactId = item?.vendorContactId || null;
   const initialBrandId   = item?.brandId         || null;
+  const hostV = 'ai-vendor-picker', hostC = 'ai-contact-picker', hostB = 'ai-brand-picker';
 
-  // §10: brand picker is gated by vendor. Only brands tagged to the chosen
-  // vendor are selectable; without a vendor the picker shows a disabled
-  // placeholder. Helper computes the restrictTo set per current vendor.
-  const _initialVendor = initialVendorId ? (S.vendors || []).find(v => v.id === initialVendorId) : null;
-  const _initialBrandRestrict = _initialVendor ? (_initialVendor.brandIds || []) : [];
-
-  renderItemBrandPicker('ai-brand-picker', initialBrandId, (newBrandId) => {
-    __icpRefreshBrand('ai-contact-picker', newBrandId);
-    updateLegacyContactLine();
-  }, { restrictTo: _initialBrandRestrict, allowCreate: false });
-
-  renderItemContactPicker('ai-contact-picker', initialVendorId, initialContactId, initialBrandId, () => {
-    updateLegacyContactLine();
-  });
-
-  renderItemVendorPicker('ai-vendor-picker', initialVendorId, (newVendorId) => {
-    // Reset contact when vendor changes (or clears). §10: auto-populate
-    // the vendor's primary contact when one is set and the previous
-    // contact was empty/stale, so users don't have to re-select it
-    // every time they pick a vendor.
-    const cur = $c('ai-contact-picker');
-    const curContactStillValid = cur?._selectedId && (S.vendorContacts || []).some(c => c.id === cur._selectedId && c.vendorId === newVendorId);
-    let nextContact = curContactStillValid ? cur._selectedId : null;
-    if (!nextContact && newVendorId) {
-      const primary = (S.vendorContacts || []).find(c => c.vendorId === newVendorId && c.primary);
-      if (primary) nextContact = primary.id;
-    }
-    const brandId = $c('ai-brand-picker')?._selectedId || null;
-    renderItemContactPicker('ai-contact-picker', newVendorId, nextContact, brandId, () => {
+  // Contact auto-fill bookkeeping: auto-fill may only land in an empty
+  // field or one that was itself auto-filled — never over a manual choice.
+  const mountContact = (vendorId, contactId, brandId, wasAuto) => {
+    renderItemContactPicker(hostC, vendorId, contactId, brandId, () => {
+      const h = $c(hostC);
+      if (h) h._autoFilled = false;   // a change from the picker UI = manual
       updateLegacyContactLine();
     });
+    const h = $c(hostC);
+    if (h) h._autoFilled = !!wasAuto;
+  };
 
-    // §10: re-restrict the brand picker to the new vendor's brand list.
-    // If the currently-selected brand isn't in that list, clear it.
-    const newVendor = newVendorId ? (S.vendors || []).find(v => v.id === newVendorId) : null;
-    const newRestrict = newVendor ? (newVendor.brandIds || []) : [];
-    const bp = $c('ai-brand-picker');
-    const curBrandId = bp?._selectedId || null;
-    const brandStillValid = curBrandId && newRestrict.includes(curBrandId);
-    renderItemBrandPicker('ai-brand-picker', brandStillValid ? curBrandId : null, bp?._onChange || ((newBrandId) => {
-      __icpRefreshBrand('ai-contact-picker', newBrandId);
-      updateLegacyContactLine();
-    }), { restrictTo: newRestrict, allowCreate: false });
+  const applyContactResolution = () => {
+    const vId = $c(hostV)?._selectedId || null;
+    const bId = $c(hostB)?._selectedId || null;
+    const h = $c(hostC);
+    const cur = h?._selectedId || null;
+    const curManual = cur && h?._autoFilled !== true;
+    const curValid = cur && vId && (S.vendorContacts || []).some(c => c.id === cur && c.vendorId === vId);
+    if (curManual && curValid) { mountContact(vId, cur, bId, false); return; }   // manual choice stands
+    const resolved = _resolveContactForVendorBrand(vId, bId);
+    mountContact(vId, resolved, bId, resolved != null);
+  };
 
+  const onBrandChange = (newBrandId) => {
+    const vp = $c(hostV);
+    if (newBrandId) {
+      const carriers = _carriersForBrand(newBrandId);
+      if (!carriers.length) {
+        // Zero carriers: the brand must get tagged to a vendor to be usable.
+        // Show ALL vendors; the next vendor pick saves the link.
+        toast(`${_brandName(newBrandId)} isn't linked to any vendor yet — pick its vendor and the link will be saved.`);
+        if (vp) vp._pendingBrandLink = newBrandId;
+        renderItemVendorPicker(hostV, vp?._selectedId || null, vp?._onChange, { restrictTo: null });
+      } else {
+        if (vp) vp._pendingBrandLink = null;
+        const curV = vp?._selectedId || null;
+        if (curV && !carriers.includes(curV)) {
+          // Selected vendor doesn't carry the new brand — clear it.
+          renderItemVendorPicker(hostV, null, vp._onChange, { restrictTo: carriers, restrictLabel: _brandName(newBrandId) });
+        } else {
+          renderItemVendorPicker(hostV, curV, vp?._onChange, { restrictTo: carriers, restrictLabel: _brandName(newBrandId) });
+        }
+        // Exactly one carrier and no vendor yet → it can only be them.
+        const vpNow = $c(hostV);
+        if (!vpNow?._selectedId && carriers.length === 1) __ivpPick(hostV, carriers[0]);
+      }
+    } else {
+      if (vp) vp._pendingBrandLink = null;
+      renderItemVendorPicker(hostV, vp?._selectedId || null, vp?._onChange, { restrictTo: null });
+    }
+    __icpRefreshBrand(hostC, newBrandId);
+    applyContactResolution();
     updateLegacyContactLine();
-  });
+  };
 
+  const onVendorChange = (newVendorId) => {
+    const vp = $c(hostV);
+    // Pending brand link from the zero-carriers flow resolves on this pick.
+    if (vp?._pendingBrandLink && newVendorId) {
+      _commitPendingBrandLink(newVendorId, vp._pendingBrandLink);
+      vp._pendingBrandLink = null;
+    }
+    // Vendor-first: restrict brands to this vendor's set — unless a brand
+    // drove this pick (it stays selected and valid by construction).
+    const bp = $c(hostB);
+    const curBrand = bp?._selectedId || null;
+    if (!curBrand) {
+      const set = _vendorBrandIdSet(newVendorId);
+      // Empty set → unrestricted (a vendor with no linked brands must not
+      // dead-end the brand picker; picking a brand then prompt-links it).
+      renderItemBrandPicker(hostB, null, onBrandChange, { restrictTo: (newVendorId && set.length) ? set : null, allowCreate: false });
+    } else if (!newVendorId) {
+      // Vendor cleared: brand keeps its selection, restrictions lift.
+      renderItemBrandPicker(hostB, curBrand, onBrandChange, { restrictTo: null, allowCreate: false });
+      renderItemVendorPicker(hostV, null, vp?._onChange, { restrictTo: curBrand ? _carriersForBrand(curBrand) : null, restrictLabel: _brandName(curBrand) });
+    }
+    applyContactResolution();
+    updateLegacyContactLine();
+  };
+
+  // Mount order: brand first (unrestricted unless editing a vendor-first
+  // item), then contact (existing selection = manual), then vendor.
+  renderItemBrandPicker(hostB, initialBrandId, onBrandChange, {
+    restrictTo: (() => {
+      if (!initialVendorId || initialBrandId) return null;
+      const set = _vendorBrandIdSet(initialVendorId);
+      return set.length ? set : null;
+    })(),
+    allowCreate: false,
+  });
+  mountContact(initialVendorId, initialContactId, initialBrandId, !initialContactId);
+  renderItemVendorPicker(hostV, initialVendorId, onVendorChange, {
+    restrictTo: initialBrandId ? _carriersForBrand(initialBrandId) : null,
+    restrictLabel: initialBrandId ? _brandName(initialBrandId) : '',
+  });
   updateLegacyContactLine();
 }
 
@@ -24131,11 +24282,18 @@ function __bpNew(hostId) {
 // that opens a popover with typeahead + an inline create-new action.
 
 // ── Vendor ──────────────────────────────────────────────────
-function renderItemVendorPicker(hostId, vendorId, onChange) {
+function renderItemVendorPicker(hostId, vendorId, onChange, opts) {
   const host = $c(hostId);
   if (!host) return;
   host._selectedId = vendorId || null;
   host._onChange = onChange;
+  // §3.5.1: optional carrier restriction (brand-first flow). Persist across
+  // re-renders unless the caller explicitly passes a new restrictTo
+  // (including null to clear).
+  if (opts && 'restrictTo' in opts) {
+    host._restrictTo = opts.restrictTo || null;
+    host._restrictLabel = opts.restrictLabel || '';
+  }
   const v = vendorId ? (S.vendors || []).find(x => x.id === vendorId) : null;
   if (v) {
     host.innerHTML = `
@@ -24170,8 +24328,15 @@ function __ivpFilter(hostId, query) {
   const pop = $c(hostId + '-popover');
   if (!host || !pop) return;
   const q = (query || '').toLowerCase().trim();
-  const vendors = (S.vendors || []).slice()
+  let vendors = (S.vendors || []).slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  // §3.5.1: brand-first restriction — only vendors that carry the selected
+  // brand are listed. The header line says why the list is short.
+  const restricted = Array.isArray(host._restrictTo);
+  if (restricted) vendors = vendors.filter(v => host._restrictTo.includes(v.id));
+  const restrictHeader = restricted
+    ? `<div style="font-size:10px;color:var(--russet);font-family:var(--font-b);font-weight:700;padding:2px 8px 6px;border-bottom:1px solid var(--border);margin-bottom:4px">Carriers of ${escH(host._restrictLabel || 'the selected brand')}</div>`
+    : '';
   const matches = vendors.filter(v => !q || (v.name || '').toLowerCase().includes(q) || (v.vendorType || '').toLowerCase().includes(q));
   const exactMatch = vendors.some(v => (v.name || '').toLowerCase() === q);
 
@@ -24189,7 +24354,7 @@ function __ivpFilter(hostId, query) {
     ? `<div onclick="__ivpNew('${hostId}', ${JSON.stringify(query).replace(/"/g, '&quot;')})" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Add new vendor "${escH(query)}"</div>`
     : `<div onclick="__ivpNew('${hostId}', '')" style="padding:6px 8px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;font-size:11px;font-family:var(--font-b);color:var(--russet);font-weight:700" onmouseover="this.style.background='rgba(122,74,16,0.08)'" onmouseout="this.style.background='transparent'">+ Add new vendor</div>`;
 
-  pop.innerHTML = rows + noMatchHint + addNew;
+  pop.innerHTML = restrictHeader + rows + noMatchHint + addNew;
   pop.style.display = 'block';
 
   // Close on outside click — registered once per open
