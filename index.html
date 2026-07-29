@@ -2405,7 +2405,12 @@ tr:hover .row-btns { opacity:1; }
     </div>
 
     <div class="fg" style="margin-top:18px">
-      <label class="fl">Proposal Note <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— internal-only musings; surfaces on the PM item detail page</span></label>
+      <label class="fl">Client Description <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— prints on the proposal beneath the item name</span></label>
+      <textarea class="fi" id="ai-description" style="resize:vertical;min-height:48px" placeholder="What the client should read about this item…"></textarea>
+    </div>
+
+    <div class="fg" style="margin-top:10px">
+      <label class="fl">Internal Note <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">— never shown on client documents; surfaces on the PM item detail page</span></label>
       <textarea class="fi" id="ai-notes" style="resize:vertical;min-height:64px" placeholder="Rough size, design direction, references, &quot;look for cheaper options&quot;, anything you want PM to see while working this item…"></textarea>
     </div>
 
@@ -14442,7 +14447,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
       <div>
         <div style="background:rgba(201,169,106,0.08);border-radius:var(--rl);padding:16px 18px;border:1px solid rgba(201,169,106,0.30);margin-bottom:14px">
           <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8a6a2a;margin-bottom:8px">Proposal Note</div>
-          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px;background:var(--white)" placeholder="Rough size, design direction, references, &quot;look for cheaper options&quot;…" onchange="savePMField('${pid}','${spId}','${itemId}','notes',this.value)">${escH(item.notes||'')}</textarea>
+          <textarea class="fi" style="resize:vertical;min-height:80px;font-size:12px;background:var(--white)" placeholder="Internal — never shown on client documents. Rough size, design direction, references, &quot;look for cheaper options&quot;…" onchange="savePMField('${pid}','${spId}','${itemId}','notes',this.value)">${escH(item.notes||'')}</textarea>
         </div>
 
         <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
@@ -20191,7 +20196,7 @@ function renderItemRow(item, spId, pid) {
   // components expandable (collapsed by default; click to expand). The
   // allowance flag controls how it's billed/displayed to the client, not
   // whether internal users can see the components.
-  const hasExpandable = (item.type === 'constructed' && compRows) || (!isAllowance && ((item.type === 'readymade' && chargeRows) || item.notes));
+  const hasExpandable = (item.type === 'constructed' && compRows) || (!isAllowance && ((item.type === 'readymade' && chargeRows) || item.notes || item.description));
   const contactStr = (() => {
     if (isAllowance) return '';
     const d = itemContactDisplay(item);
@@ -20247,7 +20252,8 @@ function renderItemRow(item, spId, pid) {
       <td colspan="9">
         ${compRows ? `<table class="prop-table component-table" style="margin-bottom:8px">${compRows}</table>` : ''}
         ${chargeRows ? `<table class="prop-table component-table" style="margin-bottom:8px">${chargeRows}</table>` : ''}
-        ${item.notes ? `<div style="padding:8px 14px;font-size:12px;color:var(--text-mid);font-style:italic">${escH(item.notes)}</div>` : ''}
+        ${item.notes ? `<div class="hide-client" style="padding:8px 14px;font-size:12px;color:var(--text-mid);font-style:italic">🔒 ${escH(item.notes)}</div>` : ''}
+        ${item.description ? `<div style="padding:0 14px 8px;font-size:12px;color:var(--text-mid)">${escH(item.description)}</div>` : ''}
       </td>
     </tr>` : ''}`;
 }
@@ -23114,7 +23120,7 @@ function openAddItemModal(pid, spId) {
   const prop = S.proposals[pid];
   const sp = prop?.spaces.find(s => s.id === spId);
   if (sp && sp.name) $c('ai-room').value = sp.name;
-  ['ai-name','ai-net','ai-notes','ai-itemcode','ai-cost-actual'].forEach(id => { if($c(id)) $c(id).value = ''; });
+  ['ai-name','ai-net','ai-notes','ai-description','ai-itemcode','ai-cost-actual'].forEach(id => { if($c(id)) $c(id).value = ''; });
   $c('ai-qty').value = '1';
   $c('ai-qty-unit').innerHTML = '<option value="">—</option>' + qtyUnitOptions('');
   $c('ai-category').value = '';
@@ -23244,6 +23250,7 @@ function openEditItemModal(pid, spId, itemId) {
   $c('ai-category').value = item.category || '';
   populateItemTypeSelect(item.itemTypeId || '');
   $c('ai-notes').value = item.notes || '';
+  $c('ai-description').value = item.description || '';
   $c('ai-allowance').checked = !!item.allowance;
   $c('ai-taxexempt').checked = !!item.taxExempt;
   $c('ai-billcost').checked = !!item.billCostOnly;
@@ -23309,6 +23316,7 @@ function saveItem() {
     room: $c('ai-room').value,
     status: 'design_development',
     notes: $c('ai-notes').value.trim(),
+    description: $c('ai-description').value.trim(),
     _open: false,
     allowance: $c('ai-allowance').checked,
     taxExempt: $c('ai-taxexempt').checked,
@@ -23468,14 +23476,16 @@ function printProposalAsDocument(pid) {
       const badge = isAllowance ? '<span class="allow-badge">Allowance</span>' : '';
       const typeLabels = { constructed:'Constructed', readymade:'Ready Made', openline:'Open Line' };
       const itemTypeLabel = typeLabels[item.type] || '';
-      // Strip URLs from notes — descriptions stay, links don't belong in the
-      // client-facing document. Matches http/https/www-prefixed URLs.
-      const cleanNotes = (item.notes || '')
+      // §3.2 notes split: item NOTES are internal-only and never print —
+      // the client-facing text is item.description (URL-stripped for
+      // safety; links don't belong in a client document). Room/space notes
+      // are unaffected and keep printing.
+      const cleanDesc = (item.description || '')
         .replace(/(https?:\/\/\S+|www\.\S+)/gi, '')
         .replace(/[ \t]+/g, ' ')
         .replace(/\s*\n\s*/g, '\n')
         .trim();
-      const notesHtml = cleanNotes ? '<div class="item-notes">'+escH(cleanNotes)+'</div>' : '';
+      const notesHtml = cleanDesc ? '<div class="item-notes">'+escH(cleanDesc)+'</div>' : '';
 
       itemsHtml += `<tr class="item-row${isAllowance?' allowance':''}">
         <td class="item-name">
