@@ -8691,6 +8691,7 @@ async function loadFromSupabase() {
     projectMeetingsRes,
     clientFeesRes,
     orderGroupsRes,
+    itemFieldDefsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -8723,9 +8724,10 @@ async function loadFromSupabase() {
     sb.from('project_meetings').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('client_fees').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('order_groups').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('item_field_defs').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes, clientFees: clientFeesRes, orderGroups: orderGroupsRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes, clientFees: clientFeesRes, orderGroups: orderGroupsRes, itemFieldDefs: itemFieldDefsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -8813,6 +8815,7 @@ async function loadFromSupabase() {
   S.payrollRuns = (payrollRunsRes.data || []).map(dbPayrollRunToS);
   S.projectMeetings = (projectMeetingsRes.data || []).map(dbProjectMeetingToS);
   S.orderGroups = (orderGroupsRes.data || []).map(dbOrderGroupToS);
+  S.itemFieldDefs = ((itemFieldDefsRes.data || []).map(dbItemFieldDefToS)).sort((a, b) => a.sortOrder - b.sortOrder);
   S.clientFees = (clientFeesRes.data || []).map(dbClientFeeToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
@@ -9505,6 +9508,7 @@ function dbItemToS(it) {
     costActual: it.cost_actual != null ? String(it.cost_actual) : '',
     costActualPaymentMethod: it.cost_actual_payment_method || '',
     costActualMeta: it.cost_actual_meta || null,
+    spec: it.spec || null,
     vendorOrderNumber: it.vendor_order_number || '',
     // §1 freight overhaul: snapshot frozen at estimate approval. Never
     // overwritten by later edits; the live freight_charge can drift,
@@ -9564,6 +9568,7 @@ function dbCompToS(c) {
     clientPriceOverride: c.client_price_override,
     costActual: c.cost_actual != null ? String(c.cost_actual) : '',
     costActualMeta: c.cost_actual_meta || null,
+    spec: c.spec || null,
     additionalCosts: c.additional_costs || [],
     files: c.files || [],
     links: c.links || [],
@@ -9604,6 +9609,7 @@ const _sbShadow = {
   payrollRuns: new Map(),
   projectMeetings: new Map(),
   orderGroups: new Map(),
+  itemFieldDefs: new Map(),
   clientFees: new Map(),
   estimates: new Map(),
   expenseAllocations: new Map(),
@@ -9643,6 +9649,7 @@ function captureSbShadow() {
   _sbShadow.payrollRuns = new Map((S.payrollRuns || []).map(r => [r.id, snap(r)]));
   _sbShadow.projectMeetings = new Map((S.projectMeetings || []).map(m => [m.id, snap(m)]));
   _sbShadow.orderGroups = new Map((S.orderGroups || []).map(g => [g.id, snap(g)]));
+  _sbShadow.itemFieldDefs = new Map((S.itemFieldDefs || []).map(f => [f.id, snap(f)]));
   _sbShadow.clientFees = new Map((S.clientFees || []).map(f => [f.id, snap(f)]));
   _sbShadow.expenseAllocations = new Map();
   (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
@@ -9822,6 +9829,35 @@ function freightSettlementToDB(r, studioId) {
 
 // Payroll runs — an immutable snapshot of a pay period's per-person gross,
 // marked paid. breakdown is a frozen [{userId,name,hours,payRate,gross}] array.
+function dbItemFieldDefToS(f) {
+  return {
+    id: f.id,
+    itemTypeId: f.item_type_id,
+    fieldKey: f.field_key || '',
+    label: f.label || '',
+    fieldType: f.field_type || 'text',
+    options: Array.isArray(f.options) ? f.options : [],
+    required: !!f.required,
+    appliesTo: Array.isArray(f.applies_to) && f.applies_to.length ? f.applies_to : ['readymade', 'openline', 'constructed'],
+    sortOrder: Number(f.sort_order || 0),
+    created: f.created_at,
+  };
+}
+function itemFieldDefToDB(f, studioId) {
+  return {
+    id: f.id, studio_id: studioId,
+    item_type_id: f.itemTypeId,
+    field_key: f.fieldKey || '',
+    label: f.label || '',
+    field_type: f.fieldType || 'text',
+    options: f.options || [],
+    required: !!f.required,
+    applies_to: f.appliesTo || ['readymade', 'openline', 'constructed'],
+    sort_order: Number(f.sortOrder || 0),
+    deleted_at: null,
+  };
+}
+
 function dbOrderGroupToS(r) {
   return {
     id: r.id,
@@ -10331,6 +10367,7 @@ function itemToDB(it) {
     cost_actual: _parseMoney(it.costActual),
     cost_actual_payment_method: it.costActualPaymentMethod || null,
     cost_actual_meta: it.costActualMeta || null,
+    spec: it.spec || null,
     vendor_order_number: it.vendorOrderNumber || null,
     freight_approved_snapshot: it.freightApprovedSnapshot || null,
     additional_costs: it.additionalCosts || [],
@@ -10370,6 +10407,7 @@ function componentToDB(c) {
     client_price_override: c.clientPriceOverride == null || c.clientPriceOverride === '' ? null : _parseMoney(c.clientPriceOverride),
     cost_actual: _parseMoney(c.costActual),
     cost_actual_meta: c.costActualMeta || null,
+    spec: c.spec || null,
     additional_costs: c.additionalCosts || [],
     files: c.files || [], links: c.links || [],
     tracking_numbers: c.trackingNumbers || [], activity_log: c.activityLog || [],
@@ -10681,6 +10719,7 @@ async function syncToSupabase() {
     await syncSafe('payroll_runs', new Map((S.payrollRuns||[]).map(r => [r.id, r])), _sbShadow.payrollRuns, r => payrollRunToDB(r, studioId));
     await syncSafe('project_meetings', new Map((S.projectMeetings||[]).map(m => [m.id, m])), _sbShadow.projectMeetings, m => projectMeetingToDB(m, studioId));
     await syncSafe('order_groups', new Map((S.orderGroups||[]).map(g => [g.id, g])), _sbShadow.orderGroups, g => orderGroupToDB(g, studioId));
+    await syncSafe('item_field_defs', new Map((S.itemFieldDefs||[]).map(f => [f.id, f])), _sbShadow.itemFieldDefs, f => itemFieldDefToDB(f, studioId));
     await syncSafe('client_fees', new Map((S.clientFees||[]).map(f => [f.id, f])), _sbShadow.clientFees, f => clientFeeToDB(f, studioId));
     // Three-phase to satisfy circular FKs:
     //   1. Parent (documents) without current_version_id — gives child a target
@@ -11080,6 +11119,7 @@ let S = {
   projectMeetings: [],
   clientFees: [],
   orderGroups: [],
+  itemFieldDefs: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -14877,6 +14917,80 @@ function removeCostActualEntry() {
   toast('Cost actual entry removed.');
 }
 
+// ── §4.1 ITEM SPECS — render + save the spec set for an item's category ──
+function saveItemSpec(pid, spId, itemId, compId, key, value) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const target = compId ? (item.components || []).find(c => c.id === compId) : item;
+  if (!target) return;
+  const spec = { ...(target.spec || {}) };
+  if (value === '' || value == null) delete spec[key];
+  else spec[key] = value;
+  target.spec = Object.keys(spec).length ? spec : null;
+  save();
+}
+
+function _specFieldInput(f, value, onchange) {
+  const req = f.required && (value === '' || value == null);
+  const border = req ? 'border-color:rgba(200,140,30,0.55);' : '';
+  if (f.fieldType === 'select') {
+    return `<select class="fi fsel" onchange="${onchange}" style="font-size:11px;padding:5px 6px;${border}">
+      <option value=""></option>
+      ${(f.options || []).map(o => `<option value="${escH(o)}" ${value === o ? 'selected' : ''}>${escH(o)}</option>`).join('')}
+    </select>`;
+  }
+  if (f.fieldType === 'textarea') {
+    return `<textarea class="fi" onchange="${onchange}" style="font-size:11px;padding:5px 6px;min-height:44px;resize:vertical;${border}">${escH(value ?? '')}</textarea>`;
+  }
+  const t = f.fieldType === 'number' ? 'number' : f.fieldType === 'date' ? 'date' : 'text';
+  return `<input type="${t}" class="fi" value="${escH(value ?? '')}" onchange="${onchange}" style="font-size:11px;padding:5px 6px;${border}">`;
+}
+
+function _specFieldsHtml(defs, target, pid, spId, itemId, compId) {
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px">
+    ${defs.map(f => {
+      const val = target.spec?.[f.fieldKey];
+      const missing = f.required && (val === '' || val == null);
+      const onchange = `saveItemSpec('${pid}','${spId}','${itemId}',${compId ? `'${compId}'` : 'null'},'${f.fieldKey}',this.value)`;
+      return `<div${f.fieldType === 'textarea' ? ' style="grid-column:1 / -1"' : ''}>
+        <label class="fl" style="font-size:9px;${missing ? 'color:#a87600' : ''}">${escH(f.label)}${f.required ? ' <span style="color:#a87600">*</span>' : ''}</label>
+        ${_specFieldInput(f, val, onchange)}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderItemSpecCard(item, pid, spId) {
+  const typeName = id => (S.itemTypes || []).find(t => t.id === id)?.name || '';
+  const itemDefs = item.itemTypeId
+    ? _ifdForType(item.itemTypeId).filter(f => (f.appliesTo || []).includes(item.type || 'readymade'))
+    : [];
+  const compSections = item.type === 'constructed'
+    ? (item.components || [])
+        .filter(c => c.componentType !== 'shipping' && c.componentType !== 'receiving' && c.itemTypeId)
+        .map(c => ({ c, defs: _ifdForType(c.itemTypeId).filter(f => (f.appliesTo || []).includes('constructed')) }))
+        .filter(x => x.defs.length)
+    : [];
+  if (!itemDefs.length && !compSections.length) return '';
+  const missingCount = [
+    ...itemDefs.filter(f => f.required && (item.spec?.[f.fieldKey] == null || item.spec?.[f.fieldKey] === '')),
+    ...compSections.flatMap(x => x.defs.filter(f => f.required && (x.c.spec?.[f.fieldKey] == null || x.c.spec?.[f.fieldKey] === ''))),
+  ].length;
+  return `
+    <div style="background:var(--white);border-radius:var(--rl);padding:16px 18px;border:1px solid var(--border);margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-mid)">Specifications${item.itemTypeId ? ' · ' + escH(typeName(item.itemTypeId)) : ''}</span>
+        ${missingCount ? `<span style="font-family:var(--font-b);font-size:10px;font-weight:700;color:#a87600">${missingCount} required field${missingCount === 1 ? '' : 's'} open</span>` : ''}
+      </div>
+      ${itemDefs.length ? _specFieldsHtml(itemDefs, item, pid, spId, item.id, null) : ''}
+      ${compSections.map(({ c, defs }) => `
+        <div style="margin-top:${itemDefs.length ? '12' : '0'}px;padding-top:10px;border-top:1px dashed var(--border)">
+          <div style="font-family:var(--font-b);font-size:10px;font-weight:700;color:var(--russet);margin-bottom:6px">↳ ${escH(c.name || 'Component')} · ${escH(typeName(c.itemTypeId))}</div>
+          ${_specFieldsHtml(defs, c, pid, spId, item.id, c.id)}
+        </div>`).join('')}
+    </div>`;
+}
+
 // ── §6D.4 ORDER GROUPS — internal annotation linking items/components that
 // are really ONE vendor order. Pure annotation: no effect on proposal
 // structure, pricing, or client docs. Members: [{itemId, compId|null, note}].
@@ -15330,6 +15444,8 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         </div>
 
         ${renderItemLeadTimeCard(item, pid, spId, itemId)}
+
+        ${renderItemSpecCard(item, pid, spId)}
 
         ${renderOrderGroupCard(item, pid, spId)}
 
@@ -27285,6 +27401,243 @@ function countItemsOfType(typeId) {
   return n;
 }
 
+// ── §4.1 ITEM SPEC SYSTEM — per-category spec fields on items/components ──
+// Defs live in S.itemFieldDefs (item_field_defs table), keyed to item_type_id.
+// Values live in item.spec / component.spec jsonb: { fieldKey: value }.
+
+// Seed templates — standard interior-design spec sets. Loaded per type via
+// the "Load template" picker in Settings → Item Types → Spec fields.
+const ITEM_SPEC_TEMPLATES = {
+  upholstery: { label: 'Upholstery', fields: [
+    { label: 'Fabric (name / SKU)', type: 'text' },
+    { label: 'COM / COL', type: 'select', options: ['COM', 'COL', 'Vendor fabric'] },
+    { label: 'Yardage', type: 'number' },
+    { label: 'Fabric direction', type: 'select', options: ['Up the roll', 'Railroaded'] },
+    { label: 'Pattern repeat', type: 'text' },
+    { label: 'Frame / model', type: 'text' },
+    { label: 'Fill / cushion', type: 'select', options: ['Foam', 'Down wrap', 'All down', 'Spring down'] },
+    { label: 'Leg / base finish', type: 'text' },
+    { label: 'Overall dimensions', type: 'text' },
+  ]},
+  drapery: { label: 'Curtains / Drapery', fields: [
+    { label: 'Fabric (name / SKU)', type: 'text' },
+    { label: 'Widths', type: 'number' },
+    { label: 'Finished length', type: 'text' },
+    { label: 'Heading style', type: 'select', options: ['Pinch pleat', 'Euro pleat', 'Ripplefold', 'Grommet', 'Rod pocket', 'Goblet'] },
+    { label: 'Lining', type: 'select', options: ['Unlined', 'Standard', 'Blackout', 'Interlined'] },
+    { label: 'Break', type: 'select', options: ['Kiss the floor', '½" break', '1" break', 'Puddle'] },
+    { label: 'Hardware', type: 'text' },
+    { label: 'Return / overlap', type: 'text' },
+  ]},
+  lighting: { label: 'Lighting', fields: [
+    { label: 'Fixture type', type: 'select', options: ['Chandelier', 'Pendant', 'Sconce', 'Flush mount', 'Semi-flush', 'Table lamp', 'Floor lamp'] },
+    { label: 'Finish', type: 'text' },
+    { label: 'Overall dimensions', type: 'text' },
+    { label: 'Bulb type', type: 'text' },
+    { label: 'Bulb count', type: 'number' },
+    { label: 'Canopy / backplate', type: 'text' },
+    { label: 'Location rating', type: 'select', options: ['Dry', 'Damp', 'Wet'] },
+    { label: 'Dimmable', type: 'select', options: ['Yes', 'No'] },
+  ]},
+  rugs: { label: 'Rugs', fields: [
+    { label: 'Size', type: 'text' },
+    { label: 'Material', type: 'text' },
+    { label: 'Construction', type: 'select', options: ['Hand-knotted', 'Hand-tufted', 'Flatweave', 'Machine-made', 'Custom'] },
+    { label: 'Pile height', type: 'text' },
+    { label: 'Rug pad', type: 'select', options: ['None', 'Standard', 'Felt', 'Felt + rubber'] },
+    { label: 'Binding / serging', type: 'text' },
+  ]},
+  casegoods: { label: 'Case Goods', fields: [
+    { label: 'Overall dimensions', type: 'text' },
+    { label: 'Primary material', type: 'text' },
+    { label: 'Finish / color', type: 'text' },
+    { label: 'Hardware', type: 'text' },
+    { label: 'Doors / drawers', type: 'text' },
+    { label: 'Assembly required', type: 'select', options: ['No', 'Yes'] },
+    { label: 'Anti-tip anchor', type: 'select', options: ['No', 'Yes'] },
+  ]},
+  millwork: { label: 'Millwork', fields: [
+    { label: 'Scope / location', type: 'textarea' },
+    { label: 'Material / species', type: 'text' },
+    { label: 'Finish', type: 'text' },
+    { label: 'Dimensions', type: 'text' },
+    { label: 'Hardware', type: 'text' },
+    { label: 'Shop drawings', type: 'select', options: ['Needed', 'Requested', 'Received', 'Approved'] },
+    { label: 'Installed by', type: 'select', options: ['Millworker', 'GC', 'Studio'] },
+  ]},
+  paint: { label: 'Paint / Finish', fields: [
+    { label: 'Area / surface', type: 'text' },
+    { label: 'Brand', type: 'text' },
+    { label: 'Color (name / number)', type: 'text' },
+    { label: 'Sheen', type: 'select', options: ['Flat', 'Matte', 'Eggshell', 'Satin', 'Semi-gloss', 'Gloss'] },
+    { label: 'Product line', type: 'text' },
+    { label: 'Coats', type: 'number' },
+    { label: 'Primer', type: 'select', options: ['Not needed', 'Standard', 'Stain-blocking'] },
+  ]},
+  wallcovering: { label: 'Wallcovering', fields: [
+    { label: 'Pattern (name / number)', type: 'text' },
+    { label: 'Colorway', type: 'text' },
+    { label: 'Width', type: 'text' },
+    { label: 'Quantity (rolls / yards)', type: 'number' },
+    { label: 'Vertical repeat', type: 'text' },
+    { label: 'Match', type: 'select', options: ['Random', 'Straight', 'Half-drop'] },
+    { label: 'Substrate / backing', type: 'text' },
+    { label: 'Installer notes', type: 'textarea' },
+  ]},
+};
+
+let _ifdOpenTypeId = null;
+
+function _ifdForType(typeId) {
+  return (S.itemFieldDefs || []).filter(f => f.itemTypeId === typeId)
+    .slice().sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function _ifdSlug(label, typeId) {
+  const base = String(label || 'field').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'field';
+  const taken = new Set(_ifdForType(typeId).map(f => f.fieldKey));
+  let key = base, i = 2;
+  while (taken.has(key)) key = base + '_' + (i++);
+  return key;
+}
+
+function toggleItemFieldDefs(typeId) {
+  _ifdOpenTypeId = _ifdOpenTypeId === typeId ? null : typeId;
+  renderItemTypesList();
+}
+
+function renderItemFieldDefEditor(t) {
+  const defs = _ifdForType(t.id);
+  const typeOpts = ['text', 'number', 'select', 'date', 'textarea'];
+  const rows = defs.map((f, idx) => `
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(var(--text-rgb),0.05)">
+      <span style="display:flex;flex-direction:column;line-height:0.8">
+        <button onclick="ifdMove('${f.id}',-1)" ${idx === 0 ? 'disabled' : ''} style="background:none;border:none;cursor:pointer;font-size:9px;color:var(--text-light);padding:1px">▲</button>
+        <button onclick="ifdMove('${f.id}',1)" ${idx === defs.length - 1 ? 'disabled' : ''} style="background:none;border:none;cursor:pointer;font-size:9px;color:var(--text-light);padding:1px">▼</button>
+      </span>
+      <input type="text" class="fi" value="${escH(f.label)}" onchange="ifdUpdate('${f.id}','label',this.value.trim())" style="flex:2;font-size:11px;padding:4px 6px">
+      <select class="fi fsel" onchange="ifdUpdate('${f.id}','fieldType',this.value)" style="width:86px;font-size:10px;padding:4px 4px">
+        ${typeOpts.map(o => `<option value="${o}" ${f.fieldType === o ? 'selected' : ''}>${o}</option>`).join('')}
+      </select>
+      <input type="text" class="fi" value="${escH((f.options || []).join(', '))}" placeholder="options, comma-separated" onchange="ifdUpdate('${f.id}','options',this.value)" style="flex:2;font-size:10px;padding:4px 6px;${f.fieldType === 'select' ? '' : 'visibility:hidden'}">
+      <label title="Required — flagged amber on the item until filled" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text-mid);font-family:var(--font-b);cursor:pointer">
+        <input type="checkbox" ${f.required ? 'checked' : ''} onchange="ifdUpdate('${f.id}','required',this.checked)" style="accent-color:var(--russet);width:11px;height:11px">req
+      </label>
+      ${['readymade', 'openline', 'constructed'].map(k => `
+        <label title="Show on ${k} items" style="display:flex;align-items:center;gap:2px;font-size:8px;color:var(--text-light);font-family:var(--font-b);cursor:pointer">
+          <input type="checkbox" ${(f.appliesTo || []).includes(k) ? 'checked' : ''} onchange="ifdToggleApplies('${f.id}','${k}',this.checked)" style="accent-color:var(--russet);width:10px;height:10px">${k === 'readymade' ? 'RM' : k === 'openline' ? 'OL' : 'CN'}
+        </label>`).join('')}
+      <button onclick="ifdDelete('${f.id}')" style="background:none;border:none;cursor:pointer;color:#b94a3a;font-size:11px;padding:2px 4px">✕</button>
+    </div>`).join('');
+  return `
+    <div style="margin:2px 0 8px 42px;padding:10px 14px;background:rgba(var(--text-rgb),0.02);border:1px solid var(--border);border-radius:var(--r)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <span style="font-family:var(--font-h);font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid)">Spec fields — ${escH(t.name)}</span>
+        <select class="fi fsel" onchange="if(this.value){ifdSeed('${t.id}',this.value);this.value='';}" style="width:190px;font-size:10px;padding:3px 6px">
+          <option value="">Load template…</option>
+          ${Object.entries(ITEM_SPEC_TEMPLATES).map(([k, tpl]) => `<option value="${k}">${escH(tpl.label)} (${tpl.fields.length} fields)</option>`).join('')}
+        </select>
+      </div>
+      ${rows || '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:4px 0">No spec fields yet — add one below or load a template.</div>'}
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input type="text" class="fi" id="ifd-new-${t.id}" placeholder="New field label — e.g. Yardage" style="flex:1;font-size:11px;padding:5px 8px" onkeydown="if(event.key==='Enter')ifdAdd('${t.id}')">
+        <button class="btn btn-ghost btn-sm" onclick="ifdAdd('${t.id}')" style="font-size:10px">+ Add Field</button>
+      </div>
+    </div>`;
+}
+
+function ifdAdd(typeId) {
+  const input = $c('ifd-new-' + typeId);
+  const label = (input?.value || '').trim();
+  if (!label) return;
+  if (!S.itemFieldDefs) S.itemFieldDefs = [];
+  const defs = _ifdForType(typeId);
+  S.itemFieldDefs.push({
+    id: uid(), itemTypeId: typeId,
+    fieldKey: _ifdSlug(label, typeId), label,
+    fieldType: 'text', options: [], required: false,
+    appliesTo: ['readymade', 'openline', 'constructed'],
+    sortOrder: defs.length ? defs[defs.length - 1].sortOrder + 1 : 0,
+  });
+  save();
+  renderItemTypesList();
+}
+
+function ifdUpdate(id, field, value) {
+  const f = (S.itemFieldDefs || []).find(x => x.id === id);
+  if (!f) return;
+  if (field === 'options') {
+    f.options = String(value || '').split(',').map(s => s.trim()).filter(Boolean);
+  } else if (field === 'label') {
+    if (!value) return;
+    f.label = value;   // fieldKey stays stable on rename — values keep resolving
+  } else {
+    f[field] = value;
+  }
+  save();
+  renderItemTypesList();
+}
+
+function ifdToggleApplies(id, kind, on) {
+  const f = (S.itemFieldDefs || []).find(x => x.id === id);
+  if (!f) return;
+  const set = new Set(f.appliesTo || []);
+  if (on) set.add(kind); else set.delete(kind);
+  if (!set.size) { toast('A field must apply to at least one item kind.'); renderItemTypesList(); return; }
+  f.appliesTo = [...set];
+  save();
+  renderItemTypesList();
+}
+
+function ifdMove(id, dir) {
+  const f = (S.itemFieldDefs || []).find(x => x.id === id);
+  if (!f) return;
+  const defs = _ifdForType(f.itemTypeId);
+  const idx = defs.findIndex(x => x.id === id);
+  const swap = defs[idx + dir];
+  if (!swap) return;
+  const tmp = f.sortOrder; f.sortOrder = swap.sortOrder; swap.sortOrder = tmp;
+  // Guard equal sortOrders (legacy rows): normalize the run
+  defs.sort((a, b) => a.sortOrder - b.sortOrder).forEach((x, i) => { x.sortOrder = i; });
+  const self = (S.itemFieldDefs || []).find(x => x.id === id);
+  const other = (S.itemFieldDefs || []).find(x => x.id === swap.id);
+  if (self && other && self.sortOrder === other.sortOrder) other.sortOrder += dir;
+  save();
+  renderItemTypesList();
+}
+
+function ifdDelete(id) {
+  const f = (S.itemFieldDefs || []).find(x => x.id === id);
+  if (!f) return;
+  if (!confirm(`Delete spec field "${f.label}"? Values already entered on items stay stored but stop displaying.`)) return;
+  S.itemFieldDefs = (S.itemFieldDefs || []).filter(x => x.id !== id);
+  save();
+  renderItemTypesList();
+}
+
+function ifdSeed(typeId, templateKey) {
+  const tpl = ITEM_SPEC_TEMPLATES[templateKey];
+  if (!tpl) return;
+  if (!S.itemFieldDefs) S.itemFieldDefs = [];
+  const existingLabels = new Set(_ifdForType(typeId).map(f => f.label.toLowerCase()));
+  let sort = _ifdForType(typeId).length;
+  let added = 0;
+  tpl.fields.forEach(fd => {
+    if (existingLabels.has(fd.label.toLowerCase())) return;
+    S.itemFieldDefs.push({
+      id: uid(), itemTypeId: typeId,
+      fieldKey: _ifdSlug(fd.label, typeId), label: fd.label,
+      fieldType: fd.type, options: fd.options || [], required: false,
+      appliesTo: ['readymade', 'openline', 'constructed'],
+      sortOrder: sort++,
+    });
+    added++;
+  });
+  save();
+  renderItemTypesList();
+  toast(added ? `Added ${added} ${tpl.label} field${added === 1 ? '' : 's'}.` : 'All template fields already exist on this type.');
+}
+
 function renderItemTypesList() {
   const el = $c('as-item-types-list');
   if (!el) return;
@@ -27315,8 +27668,10 @@ function renderItemTypesList() {
         <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">%</span>
       </span>
       <span style="font-size:10px;color:var(--text-light);font-family:var(--font-b)">${count} in use</span>
+      <button onclick="toggleItemFieldDefs('${t.id}')" class="btn btn-ghost btn-sm" style="font-size:10px;${_ifdOpenTypeId === t.id ? 'color:var(--russet)' : ''}" title="Specification fields items of this category carry (§4.1)">Spec fields (${_ifdForType(t.id).length})</button>
       ${delBtn}
-    </div>`;
+    </div>
+    ${_ifdOpenTypeId === t.id ? renderItemFieldDefEditor(t) : ''}`;
   }).join('');
 }
 
