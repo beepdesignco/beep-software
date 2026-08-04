@@ -41317,7 +41317,12 @@ function openNewTimeModal() {
   // Defaults
   $c('tm-date').value = new Date().toISOString().slice(0,10);
   _populateTimePersonPicker(AUTH.user?.id);   // default to self; owner may reassign
-  $c('tm-rate').value = '195';
+  // Default rate = the logger's own billable rate (was a hardcoded '195',
+  // which silently billed EVERY member's manual entry at $195 — the field is
+  // hidden for non-adjust members, so they couldn't even see it happening).
+  // Blank falls back to the attributed member's rate at save; picking a
+  // different person re-fills via tmPersonChange.
+  $c('tm-rate').value = AUTH.member?.hourly_rate != null ? AUTH.member.hourly_rate : '';
   $c('tm-h').value = '';
   $c('tm-m').value = '';
   $c('tm-s').value = '';
