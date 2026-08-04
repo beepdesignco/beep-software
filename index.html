@@ -41112,17 +41112,24 @@ function roundDurationSeconds(seconds, minutes) {
 // Resolve a member's display name + rate. Falls back to whatever was stored on
 // the time entry itself if the member can't be looked up.
 function unbilledMemberInfo(entry) {
+  // Resolve against _teamCache (the startup-loaded member list) — entry.person
+  // is a raw auth uuid since the attribution rework, so it's a LAST resort,
+  // never a display value. ("Project Hours, 48d403b8-…" bug, 2026-08-03.)
   const userId = entry.userId || null;
   let name = '';
   let rate = (Number(entry.rate) || 0);
-  if (userId && Array.isArray(S.studioMembers)) {
-    const m = S.studioMembers.find(x => x.userId === userId);
+  if (userId) {
+    const m = (_teamCache || []).find(x => x.user_id === userId);
     if (m) {
-      name = m.displayName || m.email || '';
-      if (!entry.rate && m.hourlyRate != null) rate = Number(m.hourlyRate) || 0;
+      name = m.display_name || m.email || '';
+      if (!entry.rate && m.hourly_rate != null) rate = Number(m.hourly_rate) || 0;
     }
   }
-  if (!name) name = entry.person || (userId ? userId.slice(0, 8) : 'Unknown');
+  if (!name) {
+    const label = _timePersonLabel(entry.person || userId);
+    name = (label && label !== '—' && !/^[0-9a-f]{8}-[0-9a-f]{4}/i.test(label)) ? label
+         : (userId ? 'Member ' + userId.slice(0, 8) : 'Unknown');
+  }
   return { name, rate };
 }
 
