@@ -18,7 +18,7 @@
 | 3.5.2 Notifications overhaul | **DONE 2026-08-03** (dcfcda2, phase0_63) — audit fixed silent task-comment mention gap; inline bodies; Clear=dismissed_at; Reply-to-thread; history modal |
 | 3.1 status_kind mapping | **DONE 2026-08-03** (66dd2e9) — built-ins were already rename-safe; gap was custom statuses invisible to automations; statusKind() + "Acts as" dropdown |
 | 3.3 Cost-side currency/FX | Queued (BIG — pricing-chain scope, not "small debt") |
-| 4.1–4.8 Design features | Queued in order; 4.1 item specs is the keystone |
+| 4.1–4.8 Design features | 4.1 item specs **DONE 2026-08-04** (3cac5c6, phase0_65) — 8 seed templates, Settings editor, PM detail Specifications card; 4.2+ queued in order |
 | 5 SaaS gaps | Parked until §4 + pricing decision |
 | 6 Aug 3 batch | **SHIPPED 2026-08-03** (all code items): 6A.1-9 (reconciliation + phase0_61, rounding, periods, clean lines, reconcile tool, h/m, billed-collapse, single timer, biweekly payroll v1), 6B mobile 0.5.0 build 14 → TestFlight, 6C deposits (payment ledger in cost_actual_meta), 6D.2-4 (freight rows, missing-data filter, order_groups phase0_62), 6E.1-4. Open (Baylor input): 6D.1 "Collected"→"Billed" relabel decision, 6F spam (forward headers + DMARC p=quarantine owner action) |
 
