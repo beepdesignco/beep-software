@@ -6797,7 +6797,7 @@ function _workInProgressItems() {
     const proj = (S.projects || []).find(p => p.id === pid);
     (prop.spaces || []).forEach(sp => {
       (sp.items || []).forEach(it => {
-        if (it.status === 'installed') return;
+        if (statusKind(it.status) === 'installed') return;
         if (_workScope === 'my') {
           if (!it.assigneeUserId || it.assigneeUserId !== AUTH.user?.id) return;
         }
@@ -13853,7 +13853,7 @@ function renderPMItemCard(item, sp, pid) {
       ${item.status === 'pending_status' ? `
         <span style="font-family:var(--font-h);font-weight:900;font-size:16px;color:#b33;letter-spacing:2px">!!!</span>
         <span style="font-size:10px;font-family:var(--font-b);color:#b33;white-space:nowrap">${statusLabel}</span>
-      ` : item.status === 'ready_for_ordering' ? `
+      ` : statusKind(item.status) === 'ready_for_ordering' ? `
         <span style="font-family:var(--font-h);font-weight:900;font-size:16px;color:#1a6e3a;letter-spacing:2px">$$$</span>
         <span style="font-size:10px;font-family:var(--font-b);color:#1a6e3a;white-space:nowrap">${statusLabel}</span>
       ` : `
@@ -15294,7 +15294,7 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
           <select class="fi fsel" style="font-size:13px;color:${statusColor};margin-bottom:10px" onchange="savePMField('${pid}','${spId}','${itemId}','status',this.value);autoEngageFlags('${pid}','${spId}','${itemId}',this.value);renderProjectDetail()">${statusOpts}</select>
           ${item.status === 'pending_status' ? `
             <div style="margin-bottom:10px"><span style="font-family:var(--font-h);font-weight:900;font-size:20px;color:#b33;letter-spacing:3px">!!!</span></div>
-          ` : item.status === 'ready_for_ordering' ? `
+          ` : statusKind(item.status) === 'ready_for_ordering' ? `
             <div style="margin-bottom:10px"><span style="font-family:var(--font-h);font-weight:900;font-size:20px;color:#1a6e3a;letter-spacing:3px">$$$</span></div>
           ` : `
             <div style="height:6px;background:rgba(var(--text-rgb),0.08);border-radius:3px;overflow:hidden;margin-bottom:10px">
@@ -28701,9 +28701,20 @@ let _editingTaskStatuses = false;
 let _dragStatusKind = null;
 let _dragStatusFromIdx = -1;
 
+// §3.1 status_kind — the automation semantics of a status, decoupled from
+// its display key. Built-ins ARE their own kind (their v never changes; a
+// rename only overrides S.statusLabels[v]). A CUSTOM status can declare
+// which built-in it behaves like (kind on its S.customItemStatuses row) so
+// the paid→status automation, invoice picker, and work-queue terminal
+// check follow it. No kind (null) = no automation semantics, as before.
+function statusKind(v) {
+  if (STATUSES.some(s => s.v === v)) return v;
+  return (S.customItemStatuses || []).find(s => s.v === v)?.kind || null;
+}
+
 function getAllPipelineStatuses() {
   const base = STATUSES.map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: true }));
-  const custom = (S.customItemStatuses || []).map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: false }));
+  const custom = (S.customItemStatuses || []).map(s => ({ v: s.v, l: getPipelineStatusLabel(s.v), builtin: false, kind: s.kind || null }));
   const all = [...base, ...custom];
   const order = S.pipelineStatusOrder || [];
   if (!order.length) return all;
@@ -28746,7 +28757,11 @@ function renderPipelineStatusSettings() {
         ${s.builtin
           ? `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Built-in · ${s.v}</span>
              <button onclick="resetStatusColor('${s.v}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);text-decoration:underline">reset</button>`
-          : `<span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Custom · ${s.v}</span>
+          : `<select class="fi fsel" onchange="updateCustomStatusKind('${s.v}', this.value)" title="Automation behavior: which built-in stage this status acts as. E.g. 'Acts as: Invoiced' makes the payment automation advance items sitting in this status." style="width:170px;font-size:10px;padding:4px 6px">
+               <option value="">No automation</option>
+               ${STATUSES.map(b => `<option value="${b.v}" ${s.kind === b.v ? 'selected' : ''}>Acts as: ${escH(b.l)}</option>`).join('')}
+             </select>
+             <span style="font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-b)">Custom · ${s.v}</span>
              <button onclick="deleteCustomPipelineStatus('${s.v}')" class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 8px">✕</button>`}
       </div>`;
     }
@@ -28768,6 +28783,14 @@ function renderPipelineStatusSettings() {
 
   const addBtn = $c('as-add-pipeline-status-btn');
   if (addBtn) addBtn.style.display = editing ? '' : 'none';
+}
+
+function updateCustomStatusKind(v, kind) {
+  const custom = (S.customItemStatuses || []).find(s => s.v === v);
+  if (!custom) return;
+  custom.kind = kind || null;
+  save();
+  toast(kind ? `"${getPipelineStatusLabel(v)}" now behaves like ${getPipelineStatusLabel(kind)} in automations.` : 'Automation behavior cleared.');
 }
 
 function togglePipelineStatusEdit() {
@@ -33161,7 +33184,7 @@ function onInvProjectChange() {
       const qty = parseFloat(item.qty)||1;
       const total = item.type === 'constructed' ? client : client * qty;
       const checked = _invSelectedProposalItems.has(item.id);
-      const alreadyInvoiced = item.status === 'invoiced';
+      const alreadyInvoiced = statusKind(item.status) === 'invoiced';
       html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;border-radius:var(--rs);transition:var(--t)${alreadyInvoiced?';opacity:0.5':''}" onmouseenter="this.style.background='rgba(var(--text-rgb),0.03)'" onmouseleave="this.style.background='transparent'">
         <input type="checkbox" ${checked?'checked':''} value="${item.id}" onchange="toggleInvProposalItem('${pid}','${sp.id}','${item.id}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px;flex-shrink:0">
         <span style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);flex:1">${escH(item.name||'—')}</span>
@@ -34245,7 +34268,7 @@ function renderInvoiceBuilder() {
     // item's status flips to 'invoiced' after the first partial billing,
     // which would otherwise hide the parent from this picker even though
     // there's work left to bill.
-    const invoiceableStatuses = ['billable','approved','proposed'];
+    const invoiceableKinds = ['billable','approved','proposed'];
     const priorLinesForItem = (itemId) => (S.invoices || []).flatMap(prevInv => {
       if (prevInv.id === inv.id) return [];
       if (prevInv.status === 'draft' || prevInv.status === 'cancelled' || prevInv.status === 'refunded') return [];
@@ -34264,7 +34287,7 @@ function renderInvoiceBuilder() {
             componentsRemaining = (item.components || []).some(c => !billedComponentIds.has(c.id));
           }
         }
-        const isEligible = invoiceableStatuses.includes(item.status)
+        const isEligible = invoiceableKinds.includes(statusKind(item.status))
                          || _invSelectedProposalItems.has(item.id)
                          || componentsRemaining;
         if (isEligible) eligibleItems.push({ item, sp });
@@ -34272,8 +34295,9 @@ function renderInvoiceBuilder() {
     });
     // Sort: billable first
     eligibleItems.sort((a,b) => {
-      if (a.item.status === 'billable' && b.item.status !== 'billable') return -1;
-      if (b.item.status === 'billable' && a.item.status !== 'billable') return 1;
+      const ak = statusKind(a.item.status), bk = statusKind(b.item.status);
+      if (ak === 'billable' && bk !== 'billable') return -1;
+      if (bk === 'billable' && ak !== 'billable') return 1;
       return 0;
     });
     eligibleItems.forEach(({item, sp}) => {
@@ -36082,7 +36106,7 @@ function processInvoicePaidAutomations(inv, opts) {
   // to ready_for_ordering — anything past CPR (ordered/shipped/etc.) is
   // left alone. Regression protection: an item already past CPR never
   // gets bumped backward.
-  const advanceable = (status) => status === 'invoiced' || status === 'client_payment_submitted';
+  const advanceable = (status) => { const k = statusKind(status); return k === 'invoiced' || k === 'client_payment_submitted'; };
 
   (inv.lineItems||[]).forEach(line => {
     if (line.proposalItemId) {
@@ -36141,19 +36165,19 @@ function processInvoicePendingAutomations(inv, paymentId) {
     if (line.proposalItemId) {
       (prop.spaces || []).forEach(sp => {
         const item = (sp.items || []).find(i => i.id === line.proposalItemId);
-        if (item && item.status === 'invoiced') { item.status = 'client_payment_submitted'; updatedCount++; }
+        if (item && statusKind(item.status) === 'invoiced') { item.status = 'client_payment_submitted'; updatedCount++; }
       });
     }
     if (line._expenseId) {
       (prop.spaces || []).forEach(sp => {
         const item = (sp.items || []).find(i => i._expenseId === line._expenseId);
-        if (item && item.status === 'invoiced') { item.status = 'client_payment_submitted'; updatedCount++; }
+        if (item && statusKind(item.status) === 'invoiced') { item.status = 'client_payment_submitted'; updatedCount++; }
       });
     }
   });
   (prop.spaces || []).forEach(sp => {
     (sp.items || []).forEach(item => {
-      if (item._invoiceIds?.includes(inv.id) && item.status === 'invoiced') {
+      if (item._invoiceIds?.includes(inv.id) && statusKind(item.status) === 'invoiced') {
         item.status = 'client_payment_submitted'; updatedCount++;
       }
     });
