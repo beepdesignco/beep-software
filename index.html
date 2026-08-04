@@ -3370,15 +3370,26 @@ tr:hover .row-btns { opacity:1; }
     <div id="ca-target-label" style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin:-6px 0 12px"></div>
 
     <div id="ca-step-entry">
+      <div class="fg" id="ca-paykind-row">
+        <label class="fl">Payment</label>
+        <div style="display:flex;gap:14px;font-family:var(--font-b);font-size:13px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="ca-paykind" value="full" checked onchange="caPaykindChanged()" style="accent-color:var(--russet)"> Paid in full</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="ca-paykind" value="deposit" onchange="caPaykindChanged()" style="accent-color:var(--russet)"> Deposit / partial</label>
+        </div>
+      </div>
       <div class="frow">
         <div class="fg" style="flex:1">
-          <label class="fl">Actual Cost Paid</label>
+          <label class="fl" id="ca-amount-label">Actual Cost Paid</label>
           <input type="text" class="fi" id="ca-amount" placeholder="$0.00">
         </div>
         <div class="fg" style="flex:1">
           <label class="fl">Paid With</label>
           <select class="fi fsel" id="ca-card"><option value="">— Select —</option></select>
         </div>
+      </div>
+      <div class="fg" id="ca-expected-row" style="display:none">
+        <label class="fl">Vendor Total <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(leave blank if not yet known)</span></label>
+        <input type="text" class="fi" id="ca-expected" placeholder="$0.00">
       </div>
       <div class="fg">
         <label class="fl">Ordered By</label>
@@ -14316,10 +14327,35 @@ function applySubDelta(mode) {
 
 let _caCtx = null;
 
+// ── §6C deposits / partial payments ──
+// All additive inside costActualMeta: {payments:[{amount,date,card,kind}],
+// expectedTotal, paidInFull}. target.costActual (the field every budget/
+// dashboard/P&L consumer reads) stays the COMMITTED total — expectedTotal
+// once known, else payments-to-date — so downstream math needs no changes.
+function costActualDeposit(target) {
+  const meta = target?.costActualMeta || {};
+  const pays = Array.isArray(meta.payments) ? meta.payments : [];
+  if (!pays.length) return null;
+  const paid = pays.reduce((s, p) => s + (parse$(p.amount) || 0), 0);
+  const expected = (meta.expectedTotal != null && meta.expectedTotal !== '') ? parse$(meta.expectedTotal) : null;
+  const outstanding = !meta.paidInFull && (expected == null || paid < expected - 0.005);
+  return { paid, expected, outstanding, payments: pays };
+}
+
+// Recompute the committed costActual from the deposit ledger.
+function _caRecomputeCommitted(target) {
+  const dep = costActualDeposit(target);
+  if (!dep) return;
+  const committed = dep.expected != null ? dep.expected : dep.paid;
+  target.costActual = String(Math.round(committed * 100) / 100);
+}
+
 function _renderCostActualEntryBlock(item, comp, pid, spId, itemId, compact) {
   const target = comp || item;
   const logged = !!(target.costActual || '').toString().trim();
   const openCall = `openCostActualModal('${pid}','${spId}','${itemId}'${comp ? `,'${comp.id}'` : ''})`;
+  const payCall  = `openCostActualPayment('${pid}','${spId}','${itemId}'${comp ? `,'${comp.id}'` : ''})`;
+  const fullCall = `markCostActualPaidInFull('${pid}','${spId}','${itemId}'${comp ? `,'${comp.id}'` : ''})`;
   if (!logged) {
     return `<button class="btn btn-secondary btn-sm" onclick="${openCall}" style="font-size:${compact ? '10' : '11'}px">+ Log cost actual</button>`;
   }
@@ -14328,15 +14364,47 @@ function _renderCostActualEntryBlock(item, comp, pid, spId, itemId, compact) {
   const who = meta.orderedByUserId ? (_taskMembers().find(m => m.user_id === meta.orderedByUserId)?.display_name || '') : '';
   const when = meta.loggedAt ? new Date(meta.loggedAt).toLocaleDateString() : '';
   const subParts = [card, who ? 'ordered by ' + who : '', when].filter(Boolean).join(' · ');
+  const dep = costActualDeposit(target);
+  let depBlock = '';
+  if (dep) {
+    const payRows = dep.payments.map(p =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--text-mid)">
+        <span>${escH(p.date || '')}${p.kind === 'deposit' ? ' · deposit' : ''}${p.card ? ' · ' + escH(p.card) : ''}</span>
+        <span style="font-weight:700">${fmt(parse$(p.amount))}</span>
+      </div>`).join('');
+    const statusLine = dep.outstanding
+      ? `<div style="font-family:var(--font-b);font-size:11px;font-weight:700;color:#a87600;margin-top:6px">◐ Deposit outstanding — paid ${fmt(dep.paid)}${dep.expected != null ? ' of ' + fmt(dep.expected) : ' · total TBD'}</div>`
+      : `<div style="font-family:var(--font-b);font-size:11px;font-weight:700;color:#287a4a;margin-top:6px">✓ Paid in full — ${dep.payments.length} payment${dep.payments.length === 1 ? '' : 's'}</div>`;
+    const actions = dep.outstanding
+      ? `<div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn btn-secondary btn-sm" onclick="${payCall}" style="font-size:10px;padding:2px 8px">+ Add payment</button>
+          <button class="btn btn-ghost btn-sm" onclick="${fullCall}" style="font-size:10px;padding:2px 8px">Mark paid in full</button>
+        </div>`
+      : '';
+    depBlock = `${statusLine}<div style="margin-top:4px;font-family:var(--font-b)">${payRows}</div>${actions}`;
+  }
   return `
-    <div style="border:1px solid var(--border);border-radius:var(--rs);padding:${compact ? '8px 10px' : '10px 12px'};background:rgba(var(--text-rgb),0.02)">
+    <div style="border:1px solid ${dep?.outstanding ? 'rgba(200,140,30,0.45)' : 'var(--border)'};border-radius:var(--rs);padding:${compact ? '8px 10px' : '10px 12px'};background:${dep?.outstanding ? 'rgba(200,140,30,0.05)' : 'rgba(var(--text-rgb),0.02)'}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <span style="font-family:var(--font-h);font-weight:800;font-size:${compact ? '13' : '15'}px;color:var(--text-dark)">${fmt(parse$(target.costActual))}</span>
+        <span style="font-family:var(--font-h);font-weight:800;font-size:${compact ? '13' : '15'}px;color:var(--text-dark)">${fmt(parse$(target.costActual))}${dep && dep.expected == null && dep.outstanding ? '<span style="font-size:10px;font-weight:400;color:var(--text-mid)"> paid so far</span>' : ''}</span>
         <button class="btn btn-ghost btn-sm" onclick="${openCall}" style="font-size:10px;padding:2px 8px">Edit entry</button>
       </div>
       ${subParts ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-mid);margin-top:2px">${escH(subParts)}</div>` : ''}
       ${meta.notes ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:3px;white-space:pre-wrap">${escH(meta.notes)}</div>` : ''}
+      ${depBlock}
     </div>`;
+}
+
+function caPaykindChanged() {
+  const kind = document.querySelector('input[name="ca-paykind"]:checked')?.value || 'full';
+  $c('ca-expected-row').style.display = kind === 'deposit' ? '' : 'none';
+  $c('ca-amount-label').textContent = kind === 'deposit' ? 'Amount Paid Now' : 'Actual Cost Paid';
+}
+
+function _caSetPaykind(kind) {
+  const el = document.querySelector(`input[name="ca-paykind"][value="${kind}"]`);
+  if (el) el.checked = true;
+  caPaykindChanged();
 }
 
 function openCostActualModal(pid, spId, itemId, compId) {
@@ -14345,13 +14413,18 @@ function openCostActualModal(pid, spId, itemId, compId) {
   const comp = compId ? (item.components || []).find(c => c.id === compId) : null;
   if (compId && !comp) return;
   const target = comp || item;
-  _caCtx = { pid, spId, itemId, compId: compId || null };
+  _caCtx = { pid, spId, itemId, compId: compId || null, mode: 'entry' };
   const editing = !!(target.costActual || '').toString().trim();
+  const dep = costActualDeposit(target);
   $c('ca-title').textContent = editing ? 'Edit Cost Actual' : 'Log Cost Actual';
   $c('ca-remove-btn').style.display = editing ? '' : 'none';
   $c('ca-target-label').textContent = comp ? `${item.name || 'Item'} · ${comp.name || 'component'}` : (item.name || 'Item');
-  $c('ca-amount').value = target.costActual || '';
   const meta = target.costActualMeta || {};
+  // Deposit ledgers edit at the ledger level: amount = paid to date.
+  $c('ca-paykind-row').style.display = '';
+  _caSetPaykind(dep ? 'deposit' : 'full');
+  $c('ca-amount').value = dep ? String(dep.paid) : (target.costActual || '');
+  $c('ca-expected').value = dep && dep.expected != null ? String(dep.expected) : '';
   const curCard = comp ? (meta.card || '') : (item.costActualPaymentMethod || meta.card || '');
   $c('ca-card').innerHTML = '<option value="">— Select —</option>' +
     (S.paymentCards || []).map(c => `<option value="${escH(c)}" ${curCard === c ? 'selected' : ''}>${escH(c)}</option>`).join('');
@@ -14365,6 +14438,57 @@ function openCostActualModal(pid, spId, itemId, compId) {
   setTimeout(() => $c('ca-amount').focus(), 80);
 }
 
+// "+ Add payment" on a deposit-outstanding entry: same modal, payment mode.
+function openCostActualPayment(pid, spId, itemId, compId) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const comp = compId ? (item.components || []).find(c => c.id === compId) : null;
+  const target = comp || item;
+  const dep = costActualDeposit(target);
+  if (!dep) return;
+  _caCtx = { pid, spId, itemId, compId: compId || null, mode: 'addpay' };
+  const meta = target.costActualMeta || {};
+  $c('ca-title').textContent = 'Add Payment';
+  $c('ca-remove-btn').style.display = 'none';
+  $c('ca-target-label').textContent = (comp ? `${item.name || 'Item'} · ${comp.name || 'component'}` : (item.name || 'Item'))
+    + ` — paid ${fmt(dep.paid)}${dep.expected != null ? ' of ' + fmt(dep.expected) : ''}`;
+  $c('ca-paykind-row').style.display = 'none';
+  $c('ca-expected-row').style.display = '';
+  $c('ca-amount-label').textContent = 'Payment Amount';
+  $c('ca-amount').value = dep.expected != null ? String(Math.max(0, Math.round((dep.expected - dep.paid) * 100) / 100)) : '';
+  $c('ca-expected').value = dep.expected != null ? String(dep.expected) : '';
+  const curCard = comp ? (meta.card || '') : (item.costActualPaymentMethod || meta.card || '');
+  $c('ca-card').innerHTML = '<option value="">— Select —</option>' +
+    (S.paymentCards || []).map(c => `<option value="${escH(c)}" ${curCard === c ? 'selected' : ''}>${escH(c)}</option>`).join('');
+  const orderedBy = meta.orderedByUserId || AUTH.user?.id || '';
+  $c('ca-ordered-by').innerHTML = _taskMembers().map(m =>
+    `<option value="${escH(m.user_id)}" ${m.user_id === orderedBy ? 'selected' : ''}>${escH(m.display_name || m.email || 'Member')}</option>`).join('');
+  $c('ca-notes').value = meta.notes || '';
+  $c('ca-step-entry').style.display = '';
+  $c('ca-step-status').style.display = 'none';
+  $c('modal-cost-actual').classList.add('open');
+  setTimeout(() => $c('ca-amount').focus(), 80);
+}
+
+// Resolve an outstanding deposit without a new payment: what's been paid IS
+// the total (vendor total came in at the paid amount, or was settled
+// elsewhere). Committed cost snaps to paid-to-date.
+function markCostActualPaidInFull(pid, spId, itemId, compId) {
+  const item = _getItem(pid, spId, itemId);
+  if (!item) return;
+  const comp = compId ? (item.components || []).find(c => c.id === compId) : null;
+  const target = comp || item;
+  const dep = costActualDeposit(target);
+  if (!dep) return;
+  if (!confirm(`Mark this cost actual paid in full at ${fmt(dep.paid)}?${dep.expected != null && Math.abs(dep.expected - dep.paid) > 0.005 ? `\n\nThe committed cost changes from ${fmt(dep.expected)} to ${fmt(dep.paid)} (what was actually paid).` : ''}`)) return;
+  target.costActualMeta = { ...(target.costActualMeta || {}), paidInFull: true, expectedTotal: Math.round(dep.paid * 100) / 100, updatedAt: new Date().toISOString() };
+  _caRecomputeCommitted(target);
+  _appendItemActivity(item, `Marked cost actual paid in full at ${fmt(dep.paid)}${comp ? ` on ${comp.name || 'component'}` : ''}`);
+  save();
+  renderProjectDetail();
+  toast('Marked paid in full.');
+}
+
 function saveCostActualEntry() {
   const ctx = _caCtx;
   if (!ctx) return;
@@ -14373,23 +14497,60 @@ function saveCostActualEntry() {
   const comp = ctx.compId ? (item.components || []).find(c => c.id === ctx.compId) : null;
   const target = comp || item;
   const amtRaw = $c('ca-amount').value.trim();
-  if (!amtRaw) { toast('Enter the actual cost paid.'); $c('ca-amount').focus(); return; }
+  if (!amtRaw) { toast('Enter the amount.'); $c('ca-amount').focus(); return; }
   const card = $c('ca-card').value || '';
   const orderedByUserId = $c('ca-ordered-by').value || null;
   const notes = $c('ca-notes').value.trim();
   const prevMeta = target.costActualMeta || {};
-  target.costActual = amtRaw;
+  const today = new Date().toISOString().slice(0, 10);
+  const paykind = ctx.mode === 'addpay' ? 'addpay'
+    : (document.querySelector('input[name="ca-paykind"]:checked')?.value || 'full');
+  const expectedRaw = $c('ca-expected').value.trim();
+  const expected = expectedRaw ? parse$(expectedRaw) : null;
+  let activityMsg;
+
+  if (paykind === 'addpay') {
+    // Append a payment to the existing ledger (§6C).
+    const payments = [...(prevMeta.payments || []), { amount: parse$(amtRaw), date: today, card, kind: 'payment' }];
+    target.costActualMeta = { ...prevMeta, payments, expectedTotal: expected, notes, card, orderedByUserId, updatedAt: new Date().toISOString() };
+    const paid = payments.reduce((s, p) => s + (parse$(p.amount) || 0), 0);
+    if (expected != null && paid >= expected - 0.005) target.costActualMeta.paidInFull = true;
+    _caRecomputeCommitted(target);
+    activityMsg = `Logged payment ${fmt(parse$(amtRaw))} on cost actual${comp ? ` (${comp.name || 'component'})` : ''} — paid ${fmt(paid)}${expected != null ? ' of ' + fmt(expected) : ''}${target.costActualMeta.paidInFull ? ' · PAID IN FULL' : ''}`;
+  } else if (paykind === 'deposit') {
+    // Fresh deposit, or re-editing the ledger: amount = paid to date.
+    target.costActualMeta = {
+      ...prevMeta,
+      payments: [{ amount: parse$(amtRaw), date: (prevMeta.payments || [])[0]?.date || today, card, kind: 'deposit' }],
+      expectedTotal: expected,
+      paidInFull: expected != null && parse$(amtRaw) >= expected - 0.005,
+      notes, card, orderedByUserId,
+      loggedAt: prevMeta.loggedAt || new Date().toISOString(),
+      loggedByUserId: prevMeta.loggedByUserId || AUTH.user?.id || null,
+      updatedAt: new Date().toISOString(),
+    };
+    _caRecomputeCommitted(target);
+    activityMsg = `Logged deposit ${fmt(parse$(amtRaw))}${expected != null ? ` toward ${fmt(expected)} vendor total` : ' (vendor total TBD)'}${comp ? ` on ${comp.name || 'component'}` : ''}${card ? ` · ${card}` : ''}`;
+  } else {
+    // Paid in full — the classic single-amount entry.
+    target.costActual = amtRaw;
+    target.costActualMeta = {
+      notes, card, orderedByUserId,
+      loggedAt: prevMeta.loggedAt || new Date().toISOString(),
+      loggedByUserId: prevMeta.loggedByUserId || AUTH.user?.id || null,
+      updatedAt: new Date().toISOString(),
+    };
+    // Converting a deposit ledger back to a simple entry resolves it.
+    if (prevMeta.payments?.length) {
+      target.costActualMeta.payments = prevMeta.payments;
+      target.costActualMeta.paidInFull = true;
+      target.costActualMeta.expectedTotal = parse$(amtRaw);
+    }
+    activityMsg = `Logged cost actual ${fmt(parse$(amtRaw))}${comp ? ` on ${comp.name || 'component'}` : ''}${card ? ` · ${card}` : ''}`;
+  }
   if (!comp) item.costActualPaymentMethod = card;
-  target.costActualMeta = {
-    notes,
-    card,
-    orderedByUserId,
-    loggedAt: prevMeta.loggedAt || new Date().toISOString(),
-    loggedByUserId: prevMeta.loggedByUserId || AUTH.user?.id || null,
-    updatedAt: new Date().toISOString(),
-  };
   const orderedName = orderedByUserId ? (_taskMembers().find(m => m.user_id === orderedByUserId)?.display_name || '') : '';
-  _appendItemActivity(item, `Logged cost actual ${fmt(parse$(amtRaw))}${comp ? ` on ${comp.name || 'component'}` : ''}${card ? ` · ${card}` : ''}${orderedName ? ` · ordered by ${orderedName}` : ''}${notes ? ` — ${notes}` : ''}`);
+  _appendItemActivity(item, activityMsg + (orderedName ? ` · ordered by ${orderedName}` : '') + (notes && paykind !== 'addpay' ? ` — ${notes}` : ''));
   save();
   renderProjectDetail();
   // Step 2 — offer a status update. Component entries update the
