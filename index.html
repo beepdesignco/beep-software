@@ -4490,15 +4490,20 @@ tr:hover .row-btns { opacity:1; }
     <div class="modal-title">New Document</div>
     <div class="fg">
       <label class="fl">Project</label>
-      <select class="fi fsel" id="nd-project" onchange="autoDocTitle()"><!-- populated by JS --></select>
+      <select class="fi fsel" id="nd-project" onchange="autoDocTitle();renderNdPrefill()"><!-- populated by JS --></select>
     </div>
     <div class="fg">
       <label class="fl">Template</label>
-      <select class="fi fsel" id="nd-template" onchange="autoDocTitle()"><!-- populated by JS --></select>
+      <select class="fi fsel" id="nd-template" onchange="autoDocTitle();renderNdPrefill()"><!-- populated by JS --></select>
     </div>
     <div class="fg">
       <label class="fl">Document Title</label>
       <input type="text" class="fi" id="nd-title" placeholder="e.g. Living Room Fabrics">
+    </div>
+    <div id="nd-prefill-wrap" style="display:none;margin-top:4px;padding-top:12px;border-top:1px solid var(--border)">
+      <label class="fl">Pre-fill From Proposal Items <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(optional — pick categories)</span></label>
+      <div id="nd-prefill-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r);padding:6px 10px"></div>
+      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px">Each matching item (and component of constructed items) becomes a card in its space, with its spec values as the caption. Everything stays hand-editable.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-new-doc')">Cancel</button>
@@ -31121,7 +31126,91 @@ function openNewDocModal() {
     S.projects.map(p => `<option value="${p.id}">${escH(p.name)}</option>`).join('');
   $c('nd-template').innerHTML = DOC_TEMPLATES.map(t => `<option value="${t.id}">${escH(t.label)}</option>`).join('');
   $c('nd-title').value = '';
+  renderNdPrefill();
   $c('modal-new-doc').classList.add('open');
+}
+
+// §4.2 — category picker for generating schedule cards from proposal items.
+// Shown for schedule-style templates once a project is picked; lists only
+// the item types actually present on that project (items or components).
+function renderNdPrefill() {
+  const wrap = $c('nd-prefill-wrap');
+  if (!wrap) return;
+  const pid = $c('nd-project').value;
+  const templateId = $c('nd-template').value;
+  const isSchedule = templateId && templateId !== 'purchase_order' && templateId !== 'export_list';
+  if (!pid || !isSchedule) { wrap.style.display = 'none'; return; }
+  const typeIds = new Set();
+  (S.proposals[pid]?.spaces || []).forEach(sp => (sp.items || []).forEach(it => {
+    if (it.itemTypeId) typeIds.add(it.itemTypeId);
+    (it.components || []).forEach(c => {
+      if (c.itemTypeId && c.componentType !== 'shipping' && c.componentType !== 'receiving') typeIds.add(c.itemTypeId);
+    });
+  }));
+  if (!typeIds.size) { wrap.style.display = 'none'; return; }
+  const types = (S.itemTypes || []).filter(t => typeIds.has(t.id))
+    .sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  $c('nd-prefill-list').innerHTML = types.map(t => `
+    <label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-family:var(--font-b);font-size:12px">
+      <input type="checkbox" class="nd-prefill-type" value="${escH(t.id)}" style="accent-color:var(--russet);width:13px;height:13px">
+      <span style="width:10px;height:10px;border-radius:50%;background:${t.color || '#9F6640'};flex-shrink:0"></span>
+      ${escH(t.name)}
+    </label>`).join('');
+  wrap.style.display = '';
+}
+
+// Spec values → one-line summary for the generated card caption.
+function _specSummary(target) {
+  if (!target?.itemTypeId) return '';
+  const defs = _ifdForType(target.itemTypeId);
+  return defs
+    .map(f => {
+      const v = target.spec?.[f.fieldKey];
+      return (v == null || v === '') ? null : `${f.label}: ${v}`;
+    })
+    .filter(Boolean)
+    .join(' · ');
+}
+
+// §4.2 generator — every item (or component of a constructed item) whose
+// category is selected becomes a schedule card in its space, spec values
+// pre-filled as the caption. Output is plain doc items: fully hand-editable.
+function _generateDocItemsFromProposal(doc, typeIdSet) {
+  const prop = S.proposals[doc.projectId];
+  let added = 0;
+  (prop?.spaces || []).forEach(sp => {
+    (sp.items || []).forEach(item => {
+      if (item.itemTypeId && typeIdSet.has(item.itemTypeId)) {
+        const img = (item.files || []).find(f => /\.(png|jpg|jpeg|gif|webp)$/i.test(f.name));
+        doc.items.push({
+          id: uid(), name: item.name || '', itemCode: item.itemCode || '',
+          description: '', room: sp.name || 'Unassigned',
+          imageData: img?.data || null,
+          image: _docImageFromProposalFile(img),
+          imageType: 'material', caption: _specSummary(item),
+          proposalItemId: item.id, proposalCompId: null,
+        });
+        added++;
+      }
+      (item.components || []).forEach(comp => {
+        if (comp.componentType === 'shipping' || comp.componentType === 'receiving') return;
+        if (!comp.itemTypeId || !typeIdSet.has(comp.itemTypeId)) return;
+        const img = (comp.files || []).find(f => /\.(png|jpg|jpeg|gif|webp)$/i.test(f.name));
+        doc.items.push({
+          id: uid(),
+          name: (item.name || '') + (comp.name ? ' — ' + comp.name : ''),
+          itemCode: item.itemCode || '',
+          description: '', room: sp.name || 'Unassigned',
+          imageData: img?.data || null,
+          image: _docImageFromProposalFile(img),
+          imageType: 'material', caption: _specSummary(comp),
+          proposalItemId: item.id, proposalCompId: comp.id,
+        });
+        added++;
+      });
+    });
+  });
+  return added;
 }
 
 // ─── EXPORT LIST BUILDER ──────────────────────────────────────
@@ -32008,6 +32097,13 @@ function createNewDoc() {
   };
 
   S.documents.push(doc);
+  // §4.2 — generate cards from the selected item categories, spec values
+  // pre-filled. Version pushed immediately so generated content syncs.
+  const selectedTypes = new Set([...document.querySelectorAll('.nd-prefill-type:checked')].map(el => el.value));
+  if (selectedTypes.size) {
+    const added = _generateDocItemsFromProposal(doc, selectedTypes);
+    if (added) { pushDocVersion(doc); toast(`Generated ${added} card${added === 1 ? '' : 's'} from the proposal.`); }
+  }
   save();
   closeModal('modal-new-doc');
   openDocEditor(doc.id);
