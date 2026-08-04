@@ -16,7 +16,7 @@
 | 3.2 Notes split | **DONE** (Client Description field; notes internal-only) |
 | 3.5.1 Cascade | **DONE** (brand-first, carriers-only, matrix contacts) |
 | 3.5.2 Notifications overhaul | **DONE 2026-08-03** (dcfcda2, phase0_63) — audit fixed silent task-comment mention gap; inline bodies; Clear=dismissed_at; Reply-to-thread; history modal |
-| 3.1 status_kind mapping | Queued (medium — touches automation hooks) |
+| 3.1 status_kind mapping | **DONE 2026-08-03** (66dd2e9) — built-ins were already rename-safe; gap was custom statuses invisible to automations; statusKind() + "Acts as" dropdown |
 | 3.3 Cost-side currency/FX | Queued (BIG — pricing-chain scope, not "small debt") |
 | 4.1–4.8 Design features | Queued in order; 4.1 item specs is the keystone |
 | 5 SaaS gaps | Parked until §4 + pricing decision |
