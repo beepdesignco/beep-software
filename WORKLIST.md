@@ -147,6 +147,19 @@ board.
 
 ### 6A. Time system overhaul — CRITICAL PATH for Sept 1
 
+> **Baylor's design decisions (locked 2026-08-03):** rounding default =
+> period TOTAL rounded up to next 30 min (both modes still selectable per
+> run); historical cleanup = manual "Mark as billed" reconcile tool
+> (dry-run, nothing deleted); payroll = BIWEEKLY on MONDAYS, anchor: Olivia
+> paid Mon 2026-08-03; payroll period view must show hours by project,
+> billable/non-billable split, gross pay math (rate visible), payment
+> history + outstanding, AND revenue generated (her billable time at bill
+> rates); invoice line = one per person "Project Hours, [Name]", qty =
+> rounded hours, rate = billable rate, custom-description override kept;
+> non-billable time = never on invoices/revenue, but IS a labor expense in
+> P&L/gross-net AND always in payroll; duration format = "1h 32m" in all
+> UI overviews, decimal hours on invoice lines.
+
 - **6A.1 Invoice-time reconciliation (the core bug).** Time placed on a
   sent invoice must be marked billed (link entries → invoice) and drop out
   of the unbilled tally; unbilled = time since last reconciled period.

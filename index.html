@@ -9942,12 +9942,10 @@ function timeEntryToDB(t, studioId) {
   // Timer-created entries pass startedAt/endedAt directly via stopTimer;
   // manual entries get a synthetic started_at at 09:00 UTC on the picked date.
   //
-  // DROPPED WRITE: `billable` (replaced by `status`; `billable` column still
-  // exists in the DB but we no longer populate it).
-  //
-  // ALWAYS WRITES `status='unbilled'` today — the billed transition happens
-  // via the invoice flow in a later pass (Phase 0 #8 step 2). The manual
-  // modal's "billed" checkbox is currently inert on DB write.
+  // Billed state persists for real (§6A.1, 2026-08-03): status,
+  // invoice_line_item_id and billed_at round-trip from the in-memory entry.
+  // The sync engine writes invoice_line_items before time_entries, so the
+  // FK target exists by the time these rows land.
   const dateStr  = t.date || new Date().toISOString().slice(0, 10);
   const hoursN   = parseFloat(t.hours) || 0;
   const durSec   = t.durationSeconds != null ? Math.round(Number(t.durationSeconds)) : Math.round(hoursN * 3600);
@@ -9957,6 +9955,7 @@ function timeEntryToDB(t, studioId) {
   // manual entries leave endedAt undefined, so they still get a synthesized end.
   const isRunning = t.endedAt === null;
   const ended    = isRunning ? null : (t.endedAt || new Date(new Date(started).getTime() + durSec * 1000).toISOString());
+  const _isBilled = (t.status === 'billed' || t.billed === true) && !!t.invoiceLineItemId;
   return {
     id:                  t.id,
     studio_id:           studioId,
@@ -9967,10 +9966,13 @@ function timeEntryToDB(t, studioId) {
     ended_at:            ended,
     duration_seconds:    isRunning ? 0 : durSec,
     rate:                t.rate != null && t.rate !== '' ? Number(t.rate) : null,
-    status:              'unbilled',
+    // time_entries_billed_consistency CHECK: billed ⇒ all three set,
+    // unbilled ⇒ all three null. Derive the triple from one condition so an
+    // inconsistent in-memory entry can never produce a rejected row.
+    status:              _isBilled ? 'billed' : 'unbilled',
     billable:            t.billable === false ? false : true,
-    invoice_line_item_id: null,
-    billed_at:           null,
+    invoice_line_item_id: _isBilled ? t.invoiceLineItemId : null,
+    billed_at:           _isBilled ? (t.billedAt || new Date().toISOString()) : null,
   };
 }
 function spaceToDB(sp) {
@@ -18676,11 +18678,19 @@ function _faActualsListForItem(itemId) {
   if (!actuals.length) {
     return '<div style="font-size:11px;color:var(--text-light);font-style:italic;padding:6px 0">No freight actuals logged yet.</div>';
   }
+  const item = _findItemById(itemId);
+  const compName = id => (item?.components || []).find(c => c.id === id)?.name || '';
   return actuals.map(a => {
     const cat = a.freightCategoryId ? ((S.freightCategories || []).find(c => c.id === a.freightCategoryId)?.name || '') : '';
     const vendor = a.vendorId ? ((S.vendors || []).find(v => v.id === a.vendorId)?.name || '') : '';
+    // Component attribution: whole-entry rows carry proposalComponentId
+    // directly; split bills may slice to one or more components of this item.
+    const compIds = (a.allocations || []).length
+      ? [...new Set((a.allocations || []).filter(x => x.proposalItemId === itemId && x.proposalComponentId).map(x => x.proposalComponentId))]
+      : (a.proposalComponentId ? [a.proposalComponentId] : []);
+    const comps = compIds.map(compName).filter(Boolean).join(', ');
     const linkedNote = a.linkedExpenseId ? ' · <span style="color:var(--russet);font-style:italic">linked expense</span>' : '';
-    const meta = [a.date, cat, vendor, a.invoiceReference].filter(Boolean).map(escH).join(' · ');
+    const meta = [a.date, cat, comps, vendor, a.invoiceReference].filter(Boolean).map(escH).join(' · ');
     return `
       <div onclick="openEditFreightActual('${a.id}')" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:rgba(var(--text-rgb),0.025);border:1px solid var(--border);border-radius:var(--r);margin-bottom:4px;cursor:pointer;font-family:var(--font-b);font-size:11px" onmouseenter="this.style.borderColor='var(--pecan)'" onmouseleave="this.style.borderColor='var(--border)'">
         <span style="color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${meta || '<span style="color:var(--text-light);font-style:italic">no metadata</span>'}${linkedNote}</span>
@@ -28754,6 +28764,19 @@ function startTimer() {
   // either device. The row is finalized on stop and deleted on cancel.
   const projId = $c('tt-timer-proj')?.value || '';
   const person = AUTH.user?.id || 'baylor';   // timer always logs as whoever runs it
+  // ONE RUNNING TIMER PER USER (phase0_61 partial unique index enforces this
+  // at the DB). If a running entry already exists — started here or on
+  // another device that hasn't realtime-synced yet — adopt it instead of
+  // creating a second row.
+  const already = (S.timeEntries || []).find(e =>
+    e.userId === (AUTH.user?.id || null) && e.endedAt === null && e.status !== 'billed');
+  if (already) {
+    S.activeTimer = { entryId: already.id, projectId: already.projectId || null,
+      person: already.person || person, startMs: Date.parse(already.startedAt) || Date.now() };
+    _startTimerTick();
+    toast('You already have a timer running — picked it up here.');
+    return;
+  }
   const isInternal = projId === '__internal__';
   const nowIso = new Date().toISOString();
   const entry = {
@@ -31421,8 +31444,8 @@ function renderSwatchScheduleEditor(doc, proj, rooms) {
           <label style="cursor:pointer;font-size:9px;color:var(--russet);font-family:var(--font-b);padding:2px 4px;white-space:nowrap">Swap<input type="file" accept="image/*" style="display:none" onchange="uploadDocItemImage(${gi},this)"></label>
         </div>`:''}
         <div style="font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.03em;color:var(--mahogany)">${escH(item.name||'')}${item.itemCode?' ('+escH(item.itemCode)+')':''}</div>
-        <input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Material / fabric name" onchange="updateDocItem(${gi},'description',this.value.trim())" style="font-size:11px;padding:4px 6px;margin-top:4px">
-        <input type="text" class="fi" value="${escH(item.caption||'')}" placeholder="Caption (optional)" onchange="updateDocItem(${gi},'caption',this.value.trim())" style="font-size:10px;padding:3px 6px;margin-top:3px;color:var(--text-mid)">
+        <input type="text" class="fi" value="${escH(item.description||'')}" placeholder="Header" onchange="updateDocItem(${gi},'description',this.value.trim())" style="font-size:11px;padding:4px 6px;margin-top:4px">
+        <input type="text" class="fi" value="${escH(item.caption||'')}" placeholder="Caption" onchange="updateDocItem(${gi},'caption',this.value.trim())" style="font-size:10px;padding:3px 6px;margin-top:3px;color:var(--text-mid)">
         <button onclick="removeDocItem(${gi})" style="position:absolute;top:4px;right:4px;background:var(--white);border:1px solid var(--border);border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;color:var(--text-light);display:flex;align-items:center;justify-content:center">✕</button>
       </div>`;
     });
@@ -31833,6 +31856,11 @@ async function uploadDocItemImage(idx, input) {
       if (oldPath && oldPath !== record.storagePath && typeof deleteStoredFile === 'function') {
         deleteStoredFile(oldPath);
       }
+      // Push a version immediately: doc content only syncs to teammates via
+      // document_versions.data, so without this the image reference stays
+      // local until someone clicks Save — teammates saw an image placeholder
+      // with no image (and prints came out blank). §6E.4.
+      pushDocVersion(doc);
       save();
       renderDocEditor();
       return;
@@ -31844,6 +31872,8 @@ async function uploadDocItemImage(idx, input) {
   const reader = new FileReader();
   reader.onload = e => {
     updateDocItem(idx, 'imageData', e.target.result);
+    const doc = (S.documents || []).find(d => d.id === _currentDocId);
+    if (doc) { pushDocVersion(doc); save(); }   // ship the image to the team (§6E.4)
     renderDocEditor();
   };
   reader.readAsDataURL(file);
@@ -32277,7 +32307,7 @@ function unbilledHoursForProject(projectId) {
   return (S.timeEntries || [])
     .filter(e => e.projectId === projectId
       && e.billable !== false
-      && e.status !== 'billed'
+      && _billingStateForEntry(e) === 'unbilled'
       && (Number(e.durationSeconds) || 0) > 0)
     .reduce((sum, e) => sum + ((Number(e.durationSeconds) || 0) / 3600), 0);
 }
@@ -40105,7 +40135,8 @@ function unbilledTimeForProject(projectId) {
   if (!projectId) return [];
   let entries = (S.timeEntries || [])
     .filter(e => e.projectId === projectId)
-    .filter(e => e.status !== 'billed')
+    .filter(e => e.billable !== false)
+    .filter(e => _billingStateForEntry(e) === 'unbilled')
     .filter(e => (Number(e.durationSeconds) || 0) > 0);
   // In invoice builder context, also exclude entries queued on local lines
   if (typeof _invLineItems !== 'undefined' && Array.isArray(_invLineItems)) {
