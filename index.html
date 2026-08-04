@@ -12388,6 +12388,16 @@ function renderPDProposal(proj, pid) {
       <option value="">All statuses</option>
       ${getAllPipelineStatuses().map(s => `<option value="${escH(s.v)}" ${_propStatusFilter===s.v?'selected':''}>${escH(s.l)}</option>`).join('')}
     </select>
+    <details style="position:relative;margin-right:8px" ${_propMissingActive().length ? 'open' : ''}>
+      <summary class="btn btn-secondary btn-sm" style="list-style:none;cursor:pointer;font-size:11px;${_propMissingActive().length ? 'color:var(--russet);border-color:var(--russet)' : ''}" title="Show only items missing sourcing data">Missing data${_propMissingActive().length ? ' (' + _propMissingActive().length + ')' : ''} ▾</summary>
+      <div style="position:absolute;right:0;top:calc(100% + 4px);z-index:60;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;box-shadow:0 6px 18px rgba(0,0,0,0.1);white-space:nowrap;font-family:var(--font-b);font-size:12px">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-light);margin-bottom:6px">Show only items without…</div>
+        ${[['net','Net price'],['vendor','Vendor'],['code','Item code'],['category','Category']].map(([k,l]) => `
+          <label style="display:flex;align-items:center;gap:7px;padding:3px 0;cursor:pointer">
+            <input type="checkbox" ${_propMissingFilter[k] ? 'checked' : ''} onchange="togglePropMissing('${k}',this.checked)" style="accent-color:var(--russet);width:13px;height:13px">${l}
+          </label>`).join('')}
+      </div>
+    </details>
     <div class="view-tabs" style="margin-right:8px">
       <button class="view-tab${_propFilter==='all'?' active':''}" data-ptab="all" onclick="setPropFilter('all')">All Items</button>
       <button class="view-tab${_propFilter==='allowances'?' active':''}" data-ptab="allowances" onclick="setPropFilter('allowances')">Allowances</button>
@@ -20356,7 +20366,9 @@ function renderSpace(sp, pid) {
   let items = sp.items || [];
   if (_propFilter === 'allowances') items = items.filter(i => i.allowance);
   if (_propStatusFilter) items = items.filter(i => (i.status || '') === _propStatusFilter);
-  if (!items.length && (_propFilter === 'allowances' || _propStatusFilter)) return '';
+  const _mfKeys = _propMissingActive();
+  if (_mfKeys.length) items = items.filter(i => { const m = _propItemMissing(i); return _mfKeys.some(k => m[k]); });
+  if (!items.length && (_propFilter === 'allowances' || _propStatusFilter || _mfKeys.length)) return '';
   let rows = items.map(item => renderItemRow(item, sp.id, pid)).join('');
 
   // Room note: shown below the items table. If empty + not focused, the
@@ -23883,6 +23895,32 @@ function deleteItemFromModal() {
  
 let _propFilter = 'all'; // 'all' | 'allowances'
 let _propStatusFilter = ''; // '' = all statuses; else a pipeline status value
+// §6D.3 "missing data" filter: when any flag is on, only items MISSING at
+// least one checked attribute show — a sourcing-completeness worklist.
+let _propMissingFilter = { net: false, vendor: false, code: false, category: false };
+
+function _propItemMissing(item) {
+  // Constructed items source per component, so net/vendor completeness is
+  // judged on the components (shipping/receiving legs excluded).
+  const comps = (item.components || []).filter(c => c.componentType !== 'shipping' && c.componentType !== 'receiving');
+  const isCon = item.type === 'constructed';
+  return {
+    net:      isCon ? (!comps.length || comps.some(c => !(parse$(c.netCost) > 0))) : !(parse$(item.netPrice) > 0),
+    vendor:   isCon ? (!comps.length || comps.some(c => !c.vendorId)) : !item.vendorId,
+    code:     !(item.itemCode || '').trim(),
+    category: !item.itemTypeId && !(item.category || '').trim(),
+  };
+}
+
+function _propMissingActive() {
+  return Object.keys(_propMissingFilter).filter(k => _propMissingFilter[k]);
+}
+
+function togglePropMissing(key, on) {
+  _propMissingFilter[key] = !!on;
+  if (S._detailProjectId && _projDetailTab === 'proposal') renderProjectDetail();
+  else if (S.currentPropProject) renderPropBody();
+}
 
 function setPropStatusFilter(v) {
   _propStatusFilter = v;
@@ -30976,7 +31014,10 @@ function createNewDoc() {
     versions: [],
     currentVersionId: null,
     items: [],
-    rooms: [],
+    // Schedules auto-populate the project's spaces as rooms (§6E.2);
+    // they render empty and can be renamed or deleted in the editor.
+    rooms: (templateId === 'purchase_order' || templateId === 'export_list') ? []
+      : [...new Set((S.proposals?.[pid]?.spaces || []).map(sp => (sp.name || '').trim()).filter(Boolean))],
   };
 
   S.documents.push(doc);
@@ -31064,7 +31105,10 @@ function renderDocEditor() {
   $c('doce-title').textContent = doc.title;
   $c('doce-subtitle').textContent = [templateLabel, proj?.name, client?.name].filter(Boolean).join(' · ');
 
-  const rooms = [...new Set((doc.items||[]).map(i => i.room || 'Unassigned'))];
+  // Rooms are the union of the doc's stored room list (seeded from the
+  // project's proposal spaces at creation, §6E.2) and any rooms referenced
+  // by items. Renameable + deletable-when-empty (§6E.1).
+  const rooms = [...new Set([...(doc.rooms || []), ...(doc.items || []).map(i => i.room || 'Unassigned')])];
   if (!rooms.length) rooms.push('Unassigned');
 
   let html = '<div style="display:grid;grid-template-columns:1fr 300px;gap:24px;align-items:start">';
@@ -31494,7 +31538,7 @@ function renderSwatchScheduleEditor(doc, proj, rooms) {
   rooms.forEach(room => {
     const roomItems = doc.items.filter(i => (i.room || 'Unassigned') === room);
     html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
-      <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--pecan);margin-bottom:12px">${escH(room)}</div>
+      ${_docRoomHeader(room, roomItems.length)}
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">`;
     roomItems.forEach(item => {
       const gi = doc.items.indexOf(item);
@@ -31548,7 +31592,7 @@ function renderPaintScheduleEditor(doc, proj, rooms) {
   rooms.forEach(room => {
     const roomItems = doc.items.filter(i => (i.room || 'Unassigned') === room);
     html += `<div style="background:var(--white);border-radius:var(--rl);padding:18px 20px;border:1px solid var(--border);margin-bottom:16px">
-      <div style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--pecan);margin-bottom:12px">${escH(room)}</div>
+      ${_docRoomHeader(room, roomItems.length)}
       <table style="width:100%;border-collapse:collapse;font-size:11px;font-family:var(--font-b)">
         <thead><tr>
           <th style="text-align:left;padding:6px 8px;font-family:var(--font-h);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-light);border-bottom:1px solid var(--border)">Location</th>
@@ -31824,6 +31868,42 @@ function addManualDocItem(room) {
   renderDocEditor();
 }
 
+// Editable room/space header used by both schedule editors (§6E.1): the
+// title is an inline input (rename rewrites the room on every card in it)
+// with a delete button that only works on empty spaces.
+function _docRoomHeader(room, itemCount) {
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+    <input type="text" class="fi" value="${escH(room)}" data-room="${escH(room)}"
+      onchange="renameDocRoom(this.dataset.room, this.value.trim())"
+      title="Click to rename this space"
+      style="font-family:var(--font-h);font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--pecan);border:1px solid transparent;background:transparent;padding:2px 6px;flex:1;border-radius:var(--rs)"
+      onfocus="this.style.borderColor='var(--border)';this.style.background='var(--white)'"
+      onblur="this.style.borderColor='transparent';this.style.background='transparent'">
+    <button data-room="${escH(room)}" onclick="deleteDocRoom(this.dataset.room)" title="${itemCount ? 'Space has ' + itemCount + ' card' + (itemCount > 1 ? 's' : '') + ' — remove them first' : 'Delete this space'}"
+      style="background:none;border:1px solid var(--border);border-radius:50%;width:20px;height:20px;font-size:10px;cursor:pointer;color:var(--text-light);flex-shrink:0;display:flex;align-items:center;justify-content:center">✕</button>
+  </div>`;
+}
+
+function renameDocRoom(oldName, newName) {
+  const doc = (S.documents || []).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  if (!newName || newName === oldName) { renderDocEditor(); return; }
+  (doc.items || []).forEach(i => { if ((i.room || 'Unassigned') === oldName) i.room = newName; });
+  doc.rooms = [...new Set([...(doc.rooms || []).filter(r => r !== oldName), newName])];
+  save();
+  renderDocEditor();
+}
+
+function deleteDocRoom(room) {
+  const doc = (S.documents || []).find(d => d.id === _currentDocId);
+  if (!doc) return;
+  const count = (doc.items || []).filter(i => (i.room || 'Unassigned') === room).length;
+  if (count) { toast('This space has ' + count + ' card' + (count > 1 ? 's' : '') + ' — remove or move them first.'); return; }
+  doc.rooms = (doc.rooms || []).filter(r => r !== room);
+  save();
+  renderDocEditor();
+}
+
 function addDocRoom() {
   const name = $c('doce-new-room')?.value.trim();
   if (!name) return;
@@ -31836,11 +31916,9 @@ function addDocRoom() {
     const doorCount = parseInt(prompt('How many doors in ' + name + '? (Enter 0 or leave blank to skip)', '0')) || 0;
     addPaintRoomRows(doc, name, winCount, doorCount);
   } else {
-    doc.items.push({
-      id: uid(), name: '', itemCode: '', description: '', room: name,
-      imageData: null, imageType: 'material', caption: '',
-      proposalItemId: null, proposalCompId: null,
-    });
+    // Rooms are first-class now — no ghost blank card needed (§6E.1).
+    if (!doc.rooms) doc.rooms = [];
+    if (!doc.rooms.includes(name)) doc.rooms.push(name);
   }
   doc.updated = new Date().toISOString();
   save();
