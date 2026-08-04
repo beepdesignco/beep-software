@@ -3422,6 +3422,54 @@ tr:hover .row-btns { opacity:1; }
   </div>
 </div>
 
+<!-- ═════════════════ ORDER GROUP MODAL (§6D.4) ═════════════════ -->
+<div class="overlay" id="modal-order-group">
+  <div class="modal" style="width:640px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-order-group')">✕</button>
+    <div class="modal-title">Order Groups</div>
+    <div id="og-target-label" style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);margin:-6px 0 6px"></div>
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin-bottom:14px;line-height:1.5">
+      Internal note that items or components across spaces are really one vendor order. Never shown to clients; doesn't change pricing or the proposal. Untag any member if a substitution splits the order.
+    </div>
+
+    <div id="og-mine"></div>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div class="fg">
+        <label class="fl">Tag</label>
+        <select class="fi fsel" id="og-tag-target"></select>
+      </div>
+      <div class="frow" style="align-items:flex-end">
+        <div class="fg" style="flex:2">
+          <label class="fl">To Existing Group</label>
+          <select class="fi fsel" id="og-existing"></select>
+        </div>
+        <div class="fg" style="flex:0">
+          <button class="btn btn-secondary" onclick="ogTagExisting()">Tag</button>
+        </div>
+      </div>
+      <div class="frow" style="align-items:flex-end">
+        <div class="fg" style="flex:2">
+          <label class="fl">Or Create New Group</label>
+          <input type="text" class="fi" id="og-new-name" placeholder='e.g. "Schumacher wallpaper — one order"'>
+        </div>
+        <div class="fg" style="flex:2">
+          <label class="fl">Vendor</label>
+          <select class="fi fsel" id="og-new-vendor"></select>
+        </div>
+        <div class="fg" style="flex:0">
+          <button class="btn btn-primary" onclick="ogCreateGroup()">Create &amp; Tag</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-order-group')">Done</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="modal-sub-delta">
   <div class="modal" style="width:520px">
     <button class="modal-x" onclick="applySubDelta('keep')">✕</button>
@@ -8461,6 +8509,7 @@ async function loadFromSupabase() {
     payrollRunsRes,
     projectMeetingsRes,
     clientFeesRes,
+    orderGroupsRes,
   ] = await Promise.all([
     sb.from('clients').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('contacts').select('*').eq('studio_id', studioId).is('deleted_at', null),
@@ -8492,9 +8541,10 @@ async function loadFromSupabase() {
     sb.from('payroll_runs').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('project_meetings').select('*').eq('studio_id', studioId).is('deleted_at', null),
     sb.from('client_fees').select('*').eq('studio_id', studioId).is('deleted_at', null),
+    sb.from('order_groups').select('*').eq('studio_id', studioId).is('deleted_at', null),
   ]);
 
-  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes, clientFees: clientFeesRes })) {
+  for (const [label, res] of Object.entries({ clients: clientsRes, contacts: contactsRes, projects: projectsRes, invoices: invoicesRes, expenses: expensesRes, documents: documentsRes, time: timeRes, vendors: vendorsRes, vendorContacts: vendorContactsRes, brands: brandsRes, vendorBrands: vendorBrandsRes, itemTypes: itemTypesRes, purchaseOrders: posRes, submittals: submittalsRes, freightCategories: freightCategoriesRes, freightCharges: freightChargesRes, freightActuals: freightActualsRes, freightSettlements: freightSettlementsRes, estimates: estimatesRes, expenseAllocations: expenseAllocationsRes, freightActualAllocations: freightActualAllocationsRes, invoiceFreightAllocations: invoiceFreightAllocationsRes, tasks: tasksRes, taskActivity: taskActivityRes, taskFieldDefs: taskFieldDefsRes, taskDependencies: taskDependenciesRes, payrollRuns: payrollRunsRes, projectMeetings: projectMeetingsRes, clientFees: clientFeesRes, orderGroups: orderGroupsRes })) {
     if (res.error) throw new Error(`load ${label}: ${res.error.message}`);
   }
 
@@ -8581,6 +8631,7 @@ async function loadFromSupabase() {
   S.freightSettlements = (freightSettlementsRes.data || []).map(dbFreightSettlementToS);
   S.payrollRuns = (payrollRunsRes.data || []).map(dbPayrollRunToS);
   S.projectMeetings = (projectMeetingsRes.data || []).map(dbProjectMeetingToS);
+  S.orderGroups = (orderGroupsRes.data || []).map(dbOrderGroupToS);
   S.clientFees = (clientFeesRes.data || []).map(dbClientFeeToS);
   // vendor_brands is a M2M join table — fold its rows into each vendor.brandIds array
   const vbByVendor = {};
@@ -9371,6 +9422,7 @@ const _sbShadow = {
   freightSettlements: new Map(),
   payrollRuns: new Map(),
   projectMeetings: new Map(),
+  orderGroups: new Map(),
   clientFees: new Map(),
   estimates: new Map(),
   expenseAllocations: new Map(),
@@ -9409,6 +9461,7 @@ function captureSbShadow() {
   _sbShadow.freightSettlements = new Map((S.freightSettlements || []).map(r => [r.id, snap(r)]));
   _sbShadow.payrollRuns = new Map((S.payrollRuns || []).map(r => [r.id, snap(r)]));
   _sbShadow.projectMeetings = new Map((S.projectMeetings || []).map(m => [m.id, snap(m)]));
+  _sbShadow.orderGroups = new Map((S.orderGroups || []).map(g => [g.id, snap(g)]));
   _sbShadow.clientFees = new Map((S.clientFees || []).map(f => [f.id, snap(f)]));
   _sbShadow.expenseAllocations = new Map();
   (S.expenses || []).forEach(e => (e.allocations || []).forEach(a =>
@@ -9588,6 +9641,33 @@ function freightSettlementToDB(r, studioId) {
 
 // Payroll runs — an immutable snapshot of a pay period's per-person gross,
 // marked paid. breakdown is a frozen [{userId,name,hours,payRate,gross}] array.
+function dbOrderGroupToS(r) {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    name: r.name || '',
+    vendorId: r.vendor_id || null,
+    note: r.note || '',
+    members: Array.isArray(r.members) ? r.members : [],
+    createdBy: r.created_by || null,
+    created: r.created_at,
+    updated: r.updated_at,
+  };
+}
+function orderGroupToDB(g, studioId) {
+  return {
+    id: g.id,
+    studio_id: studioId,
+    project_id: g.projectId,
+    name: g.name || '',
+    vendor_id: g.vendorId || null,
+    note: g.note || null,
+    members: g.members || [],
+    created_by: g.createdBy || AUTH.user?.id || null,
+    deleted_at: null,
+  };
+}
+
 function dbProjectMeetingToS(r) {
   return {
     id: r.id,
@@ -10419,6 +10499,7 @@ async function syncToSupabase() {
     await syncSafe('freight_settlements', new Map((S.freightSettlements||[]).map(r => [r.id, r])), _sbShadow.freightSettlements, r => freightSettlementToDB(r, studioId));
     await syncSafe('payroll_runs', new Map((S.payrollRuns||[]).map(r => [r.id, r])), _sbShadow.payrollRuns, r => payrollRunToDB(r, studioId));
     await syncSafe('project_meetings', new Map((S.projectMeetings||[]).map(m => [m.id, m])), _sbShadow.projectMeetings, m => projectMeetingToDB(m, studioId));
+    await syncSafe('order_groups', new Map((S.orderGroups||[]).map(g => [g.id, g])), _sbShadow.orderGroups, g => orderGroupToDB(g, studioId));
     await syncSafe('client_fees', new Map((S.clientFees||[]).map(f => [f.id, f])), _sbShadow.clientFees, f => clientFeeToDB(f, studioId));
     // Three-phase to satisfy circular FKs:
     //   1. Parent (documents) without current_version_id — gives child a target
@@ -10817,6 +10898,7 @@ let S = {
   payrollRuns: [],
   projectMeetings: [],
   clientFees: [],
+  orderGroups: [],
   purchaseOrders: [],
   submittals: [],
   taxStates: [],   // [{id, name, taxRate, resaleNumber, filingFrequency, notes}]
@@ -14612,6 +14694,187 @@ function removeCostActualEntry() {
   toast('Cost actual entry removed.');
 }
 
+// ── §6D.4 ORDER GROUPS — internal annotation linking items/components that
+// are really ONE vendor order. Pure annotation: no effect on proposal
+// structure, pricing, or client docs. Members: [{itemId, compId|null, note}].
+let _ogCtx = null;
+
+function orderGroupsForItem(pid, itemId) {
+  return (S.orderGroups || []).filter(g => g.projectId === pid &&
+    (g.members || []).some(m => m.itemId === itemId));
+}
+
+function _ogFindItem(pid, itemId) {
+  for (const sp of (S.proposals[pid]?.spaces || [])) {
+    const it = (sp.items || []).find(i => i.id === itemId);
+    if (it) return { item: it, space: sp };
+  }
+  return null;
+}
+
+function _ogMemberLabel(pid, m) {
+  const found = _ogFindItem(pid, m.itemId);
+  if (!found) return '(removed item)';
+  let label = `${found.item.name || '(unnamed)'} · ${found.space.name || 'Unassigned'}`;
+  if (m.compId) {
+    const c = (found.item.components || []).find(x => x.id === m.compId);
+    label += ` — ${c ? (c.name || 'component') : '(removed component)'}`;
+  }
+  return label;
+}
+
+function renderOrderGroupCard(item, pid, spId) {
+  const groups = orderGroupsForItem(pid, item.id);
+  const open = `openOrderGroupModal('${pid}','${spId}','${item.id}')`;
+  if (!groups.length) {
+    return `<div style="margin-bottom:14px">
+      <button class="btn btn-ghost btn-sm" onclick="${open}" style="font-size:10px" title="Note internally that this item ships/orders together with other items — one vendor order across spaces or components">⛓ Tag to order group</button>
+    </div>`;
+  }
+  return groups.map(g => {
+    const vendor = g.vendorId ? ((S.vendors || []).find(v => v.id === g.vendorId)?.name || '') : '';
+    const others = (g.members || []).filter(m => m.itemId !== item.id);
+    return `
+    <div style="background:rgba(var(--text-rgb),0.02);border:1px solid var(--border);border-left:3px solid var(--russet);border-radius:var(--rl);padding:12px 16px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-family:var(--font-h);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--russet)">⛓ Order group: ${escH(g.name)}${vendor ? ` <span style="color:var(--text-mid);font-weight:400;text-transform:none;letter-spacing:0">· ${escH(vendor)}</span>` : ''}</div>
+        <button class="btn btn-ghost btn-sm" onclick="${open}" style="font-size:10px;padding:2px 8px">Manage</button>
+      </div>
+      ${g.note ? `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-mid);font-style:italic;margin-top:3px">${escH(g.note)}</div>` : ''}
+      ${others.length ? `<div style="margin-top:6px;font-family:var(--font-b);font-size:11px;color:var(--text-dark)">
+        ${others.map(m => `<div style="padding:2px 0">• ${escH(_ogMemberLabel(pid, m))}${m.note ? ` <span style="color:var(--text-mid);font-style:italic">— ${escH(m.note)}</span>` : ''}</div>`).join('')}
+      </div>` : '<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;margin-top:4px">No other items tagged yet.</div>'}
+    </div>`;
+  }).join('');
+}
+
+function openOrderGroupModal(pid, spId, itemId) {
+  _ogCtx = { pid, spId, itemId };
+  renderOrderGroupModal();
+  $c('modal-order-group').classList.add('open');
+}
+
+function renderOrderGroupModal() {
+  const ctx = _ogCtx;
+  if (!ctx) return;
+  const found = _ogFindItem(ctx.pid, ctx.itemId);
+  if (!found) return;
+  const item = found.item;
+  $c('og-target-label').textContent = `${item.name || 'Item'} · ${found.space.name || 'Unassigned'}`;
+  const mine = orderGroupsForItem(ctx.pid, ctx.itemId);
+  const all = (S.orderGroups || []).filter(g => g.projectId === ctx.pid);
+  const vendorOpts = v => '<option value="">— No vendor —</option>' +
+    (S.vendors || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(x =>
+      `<option value="${escH(x.id)}" ${v === x.id ? 'selected' : ''}>${escH(x.name || '')}</option>`).join('');
+
+  // Groups this item belongs to — full member management.
+  $c('og-mine').innerHTML = mine.length ? mine.map(g => `
+    <div style="border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" class="fi" value="${escH(g.name)}" onchange="ogSetGroupField('${g.id}','name',this.value.trim())" style="flex:2;font-size:12px;font-weight:700">
+        <select class="fi fsel" onchange="ogSetGroupField('${g.id}','vendorId',this.value||null)" style="flex:2;font-size:11px">${vendorOpts(g.vendorId)}</select>
+        <button class="btn btn-ghost btn-sm" onclick="ogDeleteGroup('${g.id}')" style="color:#b94a3a;font-size:10px" title="Delete this group (items themselves are untouched)">Delete</button>
+      </div>
+      <input type="text" class="fi" value="${escH(g.note || '')}" placeholder="Group note — e.g. one Schumacher order, ship split to workroom + upholsterer" onchange="ogSetGroupField('${g.id}','note',this.value.trim())" style="margin-top:6px;font-size:11px">
+      <div style="margin-top:8px">
+        ${(g.members || []).map((m, idx) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-family:var(--font-b);font-size:11px">
+            <span style="flex:2;color:var(--text-dark)">${escH(_ogMemberLabel(ctx.pid, m))}</span>
+            <input type="text" class="fi" value="${escH(m.note || '')}" placeholder="e.g. 20 yd → curtain workroom" onchange="ogSetMemberNote('${g.id}',${idx},this.value.trim())" style="flex:2;font-size:10px;padding:3px 6px">
+            <button class="btn btn-ghost btn-sm" onclick="ogUntagMember('${g.id}',${idx})" style="font-size:10px;color:#b94a3a;padding:2px 6px" title="Untag — e.g. after a substitution splits the order">✕</button>
+          </div>`).join('')}
+      </div>
+    </div>`).join('') : '<div style="font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;margin-bottom:8px">This item isn\'t in an order group yet.</div>';
+
+  // Tag target: whole item or a component of a constructed item.
+  const comps = (item.components || []).filter(c => c.componentType !== 'shipping' && c.componentType !== 'receiving');
+  $c('og-tag-target').innerHTML = `<option value="">Whole item</option>` +
+    comps.map(c => `<option value="${escH(c.id)}">Component: ${escH(c.name || '(unnamed)')}</option>`).join('');
+  $c('og-tag-target').parentElement.style.display = comps.length ? '' : 'none';
+
+  const existing = all.filter(g => !(g.members || []).some(m => m.itemId === ctx.itemId));
+  $c('og-existing').innerHTML = existing.length
+    ? '<option value="">— Pick a group —</option>' + existing.map(g => `<option value="${escH(g.id)}">${escH(g.name)}</option>`).join('')
+    : '<option value="">— No other groups on this project —</option>';
+  $c('og-new-name').value = '';
+  $c('og-new-vendor').innerHTML = vendorOpts(item.vendorId || null);
+}
+
+function ogSetGroupField(gid, field, val) {
+  const g = (S.orderGroups || []).find(x => x.id === gid);
+  if (!g) return;
+  g[field] = val;
+  save();
+  renderOrderGroupModal();
+  renderProjectDetail();
+}
+
+function ogSetMemberNote(gid, idx, val) {
+  const g = (S.orderGroups || []).find(x => x.id === gid);
+  if (!g || !g.members?.[idx]) return;
+  g.members[idx].note = val;
+  save();
+  renderProjectDetail();
+}
+
+function ogUntagMember(gid, idx) {
+  const g = (S.orderGroups || []).find(x => x.id === gid);
+  if (!g || !g.members?.[idx]) return;
+  const label = _ogMemberLabel(_ogCtx?.pid || g.projectId, g.members[idx]);
+  g.members.splice(idx, 1);
+  save();
+  renderOrderGroupModal();
+  renderProjectDetail();
+  toast(`Untagged ${label} from "${g.name}".`);
+}
+
+function ogDeleteGroup(gid) {
+  const g = (S.orderGroups || []).find(x => x.id === gid);
+  if (!g) return;
+  if (!confirm(`Delete order group "${g.name}"? The items themselves are untouched — only the internal grouping note goes away.`)) return;
+  S.orderGroups = (S.orderGroups || []).filter(x => x.id !== gid);
+  save();
+  renderOrderGroupModal();
+  renderProjectDetail();
+}
+
+function _ogTag(g) {
+  const ctx = _ogCtx;
+  if (!ctx || !g) return;
+  const compId = $c('og-tag-target').value || null;
+  if ((g.members || []).some(m => m.itemId === ctx.itemId && (m.compId || null) === compId)) { toast('Already tagged to that group.'); return; }
+  g.members = [...(g.members || []), { itemId: ctx.itemId, compId, note: '' }];
+  save();
+  renderOrderGroupModal();
+  renderProjectDetail();
+  toast(`Tagged to "${g.name}".`);
+}
+
+function ogTagExisting() {
+  const gid = $c('og-existing').value;
+  if (!gid) { toast('Pick a group first.'); return; }
+  _ogTag((S.orderGroups || []).find(x => x.id === gid));
+}
+
+function ogCreateGroup() {
+  const ctx = _ogCtx;
+  if (!ctx) return;
+  const name = $c('og-new-name').value.trim();
+  if (!name) { toast('Name the order group — e.g. "Schumacher wallpaper order".'); $c('og-new-name').focus(); return; }
+  const g = {
+    id: uid(),
+    projectId: ctx.pid,
+    name,
+    vendorId: $c('og-new-vendor').value || null,
+    note: '',
+    members: [],
+    createdBy: AUTH.user?.id || null,
+  };
+  if (!S.orderGroups) S.orderGroups = [];
+  S.orderGroups.push(g);
+  _ogTag(g);
+}
+
 function renderPMItemDetailPanel(pid, spId, itemId) {
   const sp = S.proposals[pid]?.spaces.find(s => s.id === spId);
   const item = sp?.items?.find(i => i.id === itemId);
@@ -14884,6 +15147,8 @@ function renderPMItemDetailPanel(pid, spId, itemId) {
         </div>
 
         ${renderItemLeadTimeCard(item, pid, spId, itemId)}
+
+        ${renderOrderGroupCard(item, pid, spId)}
 
         ${!isAllowance ? renderItemPLCard(item, pid) : ''}
 
