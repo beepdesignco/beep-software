@@ -173,8 +173,14 @@ board.
 - **6A.9 Single running timer per user, cross-device.** Olivia had two
   timers running (web + phone). Enforce server-side (one open timer per
   user) + surface the running timer on every device.
-- **6A.10 Reference research:** Toggl + Bonsai patterns for reconcile,
-  cancelled invoices, rounding, teams (research done → fold into design).
+- **6A.10 Reference research: DONE 2026-08-03** — see
+  `docs/time-billing-research.md`. Verdict: copy Bonsai's entry-level billed
+  status + invoice FK (BEEP's schema already matches), Bonsai's
+  delete-invoice fork (revert vs discard hours) + manual mark-billed
+  override (= the backfill tool), Toggl's rounding option set (up/nearest/
+  down × increments, per-entry or per-group-subtotal, raw durations never
+  mutated), Toggl's approved-timesheet-as-locked-payroll-period, Bonsai's
+  clean lines + optional timesheet appendix.
 
 ### 6B. Mobile app (beep-mobile)
 
