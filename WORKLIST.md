@@ -20,6 +20,7 @@
 | 3.3 Cost-side currency/FX | Queued (BIG — pricing-chain scope, not "small debt") |
 | 4.1–4.8 Design features | Queued in order; 4.1 item specs is the keystone |
 | 5 SaaS gaps | Parked until §4 + pricing decision |
+| 6 Aug 3 batch | **NEW 2026-08-03** — §6A time system is the Sept 1 critical path |
 
 ## Owner config actions (no code) — still open
 - Configure **Georgia** in Settings → Sales Tax (state + county components); verify in staging before any live GA project
@@ -135,3 +136,89 @@ board.
 6. Subscription billing (entitlement gates writes only; fail open)
 7. Import/export
 8. Per-project lazy loading before real-volume customers
+
+## 6. August 3, 2026 batch (Baylor's update memo)
+
+> **Deadline context:** Baylor intends to run the studio fully on the app
+> effective **Sept 1, 2026**. Blockers for that date are the time system
+> (§6A) and email deliverability (§6F). Real production data everywhere —
+> never erase or rewrite existing time entries/invoices; reconciliation
+> backfills must be additive and dry-run first.
+
+### 6A. Time system overhaul — CRITICAL PATH for Sept 1
+
+- **6A.1 Invoice-time reconciliation (the core bug).** Time placed on a
+  sent invoice must be marked billed (link entries → invoice) and drop out
+  of the unbilled tally; unbilled = time since last reconciled period.
+  Known failure: BE-114 has 28h billed + paid, yet Goff Chandler still
+  shows 30.01h unbilled. Must handle invoice delete/void/cancel (entries
+  return to unbilled). Backfill path for historical invoices (BE-114 et
+  al) — additive, dry-run, no data erased.
+- **6A.2 Rounding options** when adding unbilled time: round each entry up
+  to next 5/10/15/30 min, OR round the period total up to next 15/30/60.
+- **6A.3 Period selection.** Default = all time since last reconciled
+  (billed) time; adjustable: all time, this/last month, last week, last
+  60/90 days, since last period, custom.
+- **6A.4 Clean line-item text.** Auto-generated time lines read simply
+  "Project Hours, [User's name]" — kill the messy auto text.
+- **6A.5 Payroll periods.** Manage/filter/reconcile pay periods so paying
+  a team member shows enough info (ties into queued Time+Payroll feature:
+  pay rate vs billable rate decoupled).
+- **6A.6 Duration format.** Overviews show "1h 32m", not "1.51 hours".
+- **6A.7 Non-billable integrity.** Non-billable entries must be excluded
+  from financial time tallies and time invoicing everywhere.
+- **6A.8 Entry list UX.** Project time section: entries by user,
+  reverse-chronological; billed entries collapse into a "Billed entries"
+  area with per-user collapsible sublists.
+- **6A.9 Single running timer per user, cross-device.** Olivia had two
+  timers running (web + phone). Enforce server-side (one open timer per
+  user) + surface the running timer on every device.
+- **6A.10 Reference research:** Toggl + Bonsai patterns for reconcile,
+  cancelled invoices, rounding, teams (research done → fold into design).
+
+### 6B. Mobile app (beep-mobile)
+
+- **6B.1 Cancel entry.** Top-left red "Cancel entry" text button, appears
+  once any field has data; confirm dialog "Are you sure you'd like to
+  cancel this entry? This cannot be undone" (Yes/No); clears all fields.
+- **6B.2 Tag expense → PM item.** After selecting a project, allow tagging
+  an expense to a PM item from the phone.
+- **6B.3 BUG: time-entry notes not saving** from the mobile app.
+
+### 6C. Cost actuals — deposits / partial payments
+
+- **6C.1 Deposit recording.** Vendors may take 50% upfront, flat fee, etc.
+  Record a cost actual as a deposit; item stays flagged "deposit
+  outstanding" until user records the balance and marks paid in full.
+  Must roll up correctly in the project Budget tab and the financial
+  dashboard (design proposal first — see session notes).
+
+### 6D. PM + proposals
+
+- **6D.1 P/L math walkthrough.** Explain cost actuals, delta
+  (credit/overage), freight actuals, item P/L, raw actual — sources +
+  formulas; fix anything actually wrong.
+- **6D.2 Freight logged-actuals rows** show: [Date logged] [Category]
+  [Component (if constructed)] [Vendor (if entered)] + the amount.
+- **6D.3 Proposal filter:** show only items WITHOUT net price / vendor /
+  item code / category (checkboxes, combinable).
+- **6D.4 Shared-order tagging.** Internal note linking multiple
+  items/components that are really one vendor order (same fabric on sofa +
+  curtains; same wallpaper in two rooms). Easily untagged per item when a
+  substitution splits the order. Design proposal first.
+
+### 6E. Document builder — material schedule
+
+- **6E.1** "Unassigned" default room renameable inline.
+- **6E.2** Creating a schedule for a project auto-populates its spaces
+  (deletable afterwards).
+- **6E.3** Image text fields relabeled "Header" / "Caption".
+- **6E.4 BUG:** image added by one user shows placeholder but not the
+  image on another user's account, and doesn't print. Cross-account image
+  resolution must work.
+
+### 6F. Email deliverability
+
+- **6F.1** Invoice emails landing in spam despite Resend showing
+  delivered. Investigate (DMARC upgrade already an open owner action;
+  check headers, from-domain alignment, content triggers, List-Unsubscribe).
