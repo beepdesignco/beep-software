@@ -20,7 +20,7 @@
 | 3.3 Cost-side currency/FX | Queued (BIG — pricing-chain scope, not "small debt") |
 | 4.1–4.8 Design features | Queued in order; 4.1 item specs is the keystone |
 | 5 SaaS gaps | Parked until §4 + pricing decision |
-| 6 Aug 3 batch | **IN PROGRESS** — shipped 2026-08-03: 6A.1-4/6-9 (reconciliation + RLS fix phase0_61, rounding modes, period picker, clean lines, reconcile tool, h/m, billed-collapse, single timer), 6A.5 payroll periods v1, 6B mobile batch (0.5.0 → TestFlight), 6D.2, 6D.3, 6E.1-4. Open: 6A.5 polish, 6C deposits (design→build), 6D.1 relabel decision, 6D.4 order groups (design), 6F spam (needs headers + DMARC owner action) |
+| 6 Aug 3 batch | **SHIPPED 2026-08-03** (all code items): 6A.1-9 (reconciliation + phase0_61, rounding, periods, clean lines, reconcile tool, h/m, billed-collapse, single timer, biweekly payroll v1), 6B mobile 0.5.0 build 14 → TestFlight, 6C deposits (payment ledger in cost_actual_meta), 6D.2-4 (freight rows, missing-data filter, order_groups phase0_62), 6E.1-4. Open (Baylor input): 6D.1 "Collected"→"Billed" relabel decision, 6F spam (forward headers + DMARC p=quarantine owner action) |
 
 ## Owner config actions (no code) — still open
 - Configure **Georgia** in Settings → Sales Tax (state + county components); verify in staging before any live GA project
