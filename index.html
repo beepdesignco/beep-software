@@ -2477,11 +2477,41 @@ tr:hover .row-btns { opacity:1; }
 
     <div class="frow">
       <div class="fg">
-        <label class="fl">Round Each Entry Up To</label>
+        <label class="fl">Period</label>
+        <select class="fi fsel" id="unb-period" onchange="onUnbPeriodChange()">
+          <option value="all" selected>All unbilled (since last reconciled)</option>
+          <option value="thismonth">This month</option>
+          <option value="lastmonth">Last month</option>
+          <option value="lastweek">Last week</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="custom">Custom range…</option>
+        </select>
+      </div>
+      <div class="fg" id="unb-custom-range" style="display:none">
+        <label class="fl">From / To</label>
+        <div style="display:flex;gap:6px">
+          <input type="date" class="fi" id="unb-from" onchange="onUnbPeriodChange()">
+          <input type="date" class="fi" id="unb-to" onchange="onUnbPeriodChange()">
+        </div>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label class="fl">Rounding</label>
         <select class="fi fsel" id="unb-round" onchange="renderUnbilledEntries()">
           <option value="0">No rounding (exact)</option>
-          <option value="15">Nearest 15 minutes (up)</option>
-          <option value="30">Nearest 30 minutes (up)</option>
+          <optgroup label="Round each entry up">
+            <option value="e5">to next 5 min</option>
+            <option value="e10">to next 10 min</option>
+            <option value="e15">to next 15 min</option>
+            <option value="e30">to next 30 min</option>
+          </optgroup>
+          <optgroup label="Round line totals up">
+            <option value="t15">to next 15 min</option>
+            <option value="t30">to next 30 min</option>
+            <option value="t60">to next hour</option>
+          </optgroup>
         </select>
       </div>
       <div class="fg">
@@ -2494,7 +2524,7 @@ tr:hover .row-btns { opacity:1; }
       </div>
     </div>
     <div class="fg">
-      <label class="fl">Description Override <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(blank = "Hours worked &lt;date range&gt;")</span></label>
+      <label class="fl">Description Override <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;color:var(--text-light)">(blank = "Project Hours, [name]")</span></label>
       <input type="text" class="fi" id="unb-desc" placeholder="Leave blank to auto-fill">
     </div>
 
@@ -2521,6 +2551,37 @@ tr:hover .row-btns { opacity:1; }
       <div style="flex:1"></div>
       <button class="btn btn-secondary" onclick="closeModal('modal-unbilled-time')">Cancel</button>
       <button class="btn btn-primary" onclick="commitUnbilledTime()">Add to Invoice</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════ TIME RECONCILE MODAL (§6A.1) ═════════════════ -->
+<div class="overlay" id="modal-time-reconcile">
+  <div class="modal" style="width:720px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-time-reconcile')">✕</button>
+    <div class="modal-title">Reconcile Time — Mark as Billed</div>
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-mid);font-style:italic;margin-bottom:14px;line-height:1.5">
+      For hours that were invoiced manually or before reconciliation existed. Selected entries are linked to the invoice you pick and leave the unbilled tally. Nothing is deleted — any entry can be returned to unbilled later with ↩ Unbill.
+    </div>
+    <div class="fg">
+      <label class="fl">Link to Invoice</label>
+      <select class="fi fsel" id="trc-invoice" onchange="renderTimeReconcile()"></select>
+    </div>
+    <div style="margin-top:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <label class="fl" style="margin:0">Unbilled entries on this project</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="toggleAllReconcile(true)" style="font-size:10px">Select All</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleAllReconcile(false)" style="font-size:10px">None</button>
+        </div>
+      </div>
+      <div id="trc-list" style="border:1px solid var(--border);border-radius:var(--r);max-height:300px;overflow-y:auto"></div>
+    </div>
+    <div id="trc-preview" style="margin-top:14px;padding:12px 14px;border:1px solid var(--border);background:rgba(var(--text-rgb),0.03);border-radius:var(--r);font-family:var(--font-b);font-size:12px;color:var(--text-mid);line-height:1.5"></div>
+    <div class="modal-footer">
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="closeModal('modal-time-reconcile')">Cancel</button>
+      <button class="btn btn-primary" onclick="applyTimeReconcile()">Mark as Billed</button>
     </div>
   </div>
 </div>
@@ -28581,6 +28642,15 @@ function fmtDurationFromHours(decimalHours) {
 // that used to pass `parseFloat(e.hours)`). For seconds-typed values prefer
 // fmtDurationFromSeconds() directly.
 function fmtDuration(decimalHours) { return fmtDurationFromHours(decimalHours); }
+// UI-overview duration (§6A.6): "1h 32m" — hours+minutes only, no seconds.
+// Invoice line quantities stay decimal; this is for on-screen tallies.
+function fmtHoursHM(decimalHours) {
+  const totalMin = Math.round((Number(decimalHours) || 0) * 60);
+  const h = Math.floor(totalMin / 60), m = totalMin % 60;
+  if (h === 0) return m + 'm';
+  if (m === 0) return h + 'h';
+  return h + 'h ' + m + 'm';
+}
 
 // ─────────── LEAD TIME HELPERS ───────────
 // All date inputs are 'YYYY-MM-DD' strings; outputs are the same shape.
@@ -39388,7 +39458,7 @@ function renderTimeSummary(entries) {
     byProj[e.projectId].push(e);
   });
   const cutoffs = _projectBillingCutoffs();
-  const hrsFmt = h => h % 1 === 0 ? String(h) : h.toFixed(2);
+  const hrsFmt = h => fmtHoursHM(h);
   const cards = Object.entries(byProj).map(([pid, ents]) => {
     const proj = (S.projects||[]).find(p => p.id === pid);
     const name = proj ? proj.name : (pid ? 'Unknown Project' : 'Internal · business');
@@ -39409,9 +39479,9 @@ function renderTimeSummary(entries) {
     const lastBilled = cutoffs.get(pid);
     let statusBadge = '';
     if (unbilledHrs > 0) {
-      statusBadge = `<div class="tt-unbilled-badge">⚑ ${hrsFmt(unbilledHrs)} hrs unbilled</div>`;
+      statusBadge = `<div class="tt-unbilled-badge">⚑ ${hrsFmt(unbilledHrs)} unbilled</div>`;
     } else if (queuedHrs > 0) {
-      statusBadge = `<div class="tt-unbilled-badge" style="background:rgba(200,140,30,0.1);color:#a87600;border-color:rgba(200,140,30,0.25)">◷ ${hrsFmt(queuedHrs)} hrs queued on draft</div>`;
+      statusBadge = `<div class="tt-unbilled-badge" style="background:rgba(200,140,30,0.1);color:#a87600;border-color:rgba(200,140,30,0.25)">◷ ${hrsFmt(queuedHrs)} queued on draft</div>`;
     } else {
       statusBadge = '<div style="margin-top:8px;font-size:10px;color:#287a4a;font-family:var(--font-b)">✓ All billed</div>';
     }
@@ -39447,24 +39517,48 @@ function renderTimeSummary(entries) {
 }
  
 // Payroll timesheet (owner-only): per person, gross pay = clocked hours × pay
-// rate over the selected period. Counts ALL hours (client + internal, billed +
-// unbilled) — pay is independent of what was billed to clients. Attribution is
-// by user_id (the logged-in person). Period = the Custom date range in the
-// filters above (all-time if none set). Pay rates come from _teamCache.
+// rate over the pay period. Counts ALL hours (client + internal, billed +
+// unbilled, billable + non-billable) — pay is independent of client billing
+// (§6A decision: non-billable time is still paid; it's a labor expense).
+// Attribution is by user_id. Pay rates come from _teamCache.
+//
+// Pay periods (§6A.5): BIWEEKLY on MONDAYS — anchored so the period ending
+// Sun 2026-08-02 was paid Mon 2026-08-03 (Baylor's cadence). The ‹ › nav
+// steps periods; a Custom date range in the filters above overrides.
+const PAYROLL_EPOCH_MS = new Date('2026-07-20T12:00:00').getTime();
+let _payrollPeriodOffset = 0;
+function _payrollPeriod(offset) {
+  const DAY = 86400000;
+  const idx = Math.floor((Date.now() - PAYROLL_EPOCH_MS) / (14 * DAY)) + offset;
+  const startMs = PAYROLL_EPOCH_MS + idx * 14 * DAY;
+  const endMs = startMs + 13 * DAY;
+  const p = n => String(n).padStart(2, '0');
+  const ymd = ms => { const d = new Date(ms); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+  const pretty = ms => new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return {
+    from: ymd(startMs), to: ymd(endMs),
+    label: pretty(startMs) + ' – ' + pretty(endMs) + ', ' + new Date(endMs).getFullYear(),
+    payday: ymd(endMs + DAY),
+  };
+}
+function payrollPeriodNav(d) { _payrollPeriodOffset += d; renderTime(); }
+
 let _lastPayroll = null;   // snapshot of the current period, used by finalizePayrollRun()
 function renderPayroll() {
   if (AUTH.member?.role !== 'owner') {
     return '<div class="no-results">Payroll is visible to the studio owner only.</div>';
   }
   const cycle = $c('tt-filter-cycle')?.value || 'since';
-  const from  = $c('tt-filter-from')?.value || '';
-  const to    = $c('tt-filter-to')?.value || '';
-  const useRange = cycle === 'custom' && (from || to);
+  const cFrom = $c('tt-filter-from')?.value || '';
+  const cTo   = $c('tt-filter-to')?.value || '';
+  const useRange = cycle === 'custom' && (cFrom || cTo);
+  const period = _payrollPeriod(_payrollPeriodOffset);
+  const from = useRange ? cFrom : period.from;
+  const to   = useRange ? cTo   : period.to;
   const dateOf = e => e.date || (e.startedAt ? String(e.startedAt).slice(0, 10) : '');
   const secOf  = e => e.durationSeconds != null ? Number(e.durationSeconds) : (parseFloat(e.hours) || 0) * 3600;
 
   const src = (S.timeEntries || []).filter(e => {
-    if (!useRange) return true;
     const d = dateOf(e);
     if (from && d < from) return false;
     if (to && d > to) return false;
@@ -39478,18 +39572,30 @@ function renderPayroll() {
     (byUser[key] = byUser[key] || []).push(e);
   });
 
-  const hFmt = h => h % 1 === 0 ? String(h) : h.toFixed(2);
+  const hFmt = h => fmtHoursHM(h);
   const rows = Object.entries(byUser).map(([key, ents]) => {
     const member = key.startsWith('name:') ? null : cache.find(m => m.user_id === key);
     const name = member?.display_name || (key.startsWith('name:') ? key.slice(5) : 'Unknown');
     const totalSec = ents.reduce((s, e) => s + secOf(e), 0);
-    const billSec  = ents.filter(e => e.projectId).reduce((s, e) => s + secOf(e), 0);
+    // Client-billable slice (§6A: "brought in" = billable time at bill rates)
+    const billableEnts = ents.filter(e => e.projectId && e.billable !== false);
+    const billSec = billableEnts.reduce((s, e) => s + secOf(e), 0);
+    const revenue = billableEnts.reduce((s, e) => s + (secOf(e) / 3600) * (parseFloat(e.rate) || 0), 0);
+    // Hours by project (internal/non-billable grouped at the end)
+    const byProj = new Map();
+    ents.forEach(e => {
+      const proj = e.projectId ? ((S.projects || []).find(p => p.id === e.projectId)?.name || 'Unknown project') : 'Internal · business';
+      const tag = (e.projectId && e.billable === false) ? proj + ' (non-billable)' : proj;
+      byProj.set(tag, (byProj.get(tag) || 0) + secOf(e));
+    });
     const hours = totalSec / 3600;
     const payRate = member?.pay_rate != null ? Number(member.pay_rate) : null;
     return {
       name, hours,
       billableHours: billSec / 3600,
       internalHours: (totalSec - billSec) / 3600,
+      revenue,
+      byProj: [...byProj.entries()].sort((a, b) => b[1] - a[1]),
       payRate, hasRate: payRate != null,
       gross: payRate != null ? hours * payRate : 0,
     };
@@ -39497,7 +39603,12 @@ function renderPayroll() {
 
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
   const totalGross = rows.reduce((s, r) => s + r.gross, 0);
-  const periodLabel = useRange ? `${from || '…'} → ${to || '…'}` : 'All time';
+  const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0);
+  const periodLabel = useRange ? `${cFrom || '…'} → ${cTo || '…'}` : period.label;
+  // Paid state: any payroll run overlapping this range counts as covering it.
+  const runsFor = (S.payrollRuns || []).filter(r =>
+    (r.periodStart || '') <= (to || '9999') && (r.periodEnd || '9999') >= (from || ''));
+  const paidRun = runsFor.length ? runsFor[runsFor.length - 1] : null;
   // Stash for finalizePayrollRun() — snapshot only payable rows (those with a rate).
   _lastPayroll = { from, to, periodLabel, totalHours, totalGross,
     rows: rows.filter(r => r.hasRate).map(r => ({ name: r.name, hours: Math.round(r.hours * 100) / 100, payRate: r.payRate, gross: Math.round(r.gross * 100) / 100 })) };
@@ -39505,33 +39616,52 @@ function renderPayroll() {
 
   const bodyRows = rows.length ? rows.map(r => `
     <tr style="border-top:1px solid var(--border)">
-      <td style="padding:8px 6px;font-family:var(--font-b);font-weight:600;color:var(--text-dark)">${escH(r.name)}</td>
-      <td style="padding:8px 6px;text-align:right;font-family:var(--font-b);white-space:nowrap">${hFmt(r.hours)} h
-        <div style="font-size:9px;color:var(--text-light)">${hFmt(r.billableHours)} client · ${hFmt(r.internalHours)} internal</div></td>
+      <td style="padding:8px 6px;font-family:var(--font-b);font-weight:600;color:var(--text-dark)">
+        <details><summary style="cursor:pointer">${escH(r.name)}</summary>
+          <div style="font-size:10px;font-weight:400;color:var(--text-mid);margin:4px 0 2px 12px;line-height:1.6">
+            ${r.byProj.map(([pn, sec]) => `${escH(pn)} — ${escH(fmtHoursHM(sec / 3600))}`).join('<br>') || '<em>no entries</em>'}
+          </div>
+        </details></td>
+      <td style="padding:8px 6px;text-align:right;font-family:var(--font-b);white-space:nowrap">${hFmt(r.hours)}
+        <div style="font-size:9px;color:var(--text-light)">${hFmt(r.billableHours)} billable · ${hFmt(r.internalHours)} internal/non-billable</div></td>
+      <td style="padding:8px 6px;text-align:right;font-family:var(--font-b);color:#287a4a">${fmt(r.revenue)}</td>
       <td style="padding:8px 6px;text-align:right;font-family:var(--font-b)">${r.hasRate ? '$' + r.payRate + '/hr' : '<span style="color:#c47a20;font-size:11px">set pay rate</span>'}</td>
       <td style="padding:8px 6px;text-align:right;font-family:var(--font-h);font-weight:800;color:${r.hasRate ? 'var(--mahogany)' : 'var(--text-light)'}">${r.hasRate ? fmt(r.gross) : '—'}</td>
-    </tr>`).join('') : '<tr><td colspan="4" style="padding:14px 6px;color:var(--text-light);font-style:italic">No hours tracked in this period.</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="5" style="padding:14px 6px;color:var(--text-light);font-style:italic">No hours tracked in this period.</td></tr>';
+
+  const paidBadge = paidRun
+    ? `<span style="font-family:var(--font-b);font-size:11px;font-weight:700;color:#287a4a;background:rgba(40,122,74,0.08);border:1px solid rgba(40,122,74,0.25);border-radius:20px;padding:3px 10px">✓ Paid ${escH(paidRun.paidAt || '')} · ${fmt(paidRun.totalGross || 0)}</span>`
+    : (totalGross > 0.005 ? '<span style="font-family:var(--font-b);font-size:11px;font-weight:700;color:#c47a20;background:rgba(200,140,30,0.08);border:1px solid rgba(200,140,30,0.25);border-radius:20px;padding:3px 10px">Outstanding</span>' : '');
 
   return `
     <div style="background:var(--white);border-radius:var(--rl);border:1px solid var(--border);padding:18px 20px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;margin-bottom:6px;flex-wrap:wrap">
-        <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Payroll · ${escH(periodLabel)}</div>
-        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;max-width:440px;text-align:right">Gross pay = all clocked hours × pay rate, independent of client billing. Set the period with the Custom date range in the filters above; edit pay rates in App Settings → Team.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px">
+          ${useRange ? '' : `<button class="btn btn-ghost btn-sm" onclick="payrollPeriodNav(-1)" title="Previous pay period">‹</button>`}
+          <div>
+            <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Payroll · ${escH(periodLabel)}</div>
+            ${useRange ? '' : `<div style="font-family:var(--font-b);font-size:10px;color:var(--text-light)">Biweekly · payday Monday ${escH(period.payday)}</div>`}
+          </div>
+          ${useRange ? '' : `<button class="btn btn-ghost btn-sm" onclick="payrollPeriodNav(1)" title="Next pay period">›</button>`}
+          ${paidBadge}
+        </div>
+        <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic;max-width:380px;text-align:right">Gross pay = all clocked hours × pay rate, independent of client billing. "Brought in" = billable hours × billable rate. A Custom date range in the filters overrides the period.</div>
       </div>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="padding:6px;text-align:left;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)">Person</th>
-          <th style="${th}">Hours worked</th><th style="${th}">Pay rate</th><th style="${th}">Gross pay</th>
+          <th style="padding:6px;text-align:left;font-family:var(--font-h);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-light)">Person (click for projects)</th>
+          <th style="${th}">Hours worked</th><th style="${th}">Brought in</th><th style="${th}">Pay rate</th><th style="${th}">Gross pay</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
         <tfoot><tr style="border-top:2px solid var(--border)">
           <td style="padding:10px 6px;font-family:var(--font-h);font-weight:800">Total</td>
-          <td style="padding:10px 6px;text-align:right;font-family:var(--font-b);font-weight:700">${hFmt(totalHours)} h</td>
+          <td style="padding:10px 6px;text-align:right;font-family:var(--font-b);font-weight:700">${hFmt(totalHours)}</td>
+          <td style="padding:10px 6px;text-align:right;font-family:var(--font-b);font-weight:700;color:#287a4a">${fmt(totalRevenue)}</td>
           <td></td>
           <td style="padding:10px 6px;text-align:right;font-family:var(--font-h);font-weight:900;color:var(--mahogany)">${fmt(totalGross)}</td>
         </tr></tfoot>
       </table>
-      ${useRange && totalGross > 0.005 ? `<div style="margin-top:14px;display:flex;align-items:center;justify-content:flex-end;gap:10px">
+      ${!paidRun && totalGross > 0.005 ? `<div style="margin-top:14px;display:flex;align-items:center;justify-content:flex-end;gap:10px">
         <span style="font-family:var(--font-b);font-size:10px;color:var(--text-light);font-style:italic">Snapshots this period’s ${fmt(totalGross)} and marks it paid today.</span>
         <button class="btn btn-primary btn-sm" onclick="finalizePayrollRun()">Finalize &amp; mark paid</button>
       </div>` : ''}
@@ -39706,7 +39836,7 @@ function renderTimeDetail(allEntries) {
   if (_timeDetailFilter === 'unbilled') entries = projEntries.filter(e => _billingStateForEntry(e) === 'unbilled');
 
   const fmt = v => '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-  const fmtHrs = h => (h % 1 === 0 ? h : h.toFixed(2));
+  const fmtHrs = h => fmtHoursHM(h);
 
   // Totals (always from projEntries, not filtered, for the top bar)
   const _aggBy = (st) => projEntries.filter(e => _billingStateForEntry(e) === st)
@@ -39751,60 +39881,60 @@ function renderTimeDetail(allEntries) {
         <div class="tt-person-name">${escH(label)}</div>
         <div class="tt-person-row">
           <span class="lbl">Total Hours</span>
-          <span class="val">${fmtHrs(pH)} hrs</span>
+          <span class="val">${fmtHrs(pH)}</span>
         </div>
         <div class="tt-person-row">
           <span class="lbl" style="color:#287a4a">Billed</span>
-          <span class="val">${fmtHrs(pBH)} hrs &nbsp;·&nbsp; ${fmt(pBF)}</span>
+          <span class="val">${fmtHrs(pBH)} &nbsp;·&nbsp; ${fmt(pBF)}</span>
         </div>
         ${pQH > 0 ? `
         <div class="tt-person-row">
           <span class="lbl" style="color:#a87600">Queued</span>
-          <span class="val">${fmtHrs(pQH)} hrs &nbsp;·&nbsp; ${fmt(pQF)}</span>
+          <span class="val">${fmtHrs(pQH)} &nbsp;·&nbsp; ${fmt(pQF)}</span>
         </div>` : ''}
         <div class="tt-person-row">
           <span class="lbl" style="color:var(--russet)">Unbilled</span>
-          <span class="val">${fmtHrs(pUH)} hrs &nbsp;·&nbsp; ${fmt(pUF)}</span>
+          <span class="val">${fmtHrs(pUH)} &nbsp;·&nbsp; ${fmt(pUF)}</span>
         </div>
       </div>`;
   }).join('');
 
-  // Per-person log sections (filtered by billed/unbilled tab).
-  const filteredPersons = _distinctPersons(entries);
-  const logSections = filteredPersons.map(pid => {
-    const pEnts = entries.filter(e => e.person === pid).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-    if (!pEnts.length) return '';
-    const label = _timePersonLabel(pid);
-    const rows = pEnts.map(e => {
-      const fee = (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0);
-      const st = _billingStateForEntry(e);
-      const pill = st === 'billed' ? '<span class="tt-billed-pill">Billed</span>'
-                 : st === 'queued' ? '<span class="tt-queued-pill">Queued</span>'
-                 : '<span class="tt-unbilled-pill">Unbilled</span>';
-      return `
-        <tr class="${st==='billed'?'is-billed':''}">
-          <td>${e.date||'—'}</td>
-          <td style="text-align:right">${fmtHrs(parseFloat(e.hours)||0)}</td>
-          <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
-          <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
-          <td>${pill}</td>
-          <td style="color:var(--text-mid);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
-          <td><button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button></td>
-        </tr>`;
-    }).join('');
+  // Per-person log sections. On the "All" tab, active (unbilled/queued)
+  // entries lead and billed entries collapse into a per-user "Billed
+  // entries" area below (§6A.8). Other tabs render flat as before.
+  const entryRow = e => {
+    const fee = (parseFloat(e.hours)||0)*(parseFloat(e.rate)||0);
+    const st = _billingStateForEntry(e);
+    const pill = st === 'billed' ? '<span class="tt-billed-pill">Billed</span>'
+               : st === 'queued' ? '<span class="tt-queued-pill">Queued</span>'
+               : '<span class="tt-unbilled-pill">Unbilled</span>';
+    const unbill = st === 'billed' && canEditInvoices()
+      ? `<button class="tt-edit-btn" title="Return this entry to unbilled" onclick="unbillTimeEntry('${e.id}')">↩ Unbill</button>`
+      : `<button class="tt-edit-btn" onclick="openEditTimeModal('${e.id}')">Edit</button>`;
+    return `
+      <tr class="${st==='billed'?'is-billed':''}">
+        <td>${e.date||'—'}</td>
+        <td style="text-align:right">${fmtHrs(parseFloat(e.hours)||0)}</td>
+        <td style="text-align:right">${fmt(parseFloat(e.rate)||0)}/hr</td>
+        <td style="text-align:right;font-weight:700">${fmt(fee)}</td>
+        <td>${pill}</td>
+        <td style="color:var(--text-mid);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(e.notes||'')}</td>
+        <td style="white-space:nowrap">${unbill}</td>
+      </tr>`;
+  };
+  const entryTable = (pEnts, mb) => {
     const secHrs = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
     const secFee = pEnts.reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
     return `
-      <div class="tt-section-head">${escH(label)}</div>
-      <table class="tt-log-table" style="margin-bottom:24px">
+      <table class="tt-log-table" style="margin-bottom:${mb}px">
         <thead><tr>
           <th>Date</th>
-          <th style="text-align:right">Hrs</th>
+          <th style="text-align:right">Time</th>
           <th style="text-align:right">Rate</th>
           <th style="text-align:right">Fee</th>
           <th>Status</th><th>Notes</th><th></th>
         </tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${pEnts.map(entryRow).join('')}</tbody>
         <tfoot><tr class="tt-total-row">
           <td>Subtotal</td>
           <td style="text-align:right">${fmtHrs(secHrs)}</td>
@@ -39813,7 +39943,42 @@ function renderTimeDetail(allEntries) {
           <td colspan="3"></td>
         </tr></tfoot>
       </table>`;
-  }).join('');
+  };
+  const _byPersonDesc = list => _distinctPersons(list).map(pid => ({
+    pid, label: _timePersonLabel(pid),
+    ents: list.filter(e => e.person === pid).sort((a,b)=>(b.date||'').localeCompare(a.date||'')),
+  })).filter(g => g.ents.length);
+
+  let logSections;
+  if (_timeDetailFilter === 'all') {
+    const active = entries.filter(e => _billingStateForEntry(e) !== 'billed');
+    const billed = entries.filter(e => _billingStateForEntry(e) === 'billed');
+    const activeSections = _byPersonDesc(active).map(g => `
+      <div class="tt-section-head">${escH(g.label)}</div>
+      ${entryTable(g.ents, 24)}`).join('');
+    const billedHrsSum = billed.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+    const billedFeeSum = billed.reduce((s,e)=>s+(parseFloat(e.hours)||0)*(parseFloat(e.rate)||0),0);
+    const billedInner = _byPersonDesc(billed).map(g => {
+      const gH = g.ents.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+      return `
+        <details style="margin:6px 0 6px 12px">
+          <summary style="cursor:pointer;font-family:var(--font-b);font-size:12px;color:var(--text-mid);padding:4px 0">${escH(g.label)} — ${fmtHrs(gH)}</summary>
+          ${entryTable(g.ents, 8)}
+        </details>`;
+    }).join('');
+    const billedBlock = billed.length ? `
+      <details style="margin-top:8px;border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;background:rgba(var(--text-rgb),0.02)">
+        <summary style="cursor:pointer;font-family:var(--font-h);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid)">Billed entries — ${fmtHrs(billedHrsSum)} · ${fmt(billedFeeSum)}</summary>
+        ${billedInner}
+      </details>` : '';
+    logSections = (activeSections || (billed.length ? '' : '')) + billedBlock;
+    if (!active.length && !billed.length) logSections = '';
+    else if (!active.length) logSections = '<p style="color:var(--text-mid);font-size:13px;font-family:var(--font-b)">No unbilled or queued time — everything is billed.</p>' + billedBlock;
+  } else {
+    logSections = _byPersonDesc(entries).map(g => `
+      <div class="tt-section-head">${escH(g.label)}</div>
+      ${entryTable(g.ents, 24)}`).join('');
+  }
  
   const filterBtn = (val, label) => `<button class="tt-filter-btn${_timeDetailFilter===val?' active':''}" onclick="setTimeDetailFilter('${val}')">${label}</button>`;
  
@@ -39836,16 +40001,16 @@ function renderTimeDetail(allEntries) {
         <div class="tt-stat-lbl">Total Fee</div>
       </div>
       <div class="tt-stat">
-        <div class="tt-stat-val" style="color:#287a4a">${fmtHrs(billedHrs)} hrs</div>
+        <div class="tt-stat-val" style="color:#287a4a">${fmtHrs(billedHrs)}</div>
         <div class="tt-stat-lbl">Billed (${fmt(billedFee)})</div>
       </div>
       ${queuedHrs > 0 ? `
       <div class="tt-stat">
-        <div class="tt-stat-val" style="color:#a87600">${fmtHrs(queuedHrs)} hrs</div>
+        <div class="tt-stat-val" style="color:#a87600">${fmtHrs(queuedHrs)}</div>
         <div class="tt-stat-lbl">Queued (${fmt(queuedFee)})</div>
       </div>` : ''}
       <div class="tt-stat">
-        <div class="tt-stat-val" style="color:var(--russet)">${fmtHrs(unbilledHrs)} hrs</div>
+        <div class="tt-stat-val" style="color:var(--russet)">${fmtHrs(unbilledHrs)}</div>
         <div class="tt-stat-lbl">Unbilled (${fmt(unbilledFee)})</div>
       </div>
     </div>
@@ -39858,11 +40023,112 @@ function renderTimeDetail(allEntries) {
       ${filterBtn('billed','Billed')}
       ${filterBtn('queued','Queued')}
       ${filterBtn('unbilled','Unbilled')}
+      ${canEditInvoices() ? '<span style="flex:1"></span><button class="btn btn-secondary btn-sm" title="Mark entries billed against an existing invoice (for time billed manually or before reconciliation existed)" onclick="openTimeReconcileModal()" style="font-size:11px">Reconcile…</button>' : ''}
     </div>
  
     ${logSections || '<p style="color:var(--text-mid);font-size:13px;font-family:var(--font-b)">No entries match this filter.</p>'}`;
 }
  
+// ─────────── TIME RECONCILE (§6A.1) — manual mark-billed / unbill ───────────
+// For history billed manually or before reconciliation persisted (BE-114 era):
+// link unbilled entries to an existing sent invoice's line so they leave the
+// unbilled tally. Reversible per entry via unbillTimeEntry. RLS: the
+// time_update_billing policy (phase0_61) gates these writes to
+// owner / can_edit_invoices — the same principals canEditInvoices() shows.
+let _trcSelected = new Set();
+
+function unbillTimeEntry(entryId) {
+  if (!canEditInvoices()) { toast('You need invoice permissions to do that.'); return; }
+  const e = (S.timeEntries || []).find(x => x.id === entryId);
+  if (!e) return;
+  if (!confirm('Return this entry to unbilled? It will count toward the project\'s unbilled time again.')) return;
+  e.status = 'unbilled'; e.billed = false; e.invoiceLineItemId = null; e.billedAt = null;
+  save();
+  renderTime();
+  toast('Entry returned to unbilled.');
+}
+
+function _trcInvoices(projId) {
+  return (S.invoices || []).filter(i => i.projectId === projId
+    && _SENT_INVOICE_STATUSES.has(i.status)
+    && (i.lineItems || []).length);
+}
+
+// The line entries get linked to: prefer a line that reads like a time line,
+// else the invoice's first line. (The link's job is reconciliation — which
+// invoice covered these hours — not line-level accounting.)
+function _trcLineForInvoice(inv) {
+  const lines = inv?.lineItems || [];
+  return lines.find(l => /hour|time/i.test(l.name || '')) || lines[0] || null;
+}
+
+function openTimeReconcileModal() {
+  if (!canEditInvoices()) { toast('You need invoice permissions to reconcile time.'); return; }
+  const projId = _timeDetailProj;
+  const entries = unbilledTimeForProject(projId);
+  if (!entries.length) { toast('No unbilled time on this project.'); return; }
+  const invs = _trcInvoices(projId);
+  if (!invs.length) { toast('No sent invoices with line items on this project to link against.'); return; }
+  _trcSelected = new Set(entries.map(e => e.id));
+  $c('trc-invoice').innerHTML = invs.map(i =>
+    `<option value="${escH(i.id)}">${escH(i.number || '(unnumbered)')} · ${escH(i.status)}${i.sentDate ? ' · ' + escH(i.sentDate) : ''} · ${fmt(Number(i.total) || 0)}</option>`
+  ).join('');
+  renderTimeReconcile();
+  $c('modal-time-reconcile').classList.add('open');
+}
+
+function toggleAllReconcile(on) {
+  const entries = unbilledTimeForProject(_timeDetailProj);
+  _trcSelected = new Set(on ? entries.map(e => e.id) : []);
+  renderTimeReconcile();
+}
+
+function toggleReconcileRow(entryId) {
+  if (_trcSelected.has(entryId)) _trcSelected.delete(entryId);
+  else _trcSelected.add(entryId);
+  renderTimeReconcile();
+}
+
+function renderTimeReconcile() {
+  const entries = unbilledTimeForProject(_timeDetailProj);
+  $c('trc-list').innerHTML = entries.map(e => {
+    const checked = _trcSelected.has(e.id) ? 'checked' : '';
+    const who = _timePersonLabel(e.person);
+    return `
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer">
+        <input type="checkbox" ${checked} onchange="toggleReconcileRow('${e.id}')" style="accent-color:var(--russet);width:14px;height:14px;cursor:pointer">
+        <span style="flex:0 0 84px;font-size:11px;color:var(--text-mid)">${escH(e.date || '')}</span>
+        <span style="flex:0 0 110px;font-size:11px;color:var(--text-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(who)}</span>
+        <span style="flex:1;font-size:12px;color:var(--text-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(e.notes || '')}</span>
+        <span style="flex:0 0 70px;text-align:right;font-family:var(--font-b);font-weight:700;font-size:11px">${escH(fmtHoursHM(parseFloat(e.hours) || 0))}</span>
+      </label>`;
+  }).join('');
+  const inv = (S.invoices || []).find(i => i.id === $c('trc-invoice').value);
+  const line = _trcLineForInvoice(inv);
+  const sel = entries.filter(e => _trcSelected.has(e.id));
+  const totalH = sel.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+  $c('trc-preview').innerHTML = sel.length && inv
+    ? `<strong>${sel.length}</strong> entr${sel.length===1?'y':'ies'} · <strong>${escH(fmtHoursHM(totalH))}</strong> will be marked billed and linked to invoice <strong>${escH(inv.number || '(unnumbered)')}</strong>${line ? ` (line: “${escH(line.name || '')}”)` : ''}. Unbilled tallies drop immediately. Nothing is deleted.`
+    : 'Pick at least one entry and an invoice.';
+}
+
+function applyTimeReconcile() {
+  if (!canEditInvoices()) return;
+  const inv = (S.invoices || []).find(i => i.id === $c('trc-invoice').value);
+  const line = _trcLineForInvoice(inv);
+  if (!inv || !line) { toast('Pick an invoice with line items.'); return; }
+  const entries = unbilledTimeForProject(_timeDetailProj).filter(e => _trcSelected.has(e.id));
+  if (!entries.length) { toast('Pick at least one entry.'); return; }
+  const totalH = entries.reduce((s,e)=>s+(parseFloat(e.hours)||0),0);
+  if (!confirm(`Mark ${entries.length} entr${entries.length===1?'y':'ies'} (${fmtHoursHM(totalH)}) as billed on invoice ${inv.number || '(unnumbered)'}? This can be undone per entry with ↩ Unbill.`)) return;
+  const nowIso = new Date().toISOString();
+  entries.forEach(e => { e.status = 'billed'; e.billed = true; e.invoiceLineItemId = line.id; e.billedAt = nowIso; });
+  save();
+  closeModal('modal-time-reconcile');
+  renderTime();
+  toast(entries.length + ' entr' + (entries.length===1?'y':'ies') + ' reconciled to ' + (inv.number || 'invoice') + '.');
+}
+
 // Permission helper: owners always can; default true for members until
 // admin un-toggles can_adjust_time_entries on App Settings → Team.
 function canAdjustTimeEntries() {
@@ -40183,18 +40449,75 @@ function openUnbilledTimeModal() {
   _unbInvoiceId = inv.id;
   const entries = unbilledTimeForProject(inv.projectId);
   if (!entries.length) { toast('No unbilled time on this project.'); return; }
-  // Default: select all, no rounding, group by employee
-  _unbSelected = new Set(entries.map(e => e.id));
-  $c('unb-round').value = '0';
+  // Defaults (§6A.2/6A.3): all unbilled since last reconcile, line totals
+  // rounded up to the next 30 min, one line per employee.
+  $c('unb-period').value = 'all';
+  $c('unb-from').value = ''; $c('unb-to').value = '';
+  $c('unb-custom-range').style.display = 'none';
+  $c('unb-round').value = 't30';
   $c('unb-collation').value = 'employee';
   $c('unb-desc').value = '';
+  _unbSelected = new Set(entries.map(e => e.id));
   renderUnbilledEntries();
   $c('modal-unbilled-time').classList.add('open');
 }
 
+// Parse the rounding <select> into {mode, min}. 'entry' rounds each entry up
+// before summing; 'total' sums raw entries then rounds each invoice line's
+// subtotal up (per person / per entry / grand total depending on grouping).
+// Raw entry durations are never mutated — rounding shapes the invoice only.
+function _unbRoundSpec() {
+  const v = $c('unb-round')?.value || '0';
+  if (v === '0') return { mode: 'none', min: 0 };
+  return { mode: v[0] === 't' ? 'total' : 'entry', min: parseInt(v.slice(1), 10) || 0 };
+}
+
+// Local YYYY-MM-DD (entry dates are date-strings; avoid UTC off-by-one).
+function _unbLocalYMD(d) {
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+// Unbilled entries for the invoice's project, filtered to the chosen period.
+function _unbEntries(projectId) {
+  let entries = unbilledTimeForProject(projectId);
+  const period = $c('unb-period')?.value || 'all';
+  if (period === 'all') return entries;
+  const today = new Date();
+  let from = '', to = '';
+  if (period === 'thismonth') {
+    from = _unbLocalYMD(new Date(today.getFullYear(), today.getMonth(), 1));
+  } else if (period === 'lastmonth') {
+    from = _unbLocalYMD(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+    to   = _unbLocalYMD(new Date(today.getFullYear(), today.getMonth(), 0));
+  } else if (period === 'lastweek') {
+    const dow = (today.getDay() + 6) % 7;             // Monday-based
+    const thisMon = new Date(today.getFullYear(), today.getMonth(), today.getDate() - dow);
+    from = _unbLocalYMD(new Date(thisMon.getFullYear(), thisMon.getMonth(), thisMon.getDate() - 7));
+    to   = _unbLocalYMD(new Date(thisMon.getFullYear(), thisMon.getMonth(), thisMon.getDate() - 1));
+  } else if (period === '60' || period === '90') {
+    from = _unbLocalYMD(new Date(today.getFullYear(), today.getMonth(), today.getDate() - parseInt(period, 10)));
+  } else if (period === 'custom') {
+    from = $c('unb-from')?.value || '';
+    to   = $c('unb-to')?.value || '';
+  }
+  if (from) entries = entries.filter(e => entryDateLabel(e) >= from);
+  if (to)   entries = entries.filter(e => entryDateLabel(e) <= to);
+  return entries;
+}
+
+function onUnbPeriodChange() {
+  const custom = ($c('unb-period')?.value === 'custom');
+  $c('unb-custom-range').style.display = custom ? '' : 'none';
+  const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
+  // Re-select everything inside the new period.
+  _unbSelected = new Set(_unbEntries(inv?.projectId).map(e => e.id));
+  renderUnbilledEntries();
+}
+
 function toggleAllUnbilled(on) {
   const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
-  const entries = unbilledTimeForProject(inv?.projectId);
+  const entries = _unbEntries(inv?.projectId);
   _unbSelected = new Set(on ? entries.map(e => e.id) : []);
   renderUnbilledEntries();
 }
@@ -40208,8 +40531,8 @@ function toggleUnbilledRow(entryId) {
 function renderUnbilledEntries() {
   const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
   if (!inv) return;
-  const entries = unbilledTimeForProject(inv.projectId);
-  const round = parseInt($c('unb-round').value, 10) || 0;
+  const entries = _unbEntries(inv.projectId);
+  const spec = _unbRoundSpec();
   // Group entries by user for the list display
   const byUser = new Map();
   entries.forEach(e => {
@@ -40219,9 +40542,17 @@ function renderUnbilledEntries() {
     byUser.get(key).items.push(e);
   });
   const list = $c('unb-entries-list');
+  if (!entries.length) {
+    list.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-mid);font-style:italic">No unbilled time in this period.</div>';
+    renderUnbilledPreview();
+    return;
+  }
+  // Row durations: per-entry rounding shows each row rounded; total-mode
+  // shows raw rows (the rounding lands on the group subtotal instead).
+  const rowSec = e => spec.mode === 'entry' ? roundDurationSeconds(e.durationSeconds, spec.min) : Math.round(Number(e.durationSeconds) || 0);
   list.innerHTML = [...byUser.values()].map(group => {
     const rows = group.items.map(e => {
-      const sec = roundDurationSeconds(e.durationSeconds, round);
+      const sec = rowSec(e);
       const hrs = sec / 3600;
       const fee = hrs * (Number(e.rate) || group.rate || 0);
       const checked = _unbSelected.has(e.id) ? 'checked' : '';
@@ -40235,8 +40566,14 @@ function renderUnbilledEntries() {
           <span style="flex:0 0 90px;text-align:right;font-family:var(--font-b);font-size:11px;color:var(--pecan)">${fmt(fee)}</span>
         </label>`;
     }).join('');
-    const groupTotalSec = group.items.reduce((s,e) => _unbSelected.has(e.id) ? s + roundDurationSeconds(e.durationSeconds, round) : s, 0);
-    const groupTotalFee = group.items.reduce((s,e) => _unbSelected.has(e.id) ? s + (roundDurationSeconds(e.durationSeconds, round) / 3600) * (Number(e.rate) || group.rate || 0) : s, 0);
+    const selected = group.items.filter(e => _unbSelected.has(e.id));
+    let groupTotalSec = selected.reduce((s,e) => s + rowSec(e), 0);
+    if (spec.mode === 'total') groupTotalSec = roundDurationSeconds(groupTotalSec, spec.min);
+    const rawSec = selected.reduce((s,e) => s + (Math.round(Number(e.durationSeconds)||0)), 0);
+    const rawFee = selected.reduce((s,e) => s + ((Math.round(Number(e.durationSeconds)||0))/3600) * (Number(e.rate) || group.rate || 0), 0);
+    const effRate = rawSec > 0 ? rawFee / (rawSec/3600) : (group.rate || 0);
+    const groupTotalFee = spec.mode === 'total' ? (groupTotalSec/3600) * effRate
+      : selected.reduce((s,e) => s + (rowSec(e)/3600) * (Number(e.rate) || group.rate || 0), 0);
     return `
       <div>
         <div style="padding:8px 14px;background:rgba(var(--text-rgb),0.04);font-family:var(--font-h);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mid);display:flex;justify-content:space-between">
@@ -40252,9 +40589,9 @@ function renderUnbilledEntries() {
 function renderUnbilledPreview() {
   const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
   if (!inv) return;
-  const round = parseInt($c('unb-round').value, 10) || 0;
+  const spec = _unbRoundSpec();
   const collation = $c('unb-collation').value;
-  const lines = computeUnbilledLines(inv.projectId, round, collation);
+  const lines = computeUnbilledLines(inv.projectId, spec, collation);
   const totalFee = lines.reduce((s, l) => s + l.fee, 0);
   const totalSec = lines.reduce((s, l) => s + l.totalSeconds, 0);
   $c('unb-preview-summary').textContent = lines.length + ' line' + (lines.length!==1?'s':'') + ' · ' + fmtDurationFromSeconds(totalSec) + ' · ' + fmt(totalFee);
@@ -40263,22 +40600,29 @@ function renderUnbilledPreview() {
 
 // Compute the invoice lines that will be created from current selections.
 // Each line carries the entry ids it covers so the commit step can flip them
-// to billed atomically.
-function computeUnbilledLines(projectId, round, collation) {
-  const entries = unbilledTimeForProject(projectId).filter(e => _unbSelected.has(e.id));
+// to billed atomically. `spec` = {mode:'none'|'entry'|'total', min} — 'entry'
+// rounds each entry up before summing; 'total' sums raw then rounds the
+// line's subtotal up (per person / per entry / grand total by grouping).
+// Line names stay clean (§6A.4): "Project Hours, [name]".
+function computeUnbilledLines(projectId, spec, collation) {
+  const entries = _unbEntries(projectId).filter(e => _unbSelected.has(e.id));
   if (!entries.length) return [];
-  const dateRange = entryDateRangeLabel(entries);
   const customDesc = $c('unb-desc').value.trim();
-  const baseDesc = customDesc || ('Hours worked ' + dateRange);
+  const baseDesc = customDesc || 'Project Hours';
+  const entrySec = e => spec.mode === 'entry'
+    ? roundDurationSeconds(e.durationSeconds, spec.min)
+    : Math.round(Number(e.durationSeconds) || 0);
+  const lineSec = raw => spec.mode === 'total' ? roundDurationSeconds(raw, spec.min) : raw;
+  const shortDate = d => d ? new Date(d + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
 
   // Per-entry: one line per time entry
   if (collation === 'entry') {
     return entries.map(e => {
-      const sec = roundDurationSeconds(e.durationSeconds, round);
+      const sec = lineSec(entrySec(e));
       const hrs = sec / 3600;
       const rate = Number(e.rate) || 0;
       return {
-        name: (e.notes || e.description || baseDesc) + ' · ' + entryDateLabel(e),
+        name: (e.notes || e.description || baseDesc) + ' · ' + shortDate(entryDateLabel(e)),
         qty: hrs,
         rate,
         fee: hrs * rate,
@@ -40298,10 +40642,10 @@ function computeUnbilledLines(projectId, round, collation) {
       groups.get(key).items.push(e);
     });
     return [...groups.values()].map(g => {
-      const totalSec = g.items.reduce((s,e) => s + roundDurationSeconds(e.durationSeconds, round), 0);
+      const totalSec = lineSec(g.items.reduce((s,e) => s + entrySec(e), 0));
       const hrs = totalSec / 3600;
       return {
-        name: baseDesc + ' — ' + g.name,
+        name: baseDesc + ', ' + g.name,
         qty: hrs,
         rate: g.rate,
         fee: hrs * g.rate,
@@ -40314,18 +40658,16 @@ function computeUnbilledLines(projectId, round, collation) {
   // Single line: blend everyone into one client-facing line. Client doesn't
   // see individual rates — they see hours × blended rate. Internal records
   // keep the per-employee breakdown via time_entries.invoice_line_item_id.
-  const totalSec = entries.reduce((s,e) => s + roundDurationSeconds(e.durationSeconds, round), 0);
-  const totalFee = entries.reduce((s,e) => {
-    const sec = roundDurationSeconds(e.durationSeconds, round);
-    return s + (sec / 3600) * (Number(e.rate) || 0);
-  }, 0);
+  const rawSec = entries.reduce((s,e) => s + entrySec(e), 0);
+  const rawFee = entries.reduce((s,e) => s + (entrySec(e) / 3600) * (Number(e.rate) || 0), 0);
+  const blendedRate = rawSec > 0 ? rawFee / (rawSec / 3600) : 0;
+  const totalSec = lineSec(rawSec);
   const hrs = totalSec / 3600;
-  const blendedRate = hrs > 0 ? (totalFee / hrs) : 0;
   return [{
     name: baseDesc,
     qty: hrs,
     rate: blendedRate,
-    fee: totalFee,
+    fee: hrs * blendedRate,
     totalSeconds: totalSec,
     entryIds: entries.map(x => x.id),
   }];
@@ -40352,9 +40694,9 @@ function entryDateRangeLabel(entries) {
 function commitUnbilledTime() {
   const inv = (S.invoices || []).find(i => i.id === _unbInvoiceId);
   if (!inv) return;
-  const round = parseInt($c('unb-round').value, 10) || 0;
+  const spec = _unbRoundSpec();
   const collation = $c('unb-collation').value;
-  const lines = computeUnbilledLines(inv.projectId, round, collation);
+  const lines = computeUnbilledLines(inv.projectId, spec, collation);
   if (!lines.length) { toast('Pick at least one entry.'); return; }
   const proj = S.projects.find(p => p.id === inv.projectId);
   const taxable = !!proj?.timeTaxable;
