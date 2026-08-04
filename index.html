@@ -2972,7 +2972,38 @@ tr:hover .row-btns { opacity:1; }
     <div style="font-family:var(--font-h);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--mahogany)">Notifications</div>
     <button onclick="markAllNotificationsRead()" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--russet);text-decoration:underline">Mark all read</button>
   </div>
-  <div id="notif-list" style="overflow-y:auto;flex:1;max-height:440px"></div>
+  <div id="notif-list" style="overflow-y:auto;flex:1;max-height:400px"></div>
+  <div style="padding:8px 16px;border-top:1px solid var(--border);text-align:center">
+    <button onclick="openNotificationHistory()" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:11px;color:var(--text-mid);text-decoration:underline">View all notifications</button>
+  </div>
+</div>
+
+<!-- ═════════════════ NOTIFICATION HISTORY MODAL (§3.5.2d) ═════════════════ -->
+<div class="overlay" id="modal-notif-history">
+  <div class="modal" style="width:560px;max-height:90vh;overflow-y:auto">
+    <button class="modal-x" onclick="closeModal('modal-notif-history')">✕</button>
+    <div class="modal-title">All Notifications</div>
+    <div style="font-family:var(--font-b);font-size:11px;color:var(--text-light);font-style:italic;margin:-6px 0 12px">Full history including cleared notifications. Clearing never deletes.</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
+      <div class="fg" style="flex:1;margin:0">
+        <label class="fl">Type</label>
+        <select class="fi fsel" id="nh-type" onchange="renderNotificationHistory()" style="font-size:11px">
+          <option value="">All types</option>
+          <option value="mention">Mentions &amp; replies</option>
+          <option value="task_assigned">Task assignments</option>
+        </select>
+      </div>
+      <div class="fg" style="flex:1;margin:0">
+        <label class="fl">From</label>
+        <input type="date" class="fi" id="nh-from" onchange="renderNotificationHistory()" style="font-size:11px">
+      </div>
+      <div class="fg" style="flex:1;margin:0">
+        <label class="fl">To</label>
+        <input type="date" class="fi" id="nh-to" onchange="renderNotificationHistory()" style="font-size:11px">
+      </div>
+    </div>
+    <div id="nh-list" style="border:1px solid var(--border);border-radius:var(--r);max-height:480px;overflow-y:auto"></div>
+  </div>
 </div>
 
 <!-- ═════════════════ MENTION AUTOCOMPLETE ═════════════════ -->
@@ -4825,12 +4856,12 @@ function parseMentions(text) {
   return { mentionedUserIds: [...mentionedUserIds], annotatedHtml: annotated };
 }
 
-async function createNotifications(mentionedUserIds, { linkEntityType, linkEntityId, message, payload = {} }) {
+async function createNotifications(mentionedUserIds, { linkEntityType, linkEntityId, message, payload = {}, type = 'mention' }) {
   if (!AUTH.ready || !AUTH.studio || !mentionedUserIds.length) return;
   const rows = mentionedUserIds.map(userId => ({
     studio_id: AUTH.studio.id,
     recipient_user_id: userId,
-    type: 'mention',
+    type,
     payload: { ...payload, actor_id: AUTH.user.id, actor_name: AUTH.member?.display_name || AUTH.user.email },
     link_entity_type: linkEntityType,
     link_entity_id: linkEntityId,
@@ -4842,16 +4873,38 @@ async function createNotifications(mentionedUserIds, { linkEntityType, linkEntit
 
 async function loadNotifications() {
   if (!AUTH.ready) return;
+  // Active set only — cleared (dismissed_at) notifications live in the
+  // All-notifications history view, never in the bell/queue (§3.5.2c).
   const { data, error } = await sb
     .from('notifications')
     .select('*')
     .eq('recipient_user_id', AUTH.user.id)
+    .is('dismissed_at', null)
     .order('created_at', { ascending: false })
     .limit(50);
   if (error) { console.error('[notifications] load failed:', error); return; }
   NOTIFICATIONS.items = data || [];
   NOTIFICATIONS.unread = NOTIFICATIONS.items.filter(n => !n.read_at).length;
   renderNotificationBell();
+}
+
+// Clear = hide from the active queue WITHOUT destroying it (§3.5.2c).
+// Sets dismissed_at (and read_at if unread); row remains in history.
+async function clearNotification(id, ev) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+  const n = NOTIFICATIONS.items.find(x => x.id === id);
+  if (!n) return;
+  const now = new Date().toISOString();
+  if (!n.read_at) { n.read_at = now; NOTIFICATIONS.unread = Math.max(0, NOTIFICATIONS.unread - 1); }
+  n.dismissed_at = now;
+  NOTIFICATIONS.items = NOTIFICATIONS.items.filter(x => x.id !== id);
+  renderNotificationBell();
+  const panel = document.getElementById('notif-panel');
+  if (panel && panel.style.display !== 'none') renderNotificationPanel();
+  try {
+    const { error } = await sb.from('notifications').update({ read_at: n.read_at, dismissed_at: now }).eq('id', id);
+    if (error) console.warn('[notifications] clear persist failed (kept cleared locally):', error);
+  } catch (e) { console.warn('[notifications] clear persist threw:', e); }
 }
 
 // Realtime: expenses logged on the mobile app (or another web session)
@@ -5994,6 +6047,18 @@ function postTaskComment() {
   });
   task.updated = new Date().toISOString();
   _recordTaskActivity(taskId, 'commented', { commentId, preview: body.slice(0, 80), mentions });
+  // §3.5.2a AUDIT FIX: task-comment @mentions stored mentions[] but never
+  // created a notification — mentioned members were silently un-notified.
+  const notifyIds = mentions.filter(uid => uid !== AUTH.user?.id);
+  if (notifyIds.length) {
+    const author = AUTH.member?.display_name || AUTH.user?.email || 'Someone';
+    createNotifications(notifyIds, {
+      linkEntityType: 'task',
+      linkEntityId: taskId,
+      message: `${author} mentioned you in a comment on "${task.title || '(untitled task)'}"`,
+      payload: { task_id: taskId, comment_id: commentId, body },
+    });
+  }
   save();
   ta.value = '';
   $c('task-comment-mention-popover').style.display = 'none';
@@ -6254,9 +6319,11 @@ function _taskItemName(itemId) {
 function _notifyTaskAssigned(taskId, assigneeUserId, title) {
   if (!assigneeUserId || assigneeUserId === AUTH.user?.id) return;
   createNotifications([assigneeUserId], {
+    type: 'task_assigned',
     linkEntityType: 'task',
     linkEntityId: taskId,
     message: `assigned you a task: ${title || '(untitled)'}`,
+    payload: { task_id: taskId, task_title: title || '' },
   });
 }
 
@@ -6804,18 +6871,9 @@ function _workRowHtml(row) {
 async function dismissWorkRow(kind, id, ev) {
   if (ev) { ev.stopPropagation(); ev.preventDefault(); }
   if (kind === 'notification') {
-    const n = (NOTIFICATIONS.items || []).find(x => x.id === id);
-    if (n && !n.read_at) {
-      n.read_at = new Date().toISOString();
-      NOTIFICATIONS.unread = Math.max(0, (NOTIFICATIONS.unread || 0) - 1);
-      if (typeof renderNotificationBell === 'function') renderNotificationBell();
-      try {
-        const { error } = await sb.from('notifications').update({ read_at: n.read_at }).eq('id', id);
-        if (error) console.warn('[dismiss] notification persist failed (kept cleared locally):', error);
-      } catch (e) {
-        console.warn('[dismiss] notification persist threw (kept cleared locally):', e);
-      }
-    }
+    // Dismissing from the queue = Clear (§3.5.2c): read + dismissed_at, kept
+    // forever in the All-notifications history.
+    await clearNotification(id);
   }
   // Always record the dismissal so the row stays gone across reloads regardless
   // of kind (harmless belt-and-suspenders for notifications too).
@@ -8147,21 +8205,141 @@ function renderNotificationBell() {
   if (panel && panel.style.display !== 'none') renderNotificationPanel();
 }
 
+// A notification supports Reply when it points at a thread we can post to.
+function _notifCanReply(n) {
+  if (n.link_entity_type === 'task' && n.link_entity_id) return true;
+  if (n.link_entity_type === 'proposal_item' && n.payload?.project_id) return true;
+  return false;
+}
+
+function _notifCardHtml(n, { history = false } = {}) {
+  const ts = n.created_at ? new Date(n.created_at) : null;
+  const tsLabel = ts ? timeAgo(ts) : '';
+  const body = n.payload?.body ? `<div style="font-family:var(--font-b);font-size:11px;color:var(--text-mid);margin-top:4px;padding:6px 8px;background:rgba(var(--text-rgb),0.03);border-left:2px solid var(--border);border-radius:0 var(--rs) var(--rs) 0;white-space:pre-wrap;max-height:80px;overflow:hidden">${escH(n.payload.body)}</div>` : '';
+  const state = history ? `<span style="font-size:9px;color:var(--text-light)"> · ${n.dismissed_at ? 'cleared' : (n.read_at ? 'read' : 'unread')}</span>` : '';
+  const actions = history ? '' : `
+    <div style="display:flex;gap:10px;margin-top:5px" onclick="event.stopPropagation()">
+      ${_notifCanReply(n) ? `<button onclick="toggleNotifReply('${n.id}')" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--russet);padding:0">↩ Reply</button>` : ''}
+      <button onclick="clearNotification('${n.id}', event)" style="background:none;border:none;cursor:pointer;font-family:var(--font-b);font-size:10px;color:var(--text-light);padding:0">✕ Clear</button>
+    </div>
+    <div id="notif-reply-${n.id}" style="display:none;margin-top:6px" onclick="event.stopPropagation()">
+      <textarea class="fi" id="notif-reply-text-${n.id}" placeholder="Reply — posts to the original thread" style="font-size:11px;min-height:44px;resize:vertical"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:4px">
+        <button class="btn btn-primary btn-sm" onclick="sendNotificationReply('${n.id}')" style="font-size:10px;padding:3px 10px">Send</button>
+      </div>
+    </div>`;
+  return `<div class="notif-item ${n.read_at || history ? '' : 'unread'}" onclick="openNotification('${n.id}')">
+    <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);line-height:1.4">${escH(n.message || n.type)}</div>
+    ${body}
+    <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:4px">${tsLabel}${state}</div>
+    ${actions}
+  </div>`;
+}
+
 function renderNotificationPanel() {
   const list = document.getElementById('notif-list');
   if (!list) return;
   if (!NOTIFICATIONS.items.length) {
-    list.innerHTML = '<div style="padding:24px 16px;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;text-align:center">No notifications yet.</div>';
+    list.innerHTML = '<div style="padding:24px 16px;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic;text-align:center">No notifications — all clear.</div>';
     return;
   }
-  list.innerHTML = NOTIFICATIONS.items.map(n => {
-    const ts = n.created_at ? new Date(n.created_at) : null;
-    const tsLabel = ts ? timeAgo(ts) : '';
-    return `<div class="notif-item ${n.read_at ? '' : 'unread'}" onclick="openNotification('${n.id}')">
-      <div style="font-family:var(--font-b);font-size:12px;color:var(--text-dark);line-height:1.4">${escH(n.message || n.type)}</div>
-      <div style="font-family:var(--font-b);font-size:10px;color:var(--text-light);margin-top:4px">${tsLabel}</div>
-    </div>`;
-  }).join('');
+  list.innerHTML = NOTIFICATIONS.items.map(n => _notifCardHtml(n)).join('');
+}
+
+function toggleNotifReply(id) {
+  const box = document.getElementById('notif-reply-' + id);
+  if (!box) return;
+  const show = box.style.display === 'none';
+  box.style.display = show ? '' : 'none';
+  if (show) setTimeout(() => document.getElementById('notif-reply-text-' + id)?.focus(), 60);
+}
+
+// Reply from the card (§3.5.2c): posts to the ORIGINATING thread — task
+// comments for tasks, the item activity log for item mentions — and
+// notifies the original actor (+ any @mentions typed in the reply).
+async function sendNotificationReply(id) {
+  const n = NOTIFICATIONS.items.find(x => x.id === id) || (_notifHistory || []).find(x => x.id === id);
+  if (!n) return;
+  const ta = document.getElementById('notif-reply-text-' + id);
+  const text = (ta?.value || '').trim();
+  if (!text) { toast('Type a reply first.'); return; }
+  const me = AUTH.member?.display_name || AUTH.user?.email || 'Someone';
+  const actorId = n.payload?.actor_id || null;
+  const { mentionedUserIds } = parseMentions(text);
+  const recipients = [...new Set([actorId, ...mentionedUserIds])].filter(uid => uid && uid !== AUTH.user?.id);
+
+  if (n.link_entity_type === 'task' && n.link_entity_id) {
+    const task = (S.tasks || []).find(t => t.id === n.link_entity_id);
+    if (!task) { toast('That task no longer exists.'); return; }
+    if (!Array.isArray(task.comments)) task.comments = [];
+    const commentId = uid();
+    task.comments.push({
+      id: commentId, taskId: task.id, authorUserId: AUTH.user?.id || null,
+      body: text, mentions: recipients, attachments: [],
+      created: new Date().toISOString(), edited: null,
+    });
+    task.updated = new Date().toISOString();
+    _recordTaskActivity(task.id, 'commented', { commentId, preview: text.slice(0, 80), mentions: recipients });
+    if (recipients.length) {
+      createNotifications(recipients, {
+        linkEntityType: 'task', linkEntityId: task.id,
+        message: `${me} replied on "${task.title || '(untitled task)'}"`,
+        payload: { task_id: task.id, comment_id: commentId, body: text },
+      });
+    }
+    save();
+  } else if (n.link_entity_type === 'proposal_item' && n.payload?.project_id) {
+    const item = _getItem(n.payload.project_id, n.payload.space_id, n.link_entity_id);
+    if (!item) { toast('That item no longer exists.'); return; }
+    if (!item.activityLog) item.activityLog = [];
+    const note = {
+      id: uid(), author: me, authorUserId: AUTH.user?.id || null,
+      text, mentions: recipients, timestamp: new Date().toISOString(),
+      compId: n.payload.comp_id || null,
+    };
+    item.activityLog.unshift(note);
+    if (recipients.length) {
+      createNotifications(recipients, {
+        linkEntityType: 'proposal_item', linkEntityId: item.id,
+        message: `${me} replied on "${item.name || 'item'}"`,
+        payload: { project_id: n.payload.project_id, space_id: n.payload.space_id, item_id: item.id, comp_id: n.payload.comp_id || null, body: text, note_id: note.id },
+      });
+    }
+    save();
+  } else { toast('This notification has no thread to reply to.'); return; }
+
+  if (ta) ta.value = '';
+  toggleNotifReply(id);
+  toast('Reply posted to the thread.');
+}
+
+// ── All-notifications backlog (§3.5.2d): full history incl. cleared. ──
+let _notifHistory = null;
+async function openNotificationHistory() {
+  $c('modal-notif-history').classList.add('open');
+  $c('nh-list').innerHTML = '<div style="padding:20px;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">Loading…</div>';
+  const { data, error } = await sb
+    .from('notifications')
+    .select('*')
+    .eq('recipient_user_id', AUTH.user.id)
+    .order('created_at', { ascending: false })
+    .limit(300);
+  if (error) { $c('nh-list').innerHTML = '<div style="padding:20px;color:#b33;font-size:12px">Could not load history.</div>'; return; }
+  _notifHistory = data || [];
+  renderNotificationHistory();
+}
+
+function renderNotificationHistory() {
+  const type = $c('nh-type')?.value || '';
+  const from = $c('nh-from')?.value || '';
+  const to   = $c('nh-to')?.value || '';
+  let rows = _notifHistory || [];
+  if (type) rows = rows.filter(n => (n.type || 'mention') === type);
+  if (from) rows = rows.filter(n => (n.created_at || '').slice(0, 10) >= from);
+  if (to)   rows = rows.filter(n => (n.created_at || '').slice(0, 10) <= to);
+  $c('nh-list').innerHTML = rows.length
+    ? rows.map(n => _notifCardHtml(n, { history: true })).join('')
+    : '<div style="padding:20px;font-family:var(--font-b);font-size:12px;color:var(--text-light);font-style:italic">Nothing matches those filters.</div>';
 }
 
 function timeAgo(d) {
@@ -8187,8 +8365,11 @@ function toggleNotificationPanel() {
 
 async function openNotification(id) {
   await markNotificationRead(id);
-  const n = NOTIFICATIONS.items.find(x => x.id === id);
+  // Deep links work from the active panel AND the history modal (§3.5.2a/d).
+  const n = NOTIFICATIONS.items.find(x => x.id === id) || (_notifHistory || []).find(x => x.id === id);
   if (!n) return;
+  const hist = $c('modal-notif-history');
+  if (hist?.classList.contains('open') && n.link_entity_type) closeModal('modal-notif-history');
   // Navigate to the linked entity
   if (n.link_entity_type === 'proposal_item' && n.payload?.project_id) {
     openPMItemDetail(n.payload.project_id, n.payload.space_id, n.link_entity_id);
@@ -13183,7 +13364,9 @@ function addActivityNote(pid, spId, itemId, compId) {
       linkEntityType: 'proposal_item',
       linkEntityId: itemId,
       message: `${author} mentioned you in "${itemName}" (${projName})`,
-      payload: { project_id: pid, space_id: spId, item_id: itemId, comp_id: compId || null },
+      // body rides in the payload so the card renders the note inline
+      // without a second fetch (§3.5.2b); the activity_log stays canonical.
+      payload: { project_id: pid, space_id: spId, item_id: itemId, comp_id: compId || null, body: val, note_id: note.id },
     });
   }
 }
